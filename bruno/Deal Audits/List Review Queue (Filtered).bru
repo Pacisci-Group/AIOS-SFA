@@ -1,0 +1,64 @@
+meta {
+  name: List Review Queue (Filtered)
+  type: http
+  seq: 22
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/queue?status=all&q={{queueClientSearch}}&producerIds={{queueProducerId}}&sort=client&pageSize=100
+  body: none
+  auth: bearer
+}
+
+params:query {
+  status: all
+  q: {{queueClientSearch}}
+  producerIds: {{queueProducerId}}
+  sort: client
+  pageSize: 100
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("finds the deal the search names", function () {
+    const name = bru.getVar("queueClientName");
+    const names = res.getBody().items.map((row) => row.clientName);
+    expect(names).to.include(name);
+  });
+
+  test("every row was sold by the chosen producer", function () {
+    const id = bru.getVar("queueProducerId");
+    for (const row of res.getBody().items) {
+      expect(row.producerId).to.equal(id);
+    }
+  });
+
+  test("rows are in client order, case-insensitively", function () {
+    const names = res.getBody().items.map((row) => row.clientName.toLowerCase());
+    expect(names).to.deep.equal([...names].sort());
+  });
+}
+
+docs {
+  # GET /deal-audits/queue — search + producer + client sort (20 Oct 2026)
+
+  Same endpoint as **List Review Queue**, asking a narrower question: the
+  captured client's name as the search, the captured seller as the producer
+  filter, every status, sorted by client.
+
+  The search's words must **all** match — here every word of the client's
+  name is in that client's name, so the deal is found; the producer filter
+  then keeps only that seller's deals. See **List Review Queue** for the full
+  parameter table and the search rule.
+}

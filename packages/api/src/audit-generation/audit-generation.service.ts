@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import {
+  Activity,
+  ActivityDocument,
+} from '../activities/schemas/activity.schema';
+import {
   AuditTemplate,
   AuditTemplateDocument,
 } from '../audit-templates/schemas/audit-template.schema';
@@ -14,8 +18,12 @@ import {
   DealAuditItem,
 } from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { DEFAULT_DEAL_AUDIT_STATUS } from '@sfa/shared';
+import type { DealAuditStatus } from '@sfa/shared';
 import { authorshipForInsert } from '../common/context/request-context';
-import { syncAuditCounters } from '../deal-audits/audit-counters';
+import {
+  type AuditCounters,
+  syncAuditCounters,
+} from '../deal-audits/audit-counters';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   attachmentKey,
@@ -100,6 +108,9 @@ export class AuditGenerationService {
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(Deal.name)
     private readonly dealModel: Model<DealDocument>,
+    // Only to leave the automatic submit / return on the audit's thread.
+    @InjectModel(Activity.name)
+    private readonly activityModel: Model<ActivityDocument>,
   ) {}
 
   async generateForDeal(
@@ -141,6 +152,8 @@ export class AuditGenerationService {
           required?: boolean;
           blocking?: boolean;
           alwaysInclude?: boolean;
+          producerVisible?: boolean;
+          requiresUpload?: boolean;
         }>
       >();
 
@@ -220,14 +233,16 @@ export class AuditGenerationService {
      * still leaves them describing reality. Best-effort like everything else on
      * this path — a deal is already booked by now.
      */
+    let auditStatus: DealAuditStatus | undefined = parent?.auditStatus;
     if (parent) {
       try {
-        await syncAuditCounters(
+        const counters = await syncAuditCounters(
           this.itemModel,
           this.dealAuditModel,
           input.agencyId,
           parent._id,
         );
+        auditStatus = await this.settleSubmission(parent, counters);
       } catch (error) {
         this.logger.error(
           `Could not sync audit counters for deal ${input.dealId.toString()}: ${
@@ -255,10 +270,109 @@ export class AuditGenerationService {
       // so copied **from** it. Stamping the default reset the mirror to "Not
       // Submitted" on every re-run (a create replay, or PAC-104 adding a policy)
       // while the audit itself stayed Pending / Pass / Fail.
-      dealAuditStatus: parent?.auditStatus ?? DEFAULT_DEAL_AUDIT_STATUS,
+      dealAuditStatus: auditStatus ?? DEFAULT_DEAL_AUDIT_STATUS,
     });
 
     return { status: 'generated', itemCount, unresolved };
+  }
+
+  /**
+   * Hand the audit to the right person once its checklist is known (PAC-106).
+   *
+   * - **Nothing for the producer to do → submitted automatically.** Every item
+   *   is manager-only (a plain auto sale: Correct Sold Date, Drivers
+   *   Verified, …), so waiting for the producer to click Submit would only
+   *   strand the deal. `submittedById: null` is what records "the system did
+   *   it" — the review endpoint's "not your own submission" rule then never
+   *   blocks anyone.
+   * - **An automatic submission that now has producer work → returned.** A
+   *   policy added later (PAC-104) can bring a Good Student or a Prior
+   *   Insurance item; a `Pending` audit sits off the producer's board, so it
+   *   goes back to `Not Submitted` for them to gather it. Only ever an audit
+   *   the *system* submitted — a person's submission is theirs to undo.
+   *
+   * Both writes are guarded on the status they expect, so a concurrent submit
+   * or review wins and a re-run is a no-op. Returns the status now stored.
+   */
+  private async settleSubmission(
+    parent: DealAuditDocument,
+    counters: AuditCounters,
+  ): Promise<DealAuditStatus> {
+    const now = new Date();
+
+    if (
+      parent.auditStatus === 'Not Submitted' &&
+      counters.producerItemCount === 0
+    ) {
+      const result = await this.dealAuditModel.updateOne(
+        { _id: parent._id, auditStatus: 'Not Submitted' },
+        {
+          $set: {
+            auditStatus: 'Pending',
+            submittedAt: now,
+            submittedById: null,
+          },
+        },
+      );
+      if (result.modifiedCount > 0) {
+        await this.recordSystemActivity(
+          parent,
+          'audit_submitted',
+          'Submitted automatically — nothing for the producer to provide',
+        );
+        return 'Pending';
+      }
+    }
+
+    if (
+      parent.auditStatus === 'Pending' &&
+      !parent.submittedById &&
+      counters.producerOpenCount > 0
+    ) {
+      const result = await this.dealAuditModel.updateOne(
+        { _id: parent._id, auditStatus: 'Pending', submittedById: null },
+        {
+          $set: { auditStatus: 'Not Submitted' },
+          $unset: { submittedAt: 1 },
+        },
+      );
+      if (result.modifiedCount > 0) {
+        await this.recordSystemActivity(
+          parent,
+          'audit_sent_back',
+          'Returned to the producer — a new policy needs their documents',
+        );
+        return 'Not Submitted';
+      }
+    }
+
+    return parent.auditStatus;
+  }
+
+  /** A thread entry with no actor — the thread renders it as "System". */
+  private async recordSystemActivity(
+    audit: DealAuditDocument,
+    type: 'audit_submitted' | 'audit_sent_back',
+    summary: string,
+  ): Promise<void> {
+    try {
+      await this.activityModel.create({
+        agencyId: audit.agencyId,
+        branchId: audit.branchId,
+        type,
+        subjectType: 'dealAudit',
+        dealAuditId: audit._id,
+        dealId: audit.dealId,
+        occurredAt: new Date(),
+        summary,
+        source: 'internal',
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to record ${type} activity for audit ${audit._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /**
@@ -280,6 +394,8 @@ export class AuditGenerationService {
       category?: string;
       required?: boolean;
       blocking?: boolean;
+      producerVisible?: boolean;
+      requiresUpload?: boolean;
     },
     dealAuditId?: Types.ObjectId,
   ): Record<string, unknown> {
@@ -317,6 +433,11 @@ export class AuditGenerationService {
       required: template.required ?? true,
       blocking: template.blocking ?? false,
       applicable: true,
+      // Copied, not joined: the board filters on these without touching the
+      // catalog. A template missing them predates PAC-106 — visible, no file.
+      producerVisible: template.producerVisible ?? true,
+      requiresUpload: template.requiresUpload ?? false,
+      reviewVerdict: null,
       clientName: input.clientName,
       producerName: input.producerName,
       producerId: input.producerId,

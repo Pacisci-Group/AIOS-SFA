@@ -47,6 +47,7 @@ import {
   HouseholdDocument,
 } from '../households/schemas/household.schema';
 import { derivePersistedDealAggregates } from '../sold-deals/intake/sold.normalize';
+import { StorageService } from '../storage/storage.service';
 import { CheckPolicyDto } from './dto/check-policy.dto';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { normalizePolicyNumber, policyNumberKey } from './policy-number';
@@ -155,7 +156,55 @@ export class PoliciesService {
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
     private readonly carriers: CarriersService,
+    // Global module; only to sign the new business application for viewing.
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * `GET /policies/:id/new-business-application/download` — the signed
+   * application, inline (PAC-106).
+   *
+   * The manager checks the entered sold and effective dates against this
+   * document on the Deal Audit page; until now it was written by the Sold form
+   * and read by nothing. Clamped like every sales-record read
+   * (`loadOwnedPolicy`), so a producer cannot open a colleague's application
+   * by guessing an id, and the storage key never crosses the wire.
+   */
+  async getNewBusinessApplicationDownload(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+  ): Promise<{
+    downloadUrl: string;
+    filename: string;
+    contentType: string;
+    expiresIn: number;
+  }> {
+    const { policy } = await this.loadOwnedPolicy(access, branchId, policyId);
+    const document = policy.newBusinessApplication;
+    if (!document) {
+      throw new NotFoundException(
+        'This policy has no new business application on file.',
+      );
+    }
+
+    const downloadUrl = await this.storage.createPresignedDownload(
+      document.key,
+      {
+        disposition: 'inline',
+        filename: document.filename,
+        // Overridden explicitly, as for quote documents: a PDF served as
+        // octet-stream downloads instead of rendering in the drawer's frame.
+        contentType: document.contentType,
+      },
+    );
+    return {
+      downloadUrl,
+      filename: document.filename,
+      contentType: document.contentType,
+      expiresIn: this.storage.downloadUrlTtlSeconds,
+    };
+  }
 
   /**
    * Find existing policies with the same number, so the wizard can offer to link

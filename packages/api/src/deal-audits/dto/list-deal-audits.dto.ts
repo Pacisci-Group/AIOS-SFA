@@ -17,6 +17,17 @@ export const listDealAuditsSchema = z.object({
    * backfill that would give the old items a date to be judged against.
    */
   due: z.enum(['all', 'overdue', 'due_soon']).default('all'),
+  /**
+   * One deal's card only (PAC-106) — what the `audit.sent_back`
+   * notification's link (`/dashboard/producer?audit=<dealId>`) opens, wherever
+   * the card sits in the board's paging. Same scope and board rules: a deal
+   * the caller cannot see, or that is no longer waiting on them, is an empty
+   * page, not a 404.
+   */
+  dealId: z
+    .string()
+    .regex(/^[a-f0-9]{24}$/i)
+    .optional(),
 });
 
 /** How far ahead `due=due_soon` looks. */

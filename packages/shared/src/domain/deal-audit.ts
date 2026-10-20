@@ -1,3 +1,5 @@
+import type { DealAuditSentBackView } from './deal-audit-review';
+
 /**
  * Deal-audit workflow vocabulary (PAC-72).
  *
@@ -112,9 +114,62 @@ export function canSubmitAudit(status: DealAuditStatus): boolean {
   return status !== 'Pending';
 }
 
-/** Whether an audit in `status` is awaiting a reviewer's verdict. */
+/**
+ * Whether an audit in `status` is awaiting a reviewer's verdict.
+ *
+ * Only `Pending` (PAC-106, decided 19 Oct 2026): the manager rules on what the
+ * producer has handed over, never on an audit still being worked. An audit
+ * with nothing for the producer to do is submitted automatically at
+ * generation, so this never strands one.
+ */
 export function canReviewAudit(status: DealAuditStatus): boolean {
   return status === 'Pending';
+}
+
+/**
+ * A deal's audit as the workflow endpoints return it (PAC-72 section E).
+ *
+ * Owners are returned resolved — `{ type, id, name }` — because the stored
+ * value is an ObjectId with no indication of *what* it points at. Resolving on
+ * read rather than denormalizing the name means renaming a role or a user does
+ * not strand every audit they own.
+ *
+ * In `@sfa/shared` since PAC-106: the Deal Audit page's view extends it, and
+ * the web stopped hand-mirroring it.
+ */
+export interface AuditWorkflowView {
+  /** The audit record's id. */
+  id: string;
+  dealId: string;
+  auditStatus: DealAuditStatus;
+  assignee: AuditOwnerView | null;
+  reviewer: AuditOwnerView | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reasonCodes: string[];
+  auditScore: number;
+  auditNotes: string | null;
+  /** Checklist roll-up — the completion percentage and its inputs. */
+  itemCount: number;
+  resolvedCount: number;
+  openCount: number;
+  completionPct: number;
+  /**
+   * The manager's last send-back, until the assignee resubmits (PAC-106).
+   * What the producer's drawer shows as "sent back by … — …".
+   */
+  sentBack: DealAuditSentBackView | null;
+  /*
+   * What the caller may do next, decided by the server.
+   *
+   * The client could almost derive these — `canSubmitAudit` is exported from
+   * `@sfa/shared` — but not `canReview`, which depends on **who submitted**
+   * and, since PAC-106, on holding `management:read`. Exposing `submittedById`
+   * purely so the UI could compare it would leak an identity for no other
+   * reason. Deciding both here also keeps one definition of the rules.
+   */
+  canSubmit: boolean;
+  canReview: boolean;
 }
 
 /**

@@ -680,6 +680,10 @@ describe('Work transfer scenarios (e2e)', () => {
         dealId: deal._id,
         auditStatus: 'Fail',
         openFailedCount: 1,
+        // The board lists audits with producer work (PAC-106); the roll-up
+        // `syncAuditCounters` would write for the one item below.
+        producerItemCount: 1,
+        producerOpenCount: 1,
         auditAssignee: { type: 'user', id: oid(producerId) },
       });
       await auditItems.create({

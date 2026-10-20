@@ -1,13 +1,13 @@
 import {
   AlertTriangle,
-  CheckCircle2,
   Loader2,
   MessageSquare,
+  PenLine,
   Send,
-  Undo2,
   UserCheck,
 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Badge } from "@/components/ui/badge";
@@ -22,16 +22,18 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
-  DEAL_AUDIT_REASON_CODES,
+  AUDIT_STATUS_STYLES,
+  SENT_BACK_SURFACE,
+  SENT_BACK_TEXT,
+} from "@/features/deal-audits/components/review-display";
+import { formatDate } from "@/features/lead/components/lead-display";
+import {
   addAuditNote,
   assignAudit,
   getAuditWorkflow,
   listAuditNotes,
-  reviewAudit,
   submitAudit,
   type AuditOwnerView,
-  type DealAuditReasonCode,
-  type DealAuditStatus,
 } from "@/lib/deal-audits-api";
 import { listRoles } from "@/lib/roles-api";
 import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
@@ -42,18 +44,16 @@ import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
  * Lives inside the hand-off drawer rather than on the board: the board answers
  * "which deals need work", and this answers "what is happening with this one".
  *
- * ⚠ Every action is gated on a server-supplied flag (`canSubmit` / `canReview`)
- * rather than on rules re-derived here. `canReview` in particular depends on
- * who submitted — the submitter may not review their own audit — and the client
- * is deliberately never told who that was.
+ * **Reviewing is not here any more** (PAC-106). Approve and Send back moved to
+ * the manager's Deal Audit page, where each item is ruled on before the audit
+ * is; offering them in the producer's drawer let a producer try to rule on
+ * their own work. In their place, a sent-back audit shows **who sent it back
+ * and why**, with **Fix it** for the sale itself (B10). The Deal Audit page
+ * reuses this panel as `variant="review"` for the ownership and thread only.
+ *
+ * ⚠ Every action is gated on a server-supplied flag (`canSubmit`) rather than
+ * on rules re-derived here.
  */
-
-const STATUS_STYLES: Record<DealAuditStatus, string> = {
-  "Not Submitted": "bg-muted text-muted-foreground",
-  Pending: "bg-sky-400/15 text-sky-400",
-  Pass: "bg-emerald-500/15 text-emerald-500",
-  Fail: "bg-amber-500/15 text-amber-500",
-};
 
 /** Relative-ish timestamp; the thread is a conversation, not an audit log. */
 function formatWhen(iso: string): string {
@@ -95,19 +95,28 @@ function OwnerLine({
   );
 }
 
-export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
+export function AuditWorkflowPanel({
+  dealId,
+  variant = "handoff",
+}: {
+  dealId: string;
+  /**
+   * `handoff` — the producer's drawer: Submit, and Fix it on a sent-back
+   * audit. `review` — the manager's Deal Audit page, which has its own
+   * decisions: ownership and the thread only.
+   */
+  variant?: "handoff" | "review";
+}) {
   const queryClient = useQueryClient();
   const { can, canWrite } = usePermissions();
   const canAct = canWrite("deal_audits");
+  const handoff = variant === "handoff";
   // The pickers need a roster. Producers hold neither, so they see the owners
   // as text — which is the honest fallback rather than a control that 403s.
   const canPickUsers = can("agency:users:read");
   const canPickRoles = can("agency:roles:read");
 
   const [note, setNote] = useState("");
-  const [reviewing, setReviewing] = useState(false);
-  const [reasonCodes, setReasonCodes] = useState<DealAuditReasonCode[]>([]);
-  const [reviewNotes, setReviewNotes] = useState("");
 
   const workflowKey = ["audit-workflow", dealId] as const;
   const notesKey = ["audit-notes", dealId] as const;
@@ -136,7 +145,8 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: workflowKey });
     void queryClient.invalidateQueries({ queryKey: notesKey });
-    // The board's status badge and counters read from a different query.
+    // The board's status badge and counters read from a different query, and
+    // so do the manager's queue and Deal Audit page (all under this root).
     void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
   };
 
@@ -149,17 +159,6 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
   const submitMutation = useMutation({
     mutationFn: () => submitAudit(dealId),
     onSuccess: refresh,
-  });
-
-  const reviewMutation = useMutation({
-    mutationFn: (payload: Parameters<typeof reviewAudit>[1]) =>
-      reviewAudit(dealId, payload),
-    onSuccess: () => {
-      setReviewing(false);
-      setReasonCodes([]);
-      setReviewNotes("");
-      refresh();
-    },
   });
 
   const noteMutation = useMutation({
@@ -194,10 +193,7 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
   }
 
   const state = workflow.data;
-  const busy =
-    assignMutation.isPending ||
-    submitMutation.isPending ||
-    reviewMutation.isPending;
+  const busy = assignMutation.isPending || submitMutation.isPending;
 
   /**
    * Options for a slot: every **active** user, plus every role as a queue.
@@ -262,6 +258,7 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
   );
 
   const canPick = canAct && (canPickUsers || canPickRoles);
+  const sentBack = state.auditStatus === "Fail" ? state.sentBack : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -274,10 +271,10 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
           <Badge
             className={cn(
               "rounded-full border-transparent text-xs font-bold",
-              STATUS_STYLES[state.auditStatus],
+              AUDIT_STATUS_STYLES[state.auditStatus],
             )}
           >
-            {state.auditStatus}
+            {state.auditStatus === "Fail" ? "Sent back" : state.auditStatus}
           </Badge>
         </div>
 
@@ -301,30 +298,55 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
           </>
         )}
 
-        {/*
-          * Why it was sent back, if it was. Kept visible on a `Fail` because it
-          * is the only thing telling the assignee what to actually fix — the
-          * whole reason a reason code is required on that decision.
-          */}
-        {state.auditStatus === "Fail" && state.reasonCodes.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {state.reasonCodes.map((code) => (
-              <span
-                key={code}
-                className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-500"
-              >
-                {code}
-              </span>
-            ))}
-          </div>
-        )}
-        {state.auditNotes && (
+        {state.auditNotes && !sentBack && (
           <p className="text-xs text-muted-foreground">{state.auditNotes}</p>
         )}
       </div>
 
+      {/*
+        * Who sent it back and why (PAC-106) — the one thing telling the
+        * producer what to fix. The failed items themselves are in the list
+        * below, each with the manager's note.
+        */}
+      {handoff && sentBack && (
+        <div
+          className={cn(
+            "flex flex-col gap-2 rounded-xl border p-3",
+            SENT_BACK_SURFACE,
+          )}
+        >
+          <p className={cn("text-sm font-medium", SENT_BACK_TEXT)}>
+            Sent back by {sentBack.byName ?? "your manager"} ·{" "}
+            {formatDate(sentBack.at)}
+          </p>
+          {sentBack.note && (
+            <p className="text-sm text-foreground">{sentBack.note}</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {sentBack.failedItemCount}{" "}
+            {sentBack.failedItemCount === 1 ? "item needs" : "items need"} fixing.
+            Wrong sold date or a missing policy? Fix the sale itself.
+          </p>
+          {canAct && (
+            // B10: the sale is corrected on its own page; a sent-back audit
+            // no longer blocks it (PAC-106).
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="self-start"
+            >
+              <Link to={`/sold/${dealId}/edit`}>
+                <PenLine />
+                Fix it
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Actions */}
-      {canAct && (
+      {handoff && canAct && (
         <div className="flex flex-col gap-2">
           {state.canSubmit && (
             <Button
@@ -344,134 +366,19 @@ export function AuditWorkflowPanel({ dealId }: { dealId: string }) {
                 : "Submit for review"}
             </Button>
           )}
+        </div>
+      )}
 
-          {state.canReview && !reviewing && (
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={() => reviewMutation.mutate({ decision: "approve" })}
-                className="flex-1 gap-1.5 bg-emerald-500/12 text-emerald-500 hover:bg-emerald-500/20"
-              >
-                <CheckCircle2 size={14} />
-                Approve
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() => setReviewing(true)}
-                className="flex-1 gap-1.5 text-amber-500"
-              >
-                <AlertTriangle size={14} />
-                Changes
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() => reviewMutation.mutate({ decision: "send_back" })}
-                className="gap-1.5 text-muted-foreground"
-                aria-label="Send back to assignee"
-              >
-                <Undo2 size={14} />
-              </Button>
-            </div>
-          )}
-
-          {/*
-            * Requesting changes needs at least one reason code — "it failed"
-            * with nothing stated gives the assignee nothing to act on, and the
-            * correction loop just bounces. The API enforces it; this makes the
-            * requirement visible instead of a 400.
-            */}
-          {state.canReview && reviewing && (
-            <div className="flex flex-col gap-3 rounded-xl border border-amber-500/20 bg-amber-500/8 p-3">
-              <p className="text-xs font-medium text-foreground">
-                What needs fixing?
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {DEAL_AUDIT_REASON_CODES.map((code) => {
-                  const picked = reasonCodes.includes(code);
-                  return (
-                    <button
-                      key={code}
-                      type="button"
-                      onClick={() =>
-                        setReasonCodes((current) =>
-                          picked
-                            ? current.filter((c) => c !== code)
-                            : [...current, code],
-                        )
-                      }
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                        picked
-                          ? "border-amber-500/40 bg-amber-500/20 text-amber-500"
-                          : "border-border text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {code}
-                    </button>
-                  );
-                })}
-              </div>
-              <Textarea
-                value={reviewNotes}
-                onChange={(e) => setReviewNotes(e.target.value)}
-                rows={2}
-                placeholder="Anything else the assignee needs to know…"
-                className="resize-none border-border bg-background"
-              />
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="flex-1"
-                  disabled={busy}
-                  onClick={() => {
-                    setReviewing(false);
-                    setReasonCodes([]);
-                    setReviewNotes("");
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  className="flex-1"
-                  disabled={busy || reasonCodes.length === 0}
-                  onClick={() =>
-                    reviewMutation.mutate({
-                      decision: "request_changes",
-                      reasonCodes,
-                      notes: reviewNotes.trim() || undefined,
-                    })
-                  }
-                >
-                  {reviewMutation.isPending ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : null}
-                  Request changes
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {(assignMutation.isError ||
-            submitMutation.isError ||
-            reviewMutation.isError) && (
-            <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2">
-              <AlertTriangle size={14} className="shrink-0 text-destructive" />
-              <p className="text-xs text-destructive">
-                {(
-                  (assignMutation.error ??
-                    submitMutation.error ??
-                    reviewMutation.error) as Error | undefined
-                )?.message || "That didn't go through. Try again."}
-              </p>
-            </div>
-          )}
+      {(assignMutation.isError || submitMutation.isError) && (
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2">
+          <AlertTriangle size={14} className="shrink-0 text-destructive" />
+          <p className="text-xs text-destructive">
+            {(
+              (assignMutation.error ?? submitMutation.error) as
+                | Error
+                | undefined
+            )?.message || "That didn't go through. Try again."}
+          </p>
         </div>
       )}
 

@@ -57,6 +57,20 @@ export const NOTIFICATION_TYPES = {
     category: 'platform',
     defaultChannels: { email: true, push: true },
   },
+  /**
+   * A manager sent a deal audit back to its assignee (PAC-106 §4): at least
+   * one item failed review and needs the assignee's attention.
+   * Recipients: the audit's assignee — every active user holding the role when
+   * a role is assigned — never the manager who sent it.
+   * `data`: `{ dealId, dealAuditId, clientName, reviewerName, note, failedItemCount }`.
+   *
+   * Email is on: the assignee is a producer working leads, not watching the
+   * board, and the deal is aging against a five-business-day clock.
+   */
+  'audit.sent_back': {
+    category: 'audits',
+    defaultChannels: { email: true, push: true },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

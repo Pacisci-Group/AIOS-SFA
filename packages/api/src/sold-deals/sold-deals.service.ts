@@ -105,7 +105,7 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 /** What the Edit sale page — and the 409 — say about a blocked addition. */
 const ADD_POLICIES_BLOCK_MESSAGES: Record<SoldDealAddPoliciesBlock, string> = {
   audit_submitted:
-    "This sale's audit has already been submitted. It has to be sent back before a policy can be added.",
+    "This sale's audit has been approved, or is with a reviewer. It has to be sent back before a policy can be added.",
   no_lead:
     'This sale is not linked to a lead, so policies cannot be added to it here.',
   no_household:
@@ -637,9 +637,12 @@ export class SoldDealsService {
    *
    * ## Refused (409) when
    *
-   *   - **the audit has been submitted** (`Pending` / `Pass` / `Fail`). The new
-   *     policy's items would land on a checklist a reviewer has already ruled
-   *     on — decided with the product owner: block, rather than reopen;
+   *   - **the audit is locked** — approved, or submitted by a person and with
+   *     the reviewer (`loadAuditGate`). The new policy's items would land on a
+   *     checklist a reviewer is ruling on — decided with the product owner:
+   *     block, rather than reopen. Since PAC-106 a **sent-back** audit is open
+   *     again (that is what "Fix it" is for), and so is one the system
+   *     submitted because it had nothing for the producer;
    *   - the deal has **no lead** (uploads are keyed on it) or **no household**
    *     (every policy row is written against it).
    *
@@ -669,7 +672,7 @@ export class SoldDealsService {
       return this.additionResponse(deal, access.timeZone, true);
     }
 
-    const block = this.addPoliciesBlock(deal, await this.loadAuditStatus(deal));
+    const block = this.addPoliciesBlock(deal, await this.loadAuditGate(deal));
     if (block) throw new ConflictException(ADD_POLICIES_BLOCK_MESSAGES[block]);
     // Both present: `addPoliciesBlock` returns a reason otherwise.
     const leadId = deal.leadId as Types.ObjectId;
@@ -814,36 +817,54 @@ export class SoldDealsService {
   }
 
   /**
-   * The furthest the deal's audit has got, or `null` when it has none.
+   * Where the deal's audit stands, for the Edit sale page.
+   *
+   * - `status` — the furthest it has got, or `null` when it has none.
+   * - `locked` — whether a policy may no longer be added (PAC-106). Locked
+   *   when the audit has **passed**, or a **person** submitted it and it is
+   *   with the reviewer. Not locked when it was sent back (`Fail`) — the
+   *   producer's "Fix it" exists to correct the sale — nor when the *system*
+   *   submitted it (`Pending` with no `submittedById`): nobody has handed it
+   *   over, and a new policy's items arrive unreviewed, which the strict
+   *   Approve gate will not let through. Narrows PAC-104's "block once
+   *   submitted, rather than reopen".
    *
    * Every parent row is read, not just one: `dealAudits` is non-unique on
    * `{agencyId, dealId}` because migrated data can hold several, and a deal any
-   * one of which has been submitted counts as submitted.
+   * one of which is locked counts as locked.
    */
-  private async loadAuditStatus(
+  private async loadAuditGate(
     deal: DealDocument,
-  ): Promise<DealAuditStatus | null> {
+  ): Promise<{ status: DealAuditStatus | null; locked: boolean }> {
     const audits = await this.dealAuditModel
       .find({ agencyId: deal.agencyId, dealId: deal._id })
-      .select('auditStatus')
-      .lean<Array<{ auditStatus?: string }>>();
-    if (!audits.length) return null;
+      .select('auditStatus submittedById')
+      .lean<
+        Array<{ auditStatus?: string; submittedById?: Types.ObjectId | null }>
+      >();
+    if (!audits.length) return { status: null, locked: false };
 
-    return (
-      audits
-        .map((audit) => normalizeDealAuditStatus(audit.auditStatus))
-        .find((status) => status !== DEFAULT_DEAL_AUDIT_STATUS) ??
-      DEFAULT_DEAL_AUDIT_STATUS
+    const statuses = audits.map((audit) =>
+      normalizeDealAuditStatus(audit.auditStatus),
     );
+    return {
+      status:
+        statuses.find((status) => status !== DEFAULT_DEAL_AUDIT_STATUS) ??
+        DEFAULT_DEAL_AUDIT_STATUS,
+      locked: audits.some((audit, index) => {
+        const status = statuses[index];
+        return (
+          status === 'Pass' || (status === 'Pending' && !!audit.submittedById)
+        );
+      }),
+    };
   }
 
   private addPoliciesBlock(
     deal: DealDocument,
-    auditStatus: DealAuditStatus | null,
+    gate: { locked: boolean },
   ): SoldDealAddPoliciesBlock | null {
-    if (auditStatus && auditStatus !== DEFAULT_DEAL_AUDIT_STATUS) {
-      return 'audit_submitted';
-    }
+    if (gate.locked) return 'audit_submitted';
     if (!deal.leadId) return 'no_lead';
     if (!deal.householdId) return 'no_household';
     return null;
@@ -854,7 +875,7 @@ export class SoldDealsService {
     timeZone: string,
     policies?: PolicyDocument[],
   ): Promise<SoldDealEditView> {
-    const [rows, household, auditStatus, producerName] = await Promise.all([
+    const [rows, household, auditGate, producerName] = await Promise.all([
       policies ?? this.loadDealPolicies(deal),
       deal.householdId
         ? this.householdModel.findOne({
@@ -862,12 +883,12 @@ export class SoldDealsService {
             agencyId: deal.agencyId,
           })
         : Promise.resolve(null),
-      this.loadAuditStatus(deal),
+      this.loadAuditGate(deal),
       deal.producerId
         ? this.producerName(deal.producerId)
         : Promise.resolve(undefined),
     ]);
-    const block = this.addPoliciesBlock(deal, auditStatus);
+    const block = this.addPoliciesBlock(deal, auditGate);
 
     return {
       id: deal._id.toString(),
@@ -889,7 +910,7 @@ export class SoldDealsService {
       isBundle: deal.isBundle ?? false,
       policies: rows.map((policy) => toLeadDetailPolicy(policy)),
       contacts: household ? await this.householdContacts(household) : [],
-      auditStatus,
+      auditStatus: auditGate.status,
       isMigrated: Boolean(deal.legacySmartSuiteId),
       canAddPolicies: block === null,
       addPoliciesBlockedBy: block,

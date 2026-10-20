@@ -1743,3 +1743,76 @@ load-bearing.
   close ratio should follow it; whether a year is the right backlog bound.
 - A requoted lead's earlier recap reads as *open* once the later recap takes the sale — visible by
   its Sold badge in the drawer; ~6 leads a year.
+
+## 25. PAC-106 — Deal Audits review, the manager's side (handoff, 2026-10-19)
+
+The manager now verifies a sale's audit item by item and approves or sends it back; the producer's
+board shows only their own items and paints a sent-back deal red with **Fix it** (B10). Plan,
+decisions D1–D17 and what changed while building: `docs/plans/pac-106-deal-audit-review-implementation-plan.md`
+(§9 *As built*). Settled with Abu Bakar 19 Oct: **approve only when every item is Pass**; review only
+while `Pending`; audits with no producer items **submit themselves**; B10 in scope.
+
+### What exists now
+- **Two truths per item.** The producer's claim (`isResolved`, `notes`, attachments) and the
+  manager's verification (`reviewVerdict` `pass|fail|null`, `reviewNote`, `reviewedAt`,
+  `reviewedById`). Approve reads verdicts only; a `pass` also resolves the item (the only way a
+  manager-only item closes). Never collapse the two.
+- **Who sees what.** Each template — and each item, copied at generation — carries
+  `producerVisible` / `requiresUpload` (David's table in `seed/audit-templates.seed.ts`). An item is
+  the producer's when `producerVisible !== false` **or** the manager failed it
+  (`isProducerActionable` in shared, `IS_PRODUCER_ACTIONABLE` in `audit-counters.ts`, unit-tested
+  equal). New counters `producerItemCount` / `producerResolvedCount` / `producerOpenCount`.
+- **The producer's board** lists `auditStatus ∈ {Not Submitted, Fail}` with `producerItemCount > 0`
+  (was `openFailedCount > 0`): a card stays until **submitted** ("Ready to submit"), a `Pending`
+  audit leaves it. `GET /deal-audits?dealId=` returns one card for the notification link.
+- **Auto-submit.** Generation, `reconcileDealAudits` and the migration move a `Not Submitted` audit
+  with no producer items to `Pending` with `submittedById: null` (= the system). A re-run that brings
+  producer items hands a *system* submission back to `Not Submitted`.
+- **Manager routes**, all `@RequirePermissions(deal_audits:*, management:read)` (AND):
+  `GET /deal-audits/queue`, `GET /deal-audits/deals/:dealId/review`,
+  `PATCH /deal-audits/:itemId/verdict`, `GET /deal-audits/deals/:dealId/quote-recap/document/download`,
+  and `POST /deal-audits/deals/:dealId/review` (was `deal_audits:write` alone — a producer could
+  review). Approve → 409 `audit_items_not_passed` + `unmet`; Send back (`request_changes`) needs a
+  failed item (409 `audit_nothing_failed`) and a note (400), reopens the failed items, stamps
+  `sentBack`, and requests **`audit.sent_back`** (email + push) for the assignee or every active
+  holder of the assignee role. `submit` clears failed verdicts and `sentBack`, keeps passes.
+  `GET /policies/:id/new-business-application/download` serves the NBA inline.
+- **Edit sale** is blocked only on `Pass` or a **person-submitted** `Pending` (was: any submission).
+- **Web.** Nav *Management › Deal Audits* (`allOf` on `NavItem`) → `/deal-audits` (queue, status
+  chips in the URL) → `/deal-audits/:dealId` (60/40: quote, sold policies + NBA drawer, checklist
+  with Pass/Fail + note; tally, Approve / Send back, ownership + thread). The producer drawer lost
+  its review buttons (`AuditWorkflowPanel variant="review"` on the manager page), gained the
+  sent-back banner + Fix it; `ResolvePanel` shows the manager's note and requires the upload for a
+  document item. `EvidenceBlock` moved to `features/deal-audits/components/`. The Manager view's
+  Aging Audits and producer-drawer rows now open the Deal Audit page.
+- **Demo seed**: reviewer = the branch manager; items flagged; one pinned sent-back audit on Pat's
+  board and one person-submitted `Pending`. **Bruno**: *Login as Reviewer* is the branch manager.
+- **Queue search, filters and sort** (20 Oct, Abu Bakar): `GET /deal-audits/queue` takes `q`
+  (client name · producer first/last/email · policy number read whole as an anchored
+  `policyNumberKey` prefix — `buildSearchFilter`'s AND-across-words rule), `producerIds`,
+  `policyTypes` (the dashboards' lines, `policyTypeValues`), `aging=true` (the Aging card's cutoff
+  **and** not `Pass`), `range` (`DEAL_AUDIT_QUEUE_RANGE_KEYS`: **`all` by default**, then the
+  dashboards' periods) and `sort` (`waiting` · `client` · `producer` · `submitted`,
+  `deal-audits/deal-audit-queue.sort.ts`). Every deal-field filter sits in the first `$match`,
+  before the audit lookup. `GET /deal-audits/queue/options` lists the **sellers** in reach (not the
+  producer role — owners' and departed producers' sales are rows too), behind the queue's gate.
+  Web: `DealAuditQueueFilters` (search + sort, period chips with *All time*, two multi-selects,
+  *Aging only*, Clear) with every key in the URL (`useDealAuditsUrlState`). Queue names now come
+  from `displayNamesFor` (email fallback).
+
+### ⚠ Data
+- The migration ran on the local `sfa` dump at startup (17:18 local, 19 Oct). Smith Family
+  Agency: 509 audits (325 Not Submitted · 154 Fail · 30 Pass); **0 auto-submitted** (no open
+  audit is all manager-only), every item flagged, every audit has the counters; **448** open audits
+  are on a producer's board. The other **31** are legacy `Fail` roll-ups with **no items at all**
+  (Feb–Apr 2026) — off the board before this change too (`openFailedCount: 0`), and inside the
+  pre-31-Aug deletion. Re-check on the deploy's log line (`… submitted for review: N`).
+- The e2e `api.e2e` fixtures that fake a submission now set `submittedById`; one that fakes a board
+  card (`work-transfer-scenarios`) sets the producer counters.
+
+### Still open
+- ⚠ **Not checked in a browser** (light + dark, 375 px, the NBA iframe against MinIO).
+- **For David** (plan §8): Edit sale allowed on sent-back and auto-submitted audits; the migration's
+  auto-submit of legacy audits; passes surviving a resubmit; Pending audits leaving the producer's
+  board; whether Submit should need every producer item resolved; a "mine" chip on the queue.
+- Deleting audits created before 31 Aug 2026 (own ticket); `audit.submitted` notification (PAC-127).

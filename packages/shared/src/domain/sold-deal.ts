@@ -468,7 +468,11 @@ export interface AddSoldDealPoliciesInput {
 
 /** Why a booked deal cannot take another policy right now. */
 export type SoldDealAddPoliciesBlock =
-  /** The audit is `Pending` / `Pass` / `Fail` — a reviewer already has it. */
+  /**
+   * The audit has passed, or a person submitted it and it is with the
+   * reviewer. Not set for a sent-back (`Fail`) audit, nor one the system
+   * submitted because it had nothing for the producer (PAC-106).
+   */
   | 'audit_submitted'
   /** Uploads are keyed on the lead, so a deal without one cannot take files. */
   | 'no_lead'
