@@ -70,6 +70,31 @@ export class HouseholdAddress implements StoredAddress {
 export const HouseholdAddressSchema =
   SchemaFactory.createForClass(HouseholdAddress);
 
+/**
+ * One address in the household's address book — any address it holds besides
+ * the primary, which stays `propertyAddress` (see `household-address-book.ts`
+ * in `@sfa/shared` for why the primary is not an entry here).
+ *
+ * Its own `_id`, unlike `HouseholdAddress`, because the book is addressed by
+ * entry: "make *this* one primary", "remove *that* one".
+ */
+@Schema({ _id: true })
+export class HouseholdAddressBookEntry extends HouseholdAddress {
+  _id: Types.ObjectId;
+
+  /** e.g. `Previous address`. Optional — nobody has to name an address. */
+  @Prop({ trim: true })
+  label?: string;
+
+  /** When it joined the book — added, or moved off primary. */
+  @Prop({ type: Date, default: Date.now })
+  addedAt: Date;
+}
+
+export const HouseholdAddressBookEntrySchema = SchemaFactory.createForClass(
+  HouseholdAddressBookEntry,
+);
+
 @Schema({ timestamps: true, collection: 'households' })
 export class Household extends TenantRecord {
   /**
@@ -104,6 +129,18 @@ export class Household extends TenantRecord {
 
   @Prop({ type: HouseholdAddressSchema })
   mailingAddress?: StoredAddress;
+
+  /**
+   * Every address the household holds **besides** `propertyAddress` — a
+   * previous home, a second one. Written only by the address-book endpoints on
+   * `HouseholdRecordsController`; making an entry primary swaps it with
+   * `propertyAddress`, so each address lives in exactly one place.
+   *
+   * Absent on every household written before the book existed — `.lean()` does
+   * not apply the default, so readers null-guard it.
+   */
+  @Prop({ type: [HouseholdAddressBookEntrySchema], default: [] })
+  otherAddresses: HouseholdAddressBookEntry[];
 
   /*
    * ⚠ No `primaryContactName` / `primaryEmails` / `primaryPhones`, deliberately

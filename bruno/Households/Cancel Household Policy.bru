@@ -1,0 +1,109 @@
+meta {
+  name: Cancel Household Policy
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/households/{{policyCancelHouseholdId}}/policies/{{policyCancelPolicyId}}/cancel
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "reason": "sold"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the policy is off the books", function () {
+    const body = res.getBody();
+    expect(body.policyStatus).to.equal("Cancelled");
+    expect(body.active).to.equal(false);
+  });
+
+  test("and says why", function () {
+    const cancellation = res.getBody().cancellation;
+    expect(cancellation.reason).to.equal("sold");
+    // Dropped for a named reason — only `other` carries free text.
+    expect(cancellation.note).to.equal(null);
+    expect(cancellation.cancelledAt).to.be.a("string");
+  });
+
+  test("never echoes internals", function () {
+    const body = res.getBody();
+    expect(body).to.not.have.property("agencyId");
+    expect(body).to.not.have.property("branchId");
+    expect(body.cancellation).to.not.have.property("cancelledBy");
+  });
+}
+
+docs {
+  # POST /households/:id/policies/:policyId/cancel
+
+  Cancel one of the household's policies **and record why** — the policy card's
+  **Cancel policy** button.
+
+  - **Module:** `clients` OR `crm_service`
+  - **Permission:** `clients:write` **OR** `crm_service:write` (same gate as
+    **Update Household Policy** — the service team holds `crm_service:write` and
+    nothing on the Sold side)
+  - **Data scope:** `own` collapses to **branch**; the household in the path is
+    the authorisation, so a policy that is not this household's is a **404**
+
+  ## Why this is not `status: "Cancelled"` on the PATCH
+  A cancellation carries a fact a field patch has nowhere to put — the reason.
+  `Cancelled` is therefore a **flow-only** status now, like `Cancel Rewrite` and
+  `Company Transfer`: **Update Household Policy** and the Sold card's
+  `PATCH /policies/:id` both refuse to *set* it (400), and this endpoint is its
+  only writer on the edit paths. Re-sending `Cancelled` to a policy that already
+  holds it is accepted as a no-op, so a cancelled policy stays editable.
+
+  ## Body
+  | Field | Type | Notes |
+  |---|---|---|
+  | `reason` | `"sold" \| "changed_carrier" \| "other"` | required |
+  | `note` | string ≤ 500, nullable | **required for `other`** (blank after trimming is a 400); **dropped** for the named reasons |
+
+  No date — the cancellation is stamped with server time.
+
+  ## What it does
+  - `policyStatus` → `Cancelled`, `active` → `false` (so it stops counting
+    towards the household and stops being scheduled for renewal calls)
+  - stores `cancellation: { reason, note, cancelledAt, cancelledBy }`
+  - recounts the household's stored `totalActivePolicies` (the Clients list
+    sorts on it)
+  - writes a **"Policy cancelled"** edit-log row (status and cancellation
+    reason), readable with `agency:changelogs:read`
+
+  Nothing touches the Sold pipeline, a lead or a chargeback — use **Cancel &
+  rewrite** / **Company transfer** for a replacement.
+
+  Reinstating (**Update Household Policy** with `status: "Active"`) clears the
+  stored reason.
+
+  ## Response
+  The saved **`PolicySummary`**, with `cancellation: { reason, note,
+  cancelledAt }` (`cancelledBy` stays server-side). `cancellation` is `null` on
+  every policy not cancelled through this endpoint, including migrated ones that
+  read `Cancelled`.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | Unknown `reason`; `other` without a `note`; `note` over 500 characters |
+  | 401 | Missing/expired bearer token |
+  | 403 | Both `clients` and `crm_service` disabled, or the caller holds neither write |
+  | 404 | Policy or household outside the caller's scope, or the policy is not this household's |
+  | 409 | The policy is already off the books — Cancelled, Lapsed, retired into a replacement, or otherwise inactive and not Pending |
+}

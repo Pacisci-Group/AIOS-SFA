@@ -25,8 +25,12 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { getPolicy } from "@/lib/policies-api";
 import { PolicyHistoryCard } from "./components/PolicyHistoryCard";
 import { PolicyReplacementActions } from "./components/PolicyReplacementActions";
+import { AddAddressDialog } from "@/features/household/components/AddAddressDialog";
+import { CancelPolicyDialog } from "@/features/household/components/CancelPolicyDialog";
 import { PolicyCard } from "@/features/household/components/PolicyPortfolio";
+import { UpdateAddressPrompt } from "@/features/household/components/UpdateAddressPrompt";
 import {
+  isCancellablePolicy,
   statusColors,
   toDisplayPolicy,
 } from "@/features/household/components/policy-display";
@@ -61,7 +65,9 @@ function shortDate(iso: string | null | undefined) {
 export default function PolicyDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [expanded, setExpanded] = useState(true);
-  const { can } = usePermissions();
+  const [addressPromptOpen, setAddressPromptOpen] = useState(false);
+  const [addAddressOpen, setAddAddressOpen] = useState(false);
+  const { can, canWrite } = usePermissions();
 
   const query = useQuery({
     queryKey: ["policy", id],
@@ -71,6 +77,21 @@ export default function PolicyDetailPage() {
 
   const policy = query.data;
   const display = policy ? toDisplayPolicy(policy) : null;
+
+  const canReplace = Boolean(
+    policy?.active && can(`${ModuleKey.DealAudits}:write`),
+  );
+  /*
+   * Cancel writes through the household (`POST /households/:id/policies/:id/cancel`),
+   * so it needs one — a policy outside the caller's scope, or with none, has no
+   * `household` here and no Cancel. Same gate as the household card.
+   */
+  const householdId = policy?.household?.id ?? null;
+  const canServiceHousehold =
+    canWrite(ModuleKey.Clients) || canWrite(ModuleKey.CrmService);
+  const canCancel = Boolean(
+    policy && householdId && canServiceHousehold && isCancellablePolicy(policy),
+  );
 
   return (
     <AppShell>
@@ -159,14 +180,41 @@ export default function PolicyDetailPage() {
             already been replaced, in which case the history card below names the
             replacement to work on instead.
           */}
-          {policy.active && can(`${ModuleKey.DealAudits}:write`) && (
+          {(canReplace || canCancel) && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
               <p className="text-sm text-muted-foreground">
-                Replacing this policy? The old one is retired and the new one
-                written together, so the two stay linked.
+                {canReplace
+                  ? "Replacing this policy? The old one is retired and the new one written together, so the two stay linked. Client leaving altogether? Cancel it and say why."
+                  : "Client leaving? Cancel the policy and say why."}
               </p>
-              <PolicyReplacementActions policyId={policy.id} />
+              <div className="flex flex-wrap items-center gap-2">
+                {canReplace && <PolicyReplacementActions policyId={policy.id} />}
+                {canCancel && householdId && (
+                  <CancelPolicyDialog
+                    householdId={householdId}
+                    policy={policy}
+                    // This row disappears with the save (the policy is no
+                    // longer live), so the prompt is the page's.
+                    onCancelled={() => setAddressPromptOpen(true)}
+                  />
+                )}
+              </div>
             </div>
+          )}
+
+          {householdId && canServiceHousehold && (
+            <>
+              <UpdateAddressPrompt
+                open={addressPromptOpen}
+                onOpenChange={setAddressPromptOpen}
+                onUpdateAddress={() => setAddAddressOpen(true)}
+              />
+              <AddAddressDialog
+                householdId={householdId}
+                open={addAddressOpen}
+                onOpenChange={setAddAddressOpen}
+              />
+            </>
           )}
 
           <PolicyHistoryCard policyId={policy.id} />

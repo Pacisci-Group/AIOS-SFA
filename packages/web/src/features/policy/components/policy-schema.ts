@@ -10,6 +10,7 @@ import {
   POLICY_STATUSES,
   POLICY_TYPES,
   isCanonicalPolicyType,
+  isFlowOnlyPolicyStatus,
   normalizePolicyStatus,
   policyTypeHasItemCount,
 } from "@sfa/shared";
@@ -214,7 +215,13 @@ export function toUpdatePolicyInput(
   // Omitted, not cleared: the API has no "unset the policy type", and a
   // migrated policy whose type never normalized should keep it.
   if (values.policyType) input.policyType = values.policyType;
-  if (values.status) input.status = values.status;
+  // A flow-only status (Cancelled, Cancel Rewrite, Company Transfer) can only be
+  // the one the policy already holds — the select offers it for no other
+  // policy — so it is never a change, and is left out of the patch rather than
+  // sent back for the server to recognise as a no-op.
+  if (values.status && !isFlowOnlyPolicyStatus(values.status)) {
+    input.status = values.status;
+  }
   if (values.premium.trim()) input.premium = Number(values.premium);
 
   if (

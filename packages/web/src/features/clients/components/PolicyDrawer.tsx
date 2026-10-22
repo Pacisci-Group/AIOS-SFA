@@ -1,6 +1,7 @@
 import {
   isCanonicalPolicyType,
   itemCountLabel,
+  policyCancellationSummary,
   policyTypeHasItemCount,
   premiumTermSuffix,
   termExpirationDate,
@@ -77,6 +78,13 @@ export function PolicyDrawer({
                   label="Status"
                   value={policy.policyStatus ?? (policy.active ? 'Active' : 'Inactive')}
                 />
+                {/* Why it left, when it went through the Cancel button. */}
+                {policy.cancellation && (
+                  <DrawerRow
+                    label="Cancelled"
+                    value={`${policyCancellationSummary(policy.cancellation)} · ${shortDate(policy.cancellation.cancelledAt)}`}
+                  />
+                )}
                 <DrawerRow
                   label="Premium"
                   value={`${money(policy.premium)}${premiumTermSuffix(policy.policyType)}`}

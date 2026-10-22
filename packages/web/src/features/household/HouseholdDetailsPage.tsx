@@ -10,8 +10,10 @@ import {
   CreateTicketDialog,
   type CreateTicketPrefill,
 } from "@/features/service/components/CreateTicketDialog";
+import { ModuleKey } from "@sfa/shared";
 import { usePermissions } from "@/hooks/usePermissions";
 import { DEMO_HOUSEHOLD } from "./demo-household";
+import { AddAddressDialog } from "./components/AddAddressDialog";
 import { AddMemberDialog } from "./components/AddMemberDialog";
 import { HouseholdHeader } from "./components/HouseholdHeader";
 import { StartQuoteDialog } from "./components/StartQuoteDialog";
@@ -20,6 +22,7 @@ import { SetPrimaryContactDialog } from "./components/SetPrimaryContactDialog";
 import { PolicyPortfolio } from "./components/PolicyPortfolio";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { HouseholdOnboarding } from "./components/HouseholdOnboarding";
+import { UpdateAddressPrompt } from "./components/UpdateAddressPrompt";
 
 /**
  * Household detail. `/clients/:id` renders a live record; the legacy
@@ -57,6 +60,8 @@ export default function HouseholdDetailsPage() {
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [primaryContactOpen, setPrimaryContactOpen] = useState(false);
   const [startQuoteOpen, setStartQuoteOpen] = useState(false);
+  const [addAddressOpen, setAddAddressOpen] = useState(false);
+  const [addressPromptOpen, setAddressPromptOpen] = useState(false);
 
   /**
    * Start Quote spans two modules, so it needs both: step 1 lists and creates
@@ -80,6 +85,15 @@ export default function HouseholdDetailsPage() {
     : !canStartQuote
       ? "Needs Leads read and Quote Recaps write."
       : undefined;
+
+  /**
+   * The address book and the Cancel button share a gate — `clients:write` or
+   * `crm_service:write`, matching both endpoints — because one leads to the
+   * other: a cancellation asks whether the address needs updating, and asking
+   * someone who then cannot would be a dead end.
+   */
+  const canServicePolicies =
+    !isDemo && (canWrite(ModuleKey.Clients) || canWrite(ModuleKey.CrmService));
 
   /** The demo household has no record to write against, so neither can these. */
   const demoReason = isDemo
@@ -208,6 +222,9 @@ export default function HouseholdDetailsPage() {
                     ? undefined
                     : () => setPrimaryContactOpen(true)
                 }
+                onAddAddress={
+                  canServicePolicies ? () => setAddAddressOpen(true) : undefined
+                }
               />
             </div>
 
@@ -219,6 +236,9 @@ export default function HouseholdDetailsPage() {
                 // cards stay read-only there (PAC-126).
                 householdId={isDemo ? null : household.id}
                 isDemo={isDemo}
+                // Every cancellation asks whether the client moved — see
+                // `UpdateAddressPrompt` for why it is asked every time.
+                onPolicyCancelled={() => setAddressPromptOpen(true)}
               />
             </div>
 
@@ -267,6 +287,24 @@ export default function HouseholdDetailsPage() {
             open={addMemberOpen}
             onOpenChange={setAddMemberOpen}
           />
+
+          {/* Owned here rather than by the policy card: the card that was
+              cancelled folds away into the collapsed section the moment the
+              save lands, and would take a prompt it owned with it. */}
+          {canServicePolicies && (
+            <>
+              <UpdateAddressPrompt
+                open={addressPromptOpen}
+                onOpenChange={setAddressPromptOpen}
+                onUpdateAddress={() => setAddAddressOpen(true)}
+              />
+              <AddAddressDialog
+                householdId={household.id}
+                open={addAddressOpen}
+                onOpenChange={setAddAddressOpen}
+              />
+            </>
+          )}
 
           {/* Mounted only for a live record: the dialog writes through
               `POST /households/:id/primary-contact`, and the demo household has
