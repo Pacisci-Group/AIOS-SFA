@@ -35,6 +35,7 @@ import type { StructuredAddress } from '../common/address/household-address';
 import { resolvePolicyPropertyAddress } from '../common/address/policy-property-address';
 import {
   ChangeFieldSpec,
+  changeBusinessDate,
   ChangeSnapshot,
   changeText,
   diffSnapshots,
@@ -45,7 +46,6 @@ import {
   ResolvedTenantContext,
   TenantContextResolver,
 } from '../common/tenancy/tenant-context.resolver';
-import { quoteDateYmd } from './quote.normalize';
 import { HouseholdDocument } from '../households/schemas/household.schema';
 import { LeadAccessService } from '../leads/lead-access.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
@@ -59,6 +59,16 @@ import {
   PresignQuoteDocumentDto,
 } from './dto/presign-quote-document.dto';
 import { QuoteRecap, QuoteRecapDocument } from './schemas/quote-recap.schema';
+import { Deal, DealDocument } from '../deals/schemas/deal.schema';
+import {
+  businessDateInstant,
+  businessDay,
+} from '../common/dates/business-dates';
+import {
+  assertNotAfter,
+  assertNotBefore,
+  assertNotInFuture,
+} from '../common/dates/business-date-rules';
 
 /** Mongo duplicate-key error. */
 const DUPLICATE_KEY = 11000;
@@ -152,14 +162,21 @@ function deriveTotals(policies: StoredQuotedPolicy[]) {
  *   row as changed on an insert or a reorder. The totals are what the product
  *   owner actually named ("price changes"), they are recomputed server-side, and
  *   `policyCount` carries the shape change the totals alone would hide.
- * - **`quoteDate` / `quoteDateYmd` are absent** because the patch cannot move
- *   them — `quoteDateYmd`'s opportunistic backfill fires on the first touch of
- *   every migrated recap and would report a change nobody made.
+ * - **`quoteDate` is logged as the agency-calendar day** (PAC-159), the value
+ *   the form edits; `changeBusinessDate` is what keeps an agency east of
+ *   Greenwich from freezing the previous day into the log.
  * - **`insuranceRenewalMonth` is normalized on read**, like every other display
  *   of it: migrated recaps hold SmartSuite choice values, and a change row is
  *   never re-normalized once written.
  */
 const RECAP_CHANGE_FIELDS: ChangeFieldSpec<QuoteRecapDocument>[] = [
+  {
+    field: 'quoteDate',
+    label: 'Quote date',
+    kind: 'date',
+    read: (recap, { timeZone }) =>
+      changeBusinessDate(recap.quoteDate, timeZone),
+  },
   {
     field: 'premium',
     label: 'Total premium',
@@ -230,6 +247,8 @@ export class QuoteRecapsService {
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    /** Read-only: the sales sold from a recap bound how far its date may move. */
+    @InjectModel(Deal.name) private readonly dealModel: Model<DealDocument>,
     private readonly tenancy: TenantContextResolver,
     private readonly storage: StorageService,
     private readonly leadAccess: LeadAccessService,
@@ -421,7 +440,8 @@ export class QuoteRecapsService {
             uploadedAt: recap.quoteDocument.uploadedAt.toISOString(),
           }
         : null,
-      quoteDate: recap.quoteDate ? recap.quoteDate.toISOString() : null,
+      // The agency-calendar day, which is what the form edits (PAC-159).
+      quoteDate: businessDay(recap.quoteDate, access.timeZone),
       status: recap.recapStatus ?? null,
       premium: recap.premium ?? 0,
       itemCount: recap.itemCount ?? 0,
@@ -440,12 +460,19 @@ export class QuoteRecapsService {
    *
    * ## What it deliberately does not do
    *
-   * **It never moves `quoteDate`.** That is the day the quote was given, and
-   * `quoteDateYmd` is the Quoted scorecard's indexed bucket. Re-dating a
-   * correction to today would retroactively change a number that has already
-   * been reported. It *is* opportunistically backfilled when missing, which
-   * self-heals migrated recaps the first time one is touched — the same idiom
-   * as `LeadAccessService.findHousehold`.
+   * **It moves `quoteDate` only when asked to** (PAC-159). A quote given
+
+   * before the record was typed in has to be correctable, the way the sold
+
+   * date is (PAC-104); the Quoted scorecard, the leaderboard and the dashboards
+
+   * read the recap live, so the figure for the old period changes on the next
+
+   * request — intended, and recorded by the change-log row. The `quoted`
+
+   * timeline row moves with it. A patch that does not name a date, or names
+
+   * the day already stored, never touches it.
    *
    * **It does not re-run `advanceLeadStatus`.** PAC-38 made lead status freely
    * editable in both directions so a producer can undo a mis-click; silently
@@ -494,7 +521,25 @@ export class QuoteRecapsService {
     // Before anything is assigned — `deriveTotals` below overwrites `premium`,
     // `itemCount` and `productsQuoted` in place, so there is no reading them
     // back afterwards.
-    const before = snapshot(RECAP_CHANGE_FIELDS, recap);
+    const before = snapshot(RECAP_CHANGE_FIELDS, recap, {
+      timeZone: access.timeZone,
+    });
+
+    // Re-date only when the day actually differs (PAC-159): an unchanged date
+    // is neither written nor logged, and a patch that leaves the date alone is
+    // never refused for a pre-existing (migrated) violation of the rules.
+    const quoteDateMoved =
+      dto.quoteDate !== undefined &&
+      businessDay(recap.quoteDate, access.timeZone) !== dto.quoteDate;
+    if (quoteDateMoved && dto.quoteDate !== undefined) {
+      await this.assertQuoteDateAllowed(
+        dto.quoteDate,
+        lead,
+        recap,
+        access.timeZone,
+      );
+      recap.quoteDate = businessDateInstant(dto.quoteDate, access.timeZone);
+    }
 
     if (dto.policies) {
       const household = await this.leadAccess.findHousehold(lead, access);
@@ -532,12 +577,9 @@ export class QuoteRecapsService {
       };
     }
 
-    // Opportunistic, never recomputed — see the docblock.
-    if (recap.quoteDate && recap.quoteDateYmd == null) {
-      recap.quoteDateYmd = quoteDateYmd(recap.quoteDate);
-    }
-
     await recap.save();
+
+    if (quoteDateMoved) await this.moveQuotedActivity(recap);
 
     // Best-effort and post-commit, like the create path's follow-ups: the Leads
     // list sorts on `lastActivityAt`, and an edit is activity.
@@ -554,7 +596,73 @@ export class QuoteRecapsService {
 
     await this.recordFieldChanges(access, recap, lead._id, before);
 
-    return this.toLeadDetailQuoteRecap(recap);
+    return this.toLeadDetailQuoteRecap(recap, access.timeZone);
+  }
+
+  /**
+   * The bounds on a quote date (PAC-159 §1b), applied on create and on a
+   * re-date: not in the future, not before the lead came in, and — on a
+   * re-date only, since nothing links to a new recap — not after any sale
+   * sold **from this recap** (`Deal.quoteRecapId`). Other quotes and other
+   * sales on the lead are not consulted: a requote after a sale is normal.
+   * Same day is always allowed.
+   */
+  private async assertQuoteDateAllowed(
+    day: string,
+    lead: LeadDocument,
+    recap: QuoteRecapDocument | null,
+    timeZone: string,
+  ): Promise<void> {
+    assertNotInFuture('Quote date', day, timeZone);
+    assertNotBefore(
+      'Quote date',
+      day,
+      lead.createdDate ?? lead.createdAt,
+      'the lead was created',
+      timeZone,
+    );
+    if (!recap) return;
+    const earliestSale = await this.dealModel
+      .findOne(
+        {
+          agencyId: recap.agencyId,
+          quoteRecapId: recap._id,
+          isTestRecord: { $ne: true },
+          soldDate: { $type: 'date' },
+        },
+        { soldDate: 1 },
+      )
+      .sort({ soldDate: 1 })
+      .lean<{ soldDate: Date }>();
+    assertNotAfter(
+      'Quote date',
+      day,
+      earliestSale?.soldDate,
+      'the sale it was sold on',
+      timeZone,
+    );
+  }
+
+  /**
+   * The recap's `quoted` timeline row means "occurred on the quote date", so
+   * a re-date moves it (PAC-159) — otherwise the timeline and the card would
+   * disagree about when the quote was given. Best-effort, like
+   * `recordQuotedActivity`. A migrated recap's row carries only
+   * `legacySubjectId` and is not found here; the card is right and the
+   * timeline keeps SmartSuite's day.
+   */
+  private async moveQuotedActivity(recap: QuoteRecapDocument): Promise<void> {
+    try {
+      await this.activityModel.updateMany(
+        { agencyId: recap.agencyId, quoteRecapId: recap._id, type: 'quoted' },
+        { $set: { occurredAt: recap.quoteDate } },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to move the quoted timeline entry for recap ${recap._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /**
@@ -579,7 +687,7 @@ export class QuoteRecapsService {
     const changes = diffSnapshots(
       RECAP_CHANGE_FIELDS,
       before,
-      snapshot(RECAP_CHANGE_FIELDS, recap),
+      snapshot(RECAP_CHANGE_FIELDS, recap, { timeZone: access.timeZone }),
     );
     // A patch that set every field to what it already held. Nothing happened,
     // so the timeline should not claim otherwise.
@@ -650,6 +758,7 @@ export class QuoteRecapsService {
    */
   private async toLeadDetailQuoteRecap(
     recap: QuoteRecapDocument,
+    timeZone: string,
   ): Promise<UpdateQuoteRecapResult> {
     const policies = recap.policies ?? [];
     const producer = recap.producerId
@@ -663,7 +772,7 @@ export class QuoteRecapsService {
 
     return {
       id: recap._id.toString(),
-      quoteDate: recap.quoteDate ? recap.quoteDate.toISOString() : null,
+      quoteDate: businessDay(recap.quoteDate, timeZone),
       premium: recap.premium ?? 0,
       itemCount: recap.itemCount ?? 0,
       productsQuoted: (recap.productsQuoted ?? [])
@@ -735,7 +844,16 @@ export class QuoteRecapsService {
     // addresses are independently correct (PAC-56 #14).
     const householdAddress = this.householdAddress(lead, household);
     const policies = derivePolicies(dto.policies, householdAddress);
-    const quoteDate = new Date();
+    // The day the quote was given, at agency-local midnight (PAC-159). Not
+    // `new Date()`: a quote is sometimes recorded days after it was given,
+    // and the scorecard files it on the day the producer says.
+    await this.assertQuoteDateAllowed(
+      dto.quoteDate,
+      lead,
+      null,
+      access.timeZone,
+    );
+    const quoteDate = businessDateInstant(dto.quoteDate, access.timeZone);
 
     try {
       const recap = await this.quoteRecapModel.create({
@@ -743,10 +861,6 @@ export class QuoteRecapsService {
         branchId: tenant.branchId,
         title: household.name ? `${household.name} — Quote` : 'Quote',
         quoteDate,
-        // The indexed calendar-day label the Quoted scorecard buckets by
-        // (PAC-10). Derived here rather than at read time so the scorecard is a
-        // plain integer range — the same reason `Deal.soldDateYmd` is persisted.
-        quoteDateYmd: quoteDateYmd(quoteDate),
         // Derived server-side and never taken from the client: these three back
         // the Quoted scorecard, so a client-supplied total would corrupt it.
         ...deriveTotals(policies),
@@ -769,7 +883,9 @@ export class QuoteRecapsService {
           // From storage, not from the client's claim.
           contentType: stored.contentType,
           size: stored.size,
-          uploadedAt: quoteDate,
+          // When the file arrived, which is now — not the (possibly earlier)
+          // day the quote was given.
+          uploadedAt: new Date(),
         },
         submissionToken: token ?? undefined,
         isTestRecord: false,

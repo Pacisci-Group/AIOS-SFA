@@ -8,6 +8,7 @@ import type { SoldPolicyDiscounts } from '@sfa/shared';
 import { z } from 'zod';
 import { policyNumberKey } from '../../policies/policy-number';
 import { findCrossBranchDiscounts } from '../intake/sold.normalize';
+import { ymd } from '../../common/dto/business-date.dto';
 
 /**
  * A carrier name as submitted.
@@ -32,12 +33,8 @@ const objectId = z
   .length(24, 'Invalid id')
   .regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
 
-/** `YYYY-MM-DD`, the shape an `<input type="date">` submits. */
-export const ymd = z
-  .string()
-  .trim()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
-  .refine((value) => !Number.isNaN(Date.parse(value)), 'Not a real date');
+/** `YYYY-MM-DD`, the shape an `<input type="date">` submits — shared (PAC-159). */
+export { ymd } from '../../common/dto/business-date.dto';
 
 /**
  * An uploaded document the client has already PUT to storage.

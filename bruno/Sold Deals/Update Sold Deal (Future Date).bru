@@ -1,0 +1,35 @@
+meta {
+  name: Update Sold Deal (Future Date)
+  type: http
+  seq: 21
+}
+
+patch {
+  url: {{baseUrl}}/sold-deals/{{createdSoldDealId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  { "soldDate": "2999-01-01" }
+}
+
+tests {
+  test("rejects a sold date after today on the agency's calendar", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("Sold date cannot be in the future");
+  });
+}
+
+docs {
+  # PATCH /sold-deals/:id — a sold date in the future is refused (PAC-159)
+
+  "Today" is today in `Agency.timezone`, never the server clock's UTC day or
+  the browser's. The same rule guards `POST /sold-deals`; the Sold wizard sets
+  `max` on its date input so the common case never reaches the API.
+}

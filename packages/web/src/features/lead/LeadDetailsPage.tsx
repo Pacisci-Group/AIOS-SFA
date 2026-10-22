@@ -9,6 +9,7 @@ import { getLead } from "@/lib/leads-api";
 import { ActivityTimeline } from "./components/ActivityTimeline";
 import { HouseholdCard } from "./components/HouseholdCard";
 import { LeadContactCard } from "./components/LeadContactCard";
+import { LeadDateCard } from "./components/LeadDateCard";
 import { LeadOwnerCard } from "./components/LeadOwnerCard";
 import { LeadDetailHeader } from "./components/LeadDetailHeader";
 import { PriorInsuranceCard } from "./components/PriorInsuranceCard";
@@ -129,6 +130,18 @@ export default function LeadDetailsPage() {
                 Above the household because "whose is this" is the question
                 asked before "who are they". */}
             <LeadOwnerCard lead={lead} />
+            {/* When it came in — editable, so a late entry is filed on the
+                right day (PAC-159). */}
+            <LeadDateCard
+              lead={lead}
+              onChange={(createdDate) => update.mutate({ createdDate })}
+              pending={update.isPending}
+              error={
+                update.variables?.createdDate !== undefined && update.error
+                  ? update.error.message
+                  : null
+              }
+            />
             <HouseholdCard household={lead.household} />
             <div className="min-h-[24rem] flex-1">
               <ActivityTimeline

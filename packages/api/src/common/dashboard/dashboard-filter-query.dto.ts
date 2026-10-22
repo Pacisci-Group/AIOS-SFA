@@ -7,7 +7,9 @@ import { z } from 'zod';
 import { multiValue } from '../../leads/dto/multi-value';
 import { refineCustomRange } from '../../performance/dto/custom-range.refine';
 
-const objectId = z.string().regex(/^[a-f0-9]{24}$/i, 'must be a record id');
+export const objectId = z
+  .string()
+  .regex(/^[a-f0-9]{24}$/i, 'must be a record id');
 
 /**
  * Bounds on the multi-selects. Generous — no agency has fifty producers or
@@ -31,7 +33,7 @@ const MAX_SELECTED = 50;
  */
 export const dashboardFilterFields = {
   range: z.enum(OWNER_DASHBOARD_RANGE_KEYS).default('mtd'),
-  /** `YYYY-MM-DD`, Chicago calendar dates. `to` is inclusive. */
+  /** `YYYY-MM-DD`, calendar dates in the agency's timezone. `to` is inclusive. */
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
   /** Narrows within the caller's data scope; can never widen it. */

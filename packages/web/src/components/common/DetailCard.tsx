@@ -1,10 +1,21 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
 interface DetailCardProps {
   title: string;
+  /**
+   * What the card shows, in a sentence, on hover or focus of the title. For a
+   * card whose title needs explaining but whose header has no room for a
+   * standing subheading.
+   */
+  titleHint?: string;
   /** Optional leading glyph, e.g. the emerald check on the Sold card. */
   icon?: LucideIcon;
   /** Tints {@link DetailCardProps.icon}; defaults to muted. */
@@ -40,6 +51,7 @@ interface DetailCardProps {
  */
 export function DetailCard({
   title,
+  titleHint,
   icon: Icon,
   iconClassName,
   action,
@@ -64,9 +76,25 @@ export function DetailCard({
                 )}
               />
             )}
-            <h2 className="truncate text-sm font-semibold text-card-foreground">
-              {title}
-            </h2>
+            {titleHint ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* Focusable so a keyboard reaches the hint too; the dotted
+                      underline is the cue that there is one. */}
+                  <h2
+                    tabIndex={0}
+                    className="cursor-help truncate text-sm font-semibold text-card-foreground underline decoration-muted-foreground/50 decoration-dotted underline-offset-4"
+                  >
+                    {title}
+                  </h2>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-72">{titleHint}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <h2 className="truncate text-sm font-semibold text-card-foreground">
+                {title}
+              </h2>
+            )}
           </div>
           {action && (
             <div className="flex shrink-0 items-center gap-2">{action}</div>

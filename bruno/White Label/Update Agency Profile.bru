@@ -1,0 +1,98 @@
+meta {
+  name: Update Agency Profile
+  type: http
+  seq: 17
+}
+
+patch {
+  url: {{baseUrl}}/agency/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "timezone": "America/Chicago",
+    "endOfDayHour": 20
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the stored zone and hour", function () {
+    expect(res.getBody().timezone).to.equal("America/Chicago");
+    expect(res.getBody().endOfDayHour).to.equal(20);
+  });
+}
+
+docs {
+  # PATCH /agency/profile — change the agency's working day (PAC-141, PAC-149)
+
+  **Module** — none. **Permission** — `agency:settings:write` (see **Get
+  Agency Profile** for why it is not the branding pair any more).
+
+  **Body** — both fields optional, **at least one required** (`{}` is a `400`).
+  | field        | type    | rules |
+  |--------------|---------|-------|
+  | timezone     | string  | an IANA zone name, e.g. `America/Chicago`, `America/New_York`, `Asia/Kolkata`. |
+  | endOfDayHour | integer | `0`–`23`, a whole hour on the agency's clock (`20` = 8 PM). A JSON number — `"20"` is refused. |
+
+  The request here sends `America/Chicago` and `20` — the defaults — so
+  repeated runs of the collection leave the demo tenant where they found it.
+
+  ## The zone is validated twice, on purpose
+  1. **The runtime** (`Intl.DateTimeFormat`) must resolve the name, and it must
+     look like a zone (`Area/Location` or a single word): a raw offset such as
+     `+05:30` is refused even though Node would format with it.
+  2. **MongoDB** must know it too: the Owner and Manager dashboards bucket lead
+     creation dates *inside* Mongo (`$dateToString`), whose zone table is not
+     Node's. The service runs a one-document probe aggregate before saving, so
+     a name only one side knows is a `400` here rather than a `500` on every
+     dashboard later.
+
+  ## What changing the zone does
+  - **Future date windows move.** `today`, `mtd`, business-day aging and the
+    leaderboard's default month are resolved on the new calendar from the next
+    request on — the agency's cached access contexts are invalidated after the
+    write (`AccessResolverService.invalidateAgency`), the same as a module
+    toggle. An hour-only change invalidates nothing: no request reads it.
+  - **Sales, quotes and leads all re-bucket** (PAC-159). They are stored as
+    instants and every reader cuts its window on the agency's calendar at
+    read time, so changing the zone re-files the agency's whole history on the
+    next request — consistently. Only producer-goal months are stored calendar
+    keys, and they do not move.
+
+  ## The nightly Away sweep follows the new schedule from the next end of day
+  The sweep's marker (`Agency.availabilitySweep.lastAwayDate`) says whether
+  tonight ran on the *old* schedule. Left alone it would set the whole office
+  Away within thirty minutes (moving east to a zone already past the hour, or
+  moving the hour from 20 to 9 at midday) or skip tonight (moving west after
+  tonight's sweep, or moving the hour from 20 to 22 at 9 PM). The same write
+  re-stamps it: tonight's date if the new hour has already passed on the new
+  clock, otherwise cleared so tonight's hour runs. Only when the zone or the
+  hour actually changes — an unchanged save touches nothing.
+
+  **Response `200`** — the same shape as **Get Agency Profile**, reflecting
+  the stored values.
+
+  **Errors**
+  - `400` — neither field sent (`errors.formErrors`); a zone that is not a
+    zone name, unknown to the runtime, or unknown to MongoDB
+    (`errors.fieldErrors.timezone`); an hour that is not a whole number
+    `0`–`23` (`errors.fieldErrors.endOfDayHour`).
+  - `403` — caller lacks `agency:settings:write`. Holding
+    `agency:branding:write` is not enough. Platform accounts hold no
+    `agency:*` permission: a super admin changes either field after
+    onboarding by impersonating the owner.
+}

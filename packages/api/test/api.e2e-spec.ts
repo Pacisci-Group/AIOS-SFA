@@ -80,6 +80,16 @@ import {
   createTestApp,
   dropTestDatabase,
 } from './helpers/test-app';
+import { businessDateInstant } from '../src/common/dates/business-dates';
+import { agencyTodayIso } from '../src/performance/performance.range';
+
+/**
+ * A business date stored the way the app stores a day-only entry (PAC-159):
+ * midnight of that day in the seeded agency's zone — `America/Chicago`, the
+ * schema default — never UTC midnight, which Chicago reads as the evening
+ * before.
+ */
+const onDay = (iso: string) => businessDateInstant(iso, 'America/Chicago');
 
 /**
  * `GET /crm/service-tickets` returns a paginated envelope (PAC-98), and
@@ -4362,7 +4372,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: householdOne,
-            soldDateYmd: 20260504,
+            soldDate: onDay('2026-05-04'),
             premium: 1000,
             itemCount: 2,
           },
@@ -4370,7 +4380,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: householdOne,
-            soldDateYmd: 20260511,
+            soldDate: onDay('2026-05-11'),
             premium: 500,
             itemCount: 1,
           },
@@ -4379,7 +4389,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             legacyHouseholdId: 'legacy-hh-1',
-            soldDateYmd: 20260518,
+            soldDate: onDay('2026-05-18'),
             premium: 300,
             itemCount: 1,
           },
@@ -4387,7 +4397,7 @@ describe('SFA API (e2e)', () => {
           {
             ...base,
             producerId: producer!._id,
-            soldDateYmd: 20260525,
+            soldDate: onDay('2026-05-25'),
             premium: 200,
             itemCount: 1,
           },
@@ -4396,7 +4406,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: new Types.ObjectId(),
-            soldDateYmd: 20260505,
+            soldDate: onDay('2026-05-05'),
             premium: 99_999,
             itemCount: 99,
             isTestRecord: true,
@@ -4406,7 +4416,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: owner!._id,
             householdId: new Types.ObjectId(),
-            soldDateYmd: 20260506,
+            soldDate: onDay('2026-05-06'),
             premium: 77_777,
             itemCount: 77,
           },
@@ -4415,7 +4425,7 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: new Types.ObjectId(),
-            soldDateYmd: 20260601,
+            soldDate: onDay('2026-06-01'),
             premium: 55_555,
             itemCount: 55,
           },
@@ -4426,12 +4436,52 @@ describe('SFA API (e2e)', () => {
             ...base,
             producerId: producer!._id,
             householdId: householdOne,
-            quoteDate: new Date('2026-05-04T00:00:00.000Z'),
-            quoteDateYmd: 20260504,
+            quoteDate: onDay('2026-05-04'),
             premium: 800,
             itemCount: 2,
           },
         ]);
+      });
+
+      it('files a sale at 11 PM agency time on the last day of a month in that month (PAC-159)', async () => {
+        // The case the YYYYMMDD integers used to protect: 22:59 CST on Jan 31
+        // is already Feb 1 in UTC. A window far from every other seed.
+        const userModel = app.get<Model<User>>(getModelToken(User.name));
+        const dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+        await dealModel.create([
+          {
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDate: new Date('2027-02-01T04:59:00.000Z'),
+            premium: 111,
+            itemCount: 1,
+          },
+          {
+            // Back-dated to the 1st: agency-local midnight, never UTC midnight.
+            ...base,
+            producerId: producer!._id,
+            householdId: new Types.ObjectId(),
+            soldDate: onDay('2027-01-01'),
+            premium: 222,
+            itemCount: 1,
+          },
+        ]);
+        const sold = async (from: string, to: string) => {
+          const res = await request(app.getHttpServer())
+            .get('/api/v1/performance')
+            .query({ range: 'custom', from, to })
+            .set(authHeader(producerToken))
+            .expect(200);
+          return (res.body as PerformanceResponse).sold;
+        };
+        expect(await sold('2027-01-01', '2027-01-31')).toMatchObject({
+          recordCount: 2,
+          premium: 333,
+        });
+        expect((await sold('2027-02-01', '2027-02-28')).recordCount).toBe(0);
       });
 
       it('sums premium and items, and counts each household once', async () => {
@@ -4999,14 +5049,14 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: producer!._id,
-          soldDateYmd: 20260410,
+          soldDate: onDay('2026-04-10'),
           premium: 2000,
           itemCount: 2,
         },
         {
           ...base,
           producerId: owner!._id,
-          soldDateYmd: 20260415,
+          soldDate: onDay('2026-04-15'),
           premium: 77_777,
           itemCount: 9,
         },
@@ -5014,7 +5064,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: producer!._id,
-          soldDateYmd: 20260420,
+          soldDate: onDay('2026-04-20'),
           premium: 500_000,
           itemCount: 1,
           isTestRecord: true,
@@ -5023,7 +5073,7 @@ describe('SFA API (e2e)', () => {
         {
           ...base,
           producerId: producer!._id,
-          soldDateYmd: 20260331,
+          soldDate: onDay('2026-03-31'),
           premium: 400_000,
           itemCount: 1,
         },
@@ -7959,7 +8009,7 @@ describe('SFA API (e2e)', () => {
         householdId: household._id,
         primaryContactId: primary._id,
         memberContactIds: [spouse._id],
-        createdDate: new Date('2026-07-01T00:00:00.000Z'),
+        createdDate: onDay('2026-07-01'),
         lastActivityAt: new Date('2026-07-28T00:00:00.000Z'),
         intakeSource: { channel: 'internal' },
         isTestRecord: false,
@@ -8006,7 +8056,7 @@ describe('SFA API (e2e)', () => {
 
       const older = await recapModel.create({
         ...base,
-        quoteDate: new Date('2026-07-10T00:00:00.000Z'),
+        quoteDate: onDay('2026-07-10'),
         premium: 1500,
         itemCount: 1,
         productsQuoted: ['PYgez'],
@@ -8019,7 +8069,7 @@ describe('SFA API (e2e)', () => {
 
       const newer = await recapModel.create({
         ...base,
-        quoteDate: new Date('2026-07-24T00:00:00.000Z'),
+        quoteDate: onDay('2026-07-24'),
         premium: 1872,
         itemCount: 2,
         // Raw SmartSuite codes, exactly as the migration writes them.
@@ -8045,7 +8095,7 @@ describe('SFA API (e2e)', () => {
       // Linked to the lead only by legacy id — the fallback's whole point.
       await recapModel.create({
         ...base,
-        quoteDate: new Date('2025-03-02T00:00:00.000Z'),
+        quoteDate: onDay('2025-03-02'),
         premium: 990,
         itemCount: 1,
         productsQuoted: ['sNMRK'],
@@ -8054,7 +8104,7 @@ describe('SFA API (e2e)', () => {
 
       const deal = await dealModel.create({
         ...base,
-        soldDate: new Date('2026-07-30T00:00:00.000Z'),
+        soldDate: onDay('2026-07-30'),
         premium: 1872,
         itemCount: 2,
         policyCount: 2,
@@ -8113,7 +8163,7 @@ describe('SFA API (e2e)', () => {
           subjectType: 'lead',
           leadId: lead._id,
           userId: producer!._id,
-          occurredAt: new Date('2026-07-01T00:00:00.000Z'),
+          occurredAt: onDay('2026-07-01'),
           summary: 'Lead created',
           source: 'internal',
         },
@@ -8124,7 +8174,7 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id,
           quoteRecapId: newer._id,
           userId: producer!._id,
-          occurredAt: new Date('2026-07-24T00:00:00.000Z'),
+          occurredAt: onDay('2026-07-24'),
           summary: 'Quote recap created',
           source: 'internal',
         },
@@ -8135,7 +8185,7 @@ describe('SFA API (e2e)', () => {
           leadId: lead._id,
           dealId: deal._id,
           userId: producer!._id,
-          occurredAt: new Date('2026-07-30T00:00:00.000Z'),
+          occurredAt: onDay('2026-07-30'),
           summary: 'Deal marked as sold',
           source: 'internal',
         },
@@ -8455,6 +8505,100 @@ describe('SFA API (e2e)', () => {
       // Only the patchable fields — not a whole LeadDetail.
       expect(body).not.toHaveProperty('household');
       expect(body).not.toHaveProperty('activities');
+    });
+
+    it('re-dates the lead, moves lead_created, logs the edit, and is bounded by today and the first quote (PAC-159)', async () => {
+      const userModel = app.get<Model<User>>(getModelToken(User.name));
+      const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      const quoteRecapModel = app.get<Model<QuoteRecap>>(
+        getModelToken(QuoteRecap.name),
+      );
+      const producer = await userModel.findOne({ email: seed.producerEmail });
+      const base = { agencyId: seed.agencyId, branchId: seed.branchId };
+      const lead = await leadModel.create({
+        ...base,
+        firstName: 'Dated',
+        lastName: 'Lead',
+        status: 'New',
+        producerId: producer!._id,
+        createdDate: onDay('2026-09-10'),
+        isTestRecord: false,
+      });
+      await activityModel.create({
+        ...base,
+        type: 'lead_created',
+        subjectType: 'lead',
+        leadId: lead._id,
+        occurredAt: onDay('2026-09-10'),
+        summary: 'Lead created',
+        source: 'internal',
+        isTestRecord: false,
+      });
+      await quoteRecapModel.create({
+        ...base,
+        leadId: lead._id,
+        producerId: producer!._id,
+        quoteDate: onDay('2026-09-20'),
+        premium: 1,
+        itemCount: 1,
+      });
+      const id = lead._id.toString();
+      const message = async (createdDate: string) =>
+        (
+          (await patchAs(producerToken, id, { createdDate }).expect(400))
+            .body as { message: string }
+        ).message;
+
+      expect(await message('2999-01-01')).toBe(
+        'Lead date cannot be in the future',
+      );
+      expect(await message('2026-09-21')).toBe(
+        'Lead date cannot be after the first quote/sale on this lead (2026-09-20)',
+      );
+
+      // Naming the stored day: no write, no log.
+      await patchAs(producerToken, id, { createdDate: '2026-09-10' }).expect(
+        200,
+      );
+      expect(
+        await activityModel.countDocuments({
+          leadId: lead._id,
+          type: 'field_changed',
+        }),
+      ).toBe(0);
+
+      const res = await patchAs(producerToken, id, {
+        createdDate: '2026-09-01',
+      }).expect(200);
+      expect((res.body as UpdateLeadResult).createdDate).toBe('2026-09-01');
+      expect(
+        (await leadModel.findById(lead._id))!.createdDate?.toISOString(),
+      ).toBe(onDay('2026-09-01').toISOString());
+      const created = await activityModel.findOne({
+        leadId: lead._id,
+        type: 'lead_created',
+      });
+      expect(created!.occurredAt?.toISOString()).toBe(
+        onDay('2026-09-01').toISOString(),
+      );
+      const log = await activityModel.findOne({
+        leadId: lead._id,
+        type: 'field_changed',
+      });
+      expect(log!.summary).toBe('Lead edited');
+      expect(log!.changes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'createdDate',
+            kind: 'date',
+            from: '2026-09-10',
+            to: '2026-09-01',
+          }),
+        ]),
+      );
     });
 
     it('bumps lastActivityAt so the row surfaces on the Leads list', async () => {
@@ -9139,6 +9283,10 @@ describe('SFA API (e2e)', () => {
       overrides: Record<string, unknown> = {},
     ) => ({
       leadId,
+      // Required on create since PAC-159: the day the quote was given, on the
+      // agency's calendar. Today, so it is never ahead of the clock and never
+      // behind the lead's date.
+      quoteDate: agencyTodayIso('America/Chicago'),
       policies: [{ policyType: 'Auto', premium: 1200.1, itemCount: 2 }],
       // Required on create since PAC-56 #16.
       insuranceRenewalMonth: 'March',
@@ -9184,6 +9332,8 @@ describe('SFA API (e2e)', () => {
         status: 'New',
         producerId,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
         ...overrides,
       });
       return { lead, household };
@@ -9711,6 +9861,175 @@ describe('SFA API (e2e)', () => {
         (after.body as { insuranceRenewalMonth: string | null })
           .insuranceRenewalMonth,
       ).toBe('January');
+    });
+
+    describe('quote date (PAC-159)', () => {
+      const dealModel = () => app.get<Model<Deal>>(getModelToken(Deal.name));
+      const activityModel = () =>
+        app.get<Model<Activity>>(getModelToken(Activity.name));
+      const patchAs = (
+        token: string,
+        id: string,
+        body: unknown,
+        expected = 200,
+      ) =>
+        request(app.getHttpServer())
+          .patch(`/api/v1/quote-recaps/${id}`)
+          .set(authHeader(token))
+          .send(body)
+          .expect(expected);
+      const quotedPremium = async (from: string, to: string) => {
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/performance')
+          .query({ range: 'custom', from, to })
+          .set(authHeader(producerToken))
+          .expect(200);
+        return (res.body as PerformanceResponse).quoted.premium;
+      };
+
+      it('stores the day at agency-local midnight and files the recap and its timeline row on it', async () => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        upload(lead._id.toString());
+
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), { quoteDate: '2026-03-05' }),
+        );
+
+        const recap = await quoteRecapModel.findById(created.id);
+        // Not UTC midnight — 06:00Z in March (CST).
+        expect(recap!.quoteDate?.toISOString()).toBe(
+          onDay('2026-03-05').toISOString(),
+        );
+        const quoted = await activityModel().findOne({
+          quoteRecapId: new Types.ObjectId(created.id),
+          type: 'quoted',
+        });
+        expect(quoted!.occurredAt?.toISOString()).toBe(
+          onDay('2026-03-05').toISOString(),
+        );
+        // The edit view serves the agency-calendar day the form edits.
+        const view = await request(app.getHttpServer())
+          .get(`/api/v1/quote-recaps/${created.id}`)
+          .set(authHeader(producerToken))
+          .expect(200);
+        expect((view.body as { quoteDate: string | null }).quoteDate).toBe(
+          '2026-03-05',
+        );
+      });
+
+      it('refuses a future day, a day before the lead, and a day after a sale sold from it; same day is allowed', async () => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead, household } = await seedLead(producer!._id);
+        const leadId = lead._id.toString();
+        upload(leadId);
+        const refused = async (overrides: Record<string, unknown>) =>
+          (
+            (await createAs(
+              producerToken,
+              payload(leadId, overrides),
+              400,
+            )) as unknown as { message: string }
+          ).message;
+
+        expect(await refused({ quoteDate: '2999-01-01' })).toBe(
+          'Quote date cannot be in the future',
+        );
+        // The lead is dated 2026-01-01 by `seedLead`.
+        expect(await refused({ quoteDate: '2025-12-31' })).toBe(
+          'Quote date cannot be before the lead was created (2026-01-01)',
+        );
+
+        const created = await createAs(
+          producerToken,
+          payload(leadId, { quoteDate: '2026-03-05' }),
+        );
+        await dealModel().create({
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          leadId: lead._id,
+          householdId: household._id,
+          producerId: producer!._id,
+          quoteRecapId: new Types.ObjectId(created.id),
+          soldDate: onDay('2026-03-10'),
+          premium: 1,
+          itemCount: 1,
+        });
+
+        const late = await patchAs(
+          producerToken,
+          created.id,
+          {
+            quoteDate: '2026-03-11',
+          },
+          400,
+        );
+        expect((late.body as { message: string }).message).toBe(
+          'Quote date cannot be after the sale it was sold on (2026-03-10)',
+        );
+        // Quoted and sold on one visit is normal.
+        await patchAs(producerToken, created.id, { quoteDate: '2026-03-10' });
+      });
+
+      it('re-dates a recap: the quoted row and the scorecard follow, the change is logged, an unchanged day writes nothing', async () => {
+        const producer = await userModel.findOne({ email: seed.producerEmail });
+        const { lead } = await seedLead(producer!._id);
+        upload(lead._id.toString());
+        const created = await createAs(
+          producerToken,
+          payload(lead._id.toString(), { quoteDate: '2026-03-05' }),
+        );
+        const recapId = new Types.ObjectId(created.id);
+        const februaryBefore = await quotedPremium('2026-02-01', '2026-02-28');
+
+        // Naming the day already stored: no write, no log.
+        await patchAs(producerToken, created.id, { quoteDate: '2026-03-05' });
+        expect(
+          await activityModel().countDocuments({
+            quoteRecapId: recapId,
+            type: 'field_changed',
+          }),
+        ).toBe(0);
+
+        const res = await patchAs(producerToken, created.id, {
+          quoteDate: '2026-02-20',
+        });
+        expect((res.body as { quoteDate: string | null }).quoteDate).toBe(
+          '2026-02-20',
+        );
+        const recap = await quoteRecapModel.findById(created.id);
+        expect(recap!.quoteDate?.toISOString()).toBe(
+          onDay('2026-02-20').toISOString(),
+        );
+        const quoted = await activityModel().findOne({
+          quoteRecapId: recapId,
+          type: 'quoted',
+        });
+        expect(quoted!.occurredAt?.toISOString()).toBe(
+          onDay('2026-02-20').toISOString(),
+        );
+        const log = await activityModel().findOne({
+          quoteRecapId: recapId,
+          type: 'field_changed',
+        });
+        expect(log!.summary).toBe('Quote recap edited');
+        expect(log!.changes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              field: 'quoteDate',
+              kind: 'date',
+              from: '2026-03-05',
+              to: '2026-02-20',
+            }),
+          ]),
+        );
+        // The Quoted scorecard reads recaps live: February gained the recap.
+        expect(await quotedPremium('2026-02-01', '2026-02-28')).toBeCloseTo(
+          februaryBefore + 1200.1,
+          2,
+        );
+      });
     });
 
     it('a recap with no renewal month is still editable (PAC-56 #16)', async () => {
@@ -10480,6 +10799,8 @@ describe('SFA API (e2e)', () => {
         status: 'Quoted',
         producerId: card5ProducerId,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
       });
       return lead;
     };
@@ -11641,6 +11962,8 @@ describe('SFA API (e2e)', () => {
         status: 'Quoted',
         producerId: genProducerId,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
       });
       return { lead, household, clientName: who };
     };
@@ -13255,6 +13578,8 @@ describe('SFA API (e2e)', () => {
         status: 'Quoted',
         producerId: owner,
         householdId: household._id,
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
         ...overrides,
       });
       return { lead, household };
@@ -13321,7 +13646,10 @@ describe('SFA API (e2e)', () => {
       expect(deal!.premium).toBe(2100.05);
       // Honest provenance: submitted, not rolled up from linked rows.
       expect(deal!.premiumSource).toBe('snapshot');
-      expect(deal!.soldDateYmd).toBe(20260215);
+      // Stored at agency-local midnight of the form's day (PAC-159).
+      expect(deal!.soldDate?.toISOString()).toBe(
+        onDay('2026-02-15').toISOString(),
+      );
       expect(deal!.producerId?.toString()).toBe(producerId.toString());
       // The refs that did not exist before this story.
       expect(deal!.leadId?.toString()).toBe(lead._id.toString());
@@ -13564,6 +13892,8 @@ describe('SFA API (e2e)', () => {
         status: 'New',
         producerId,
         legacyHouseholdId: 'legacy-hh-sold-1',
+        // A sale booked for Feb 15 cannot precede its lead (PAC-159 §1b).
+        createdDate: onDay('2026-01-01'),
       });
 
       const body = await createAs(producerToken, payload(lead._id.toString()));
@@ -13870,6 +14200,77 @@ describe('SFA API (e2e)', () => {
       };
 
       /** An app-booked Auto sale: 1000.10, two vehicles, sold 2026-02-15. */
+      describe('sold date rules (PAC-159 §1b)', () => {
+        const recapModel = () =>
+          app.get<Model<QuoteRecap>>(getModelToken(QuoteRecap.name));
+        const recapOn = (
+          lead: { _id: Types.ObjectId },
+          household: { _id: Types.ObjectId },
+          day: string,
+        ) =>
+          recapModel().create({
+            agencyId: seed.agencyId,
+            branchId: seed.branchId,
+            leadId: lead._id,
+            householdId: household._id,
+            producerId,
+            quoteDate: onDay(day),
+            premium: 500,
+            itemCount: 1,
+            productsQuoted: ['Auto'],
+          });
+
+        it('bounds the sold date by today, the lead and the linked quote; same day allowed; a foreign recap is refused', async () => {
+          const { lead, household } = await seedSoldLead(producerId);
+          const leadId = lead._id.toString();
+          const recap = await recapOn(lead, household, '2026-02-10');
+          const refused = async (overrides: Record<string, unknown>) =>
+            (
+              (await createAs(
+                producerToken,
+                payload(leadId, overrides),
+                400,
+              )) as unknown as { message: string }
+            ).message;
+
+          expect(await refused({ soldDate: '2999-01-01' })).toBe(
+            'Sold date cannot be in the future',
+          );
+          // The lead is dated 2026-01-01 by `seedSoldLead`.
+          expect(await refused({ soldDate: '2025-12-31' })).toBe(
+            'Sold date cannot be before the lead was created (2026-01-01)',
+          );
+          expect(
+            await refused({
+              soldDate: '2026-02-09',
+              quoteRecapId: String(recap._id),
+            }),
+          ).toBe('Sold date cannot be before the quote date (2026-02-10)');
+
+          const other = await seedSoldLead(producerId);
+          const foreign = await recapOn(
+            other.lead,
+            other.household,
+            '2026-02-01',
+          );
+          expect(await refused({ quoteRecapId: String(foreign._id) })).toBe(
+            'The quote recap named is not on this lead.',
+          );
+
+          // Quoted and sold on one visit is normal.
+          const created = await createAs(
+            producerToken,
+            payload(leadId, {
+              soldDate: '2026-02-10',
+              quoteRecapId: String(recap._id),
+            }),
+          );
+          // The edit is bounded the same way — and only when the day moves.
+          await patchSoldDate(producerToken, created.id, '2026-02-09', 400);
+          await patchSoldDate(producerToken, created.id, '2026-02-10');
+        });
+      });
+
       const bookAuto = async (overrides: Record<string, unknown> = {}) => {
         const { lead, household } = await seedSoldLead(producerId);
         const created = await createAs(
@@ -13940,7 +14341,7 @@ describe('SFA API (e2e)', () => {
             agencyId: seed.agencyId,
             branchId: seed.branchId,
             producerId,
-            soldDate: new Date('2026-02-15T00:00:00.000Z'),
+            soldDate: onDay('2026-02-15'),
             premiumSource: 'snapshot',
           });
 
@@ -13951,7 +14352,7 @@ describe('SFA API (e2e)', () => {
       });
 
       describe('PATCH /sold-deals/:id', () => {
-        it('moves soldDate and soldDateYmd together, and the sold timeline entry with them', async () => {
+        it('moves soldDate to the new day at agency-local midnight, and the sold timeline entry with it', async () => {
           const { created } = await bookAuto();
 
           const res = await patchSoldDate(
@@ -13966,10 +14367,10 @@ describe('SFA API (e2e)', () => {
           expect(view.policyCount).toBe(1);
 
           const deal = await soldDealModel.findById(created.id);
-          // The Sold scorecard's bucket key — the deal now reports in January.
-          expect(deal!.soldDateYmd).toBe(20260120);
+          // The deal now reports in January: the new day's first instant in
+          // the agency's zone (CST), never UTC midnight.
           expect(deal!.soldDate?.toISOString()).toBe(
-            '2026-01-20T00:00:00.000Z',
+            '2026-01-20T06:00:00.000Z',
           );
 
           const sold = await soldActivityModel.findOne({
@@ -13977,7 +14378,7 @@ describe('SFA API (e2e)', () => {
             type: 'sold',
           });
           expect(sold!.occurredAt?.toISOString()).toBe(
-            '2026-01-20T00:00:00.000Z',
+            '2026-01-20T06:00:00.000Z',
           );
         });
 
@@ -14006,8 +14407,7 @@ describe('SFA API (e2e)', () => {
             agencyId: seed.agencyId,
             branchId: seed.branchId,
             producerId,
-            soldDate: new Date('2025-11-03T00:00:00.000Z'),
-            soldDateYmd: 20251103,
+            soldDate: onDay('2025-11-03'),
             premium: 9999,
             premiumSource: 'rollup',
             legacySmartSuiteId: 'legacy-deal-pac104-date',
@@ -14020,7 +14420,9 @@ describe('SFA API (e2e)', () => {
           );
 
           const after = await soldDealModel.findById(migrated._id);
-          expect(after!.soldDateYmd).toBe(20251104);
+          expect(after!.soldDate?.toISOString()).toBe(
+            onDay('2025-11-04').toISOString(),
+          );
           expect(after!.premium).toBe(9999);
         });
 
@@ -14054,7 +14456,9 @@ describe('SFA API (e2e)', () => {
 
           const deal = await soldDealModel.findById(created.id);
           // Adding a policy never re-dates the sale.
-          expect(deal!.soldDateYmd).toBe(20260215);
+          expect(deal!.soldDate?.toISOString()).toBe(
+            onDay('2026-02-15').toISOString(),
+          );
           expect(deal!.premiumSource).toBe('snapshot');
 
           const added = await soldPolicyModel.findById(body.addedPolicyIds[0]);
@@ -14239,8 +14643,7 @@ describe('SFA API (e2e)', () => {
             producerId,
             leadId: lead._id,
             householdId: household._id,
-            soldDate: new Date('2025-10-01T00:00:00.000Z'),
-            soldDateYmd: 20251001,
+            soldDate: onDay('2025-10-01'),
             premium: 9999,
             itemCount: 42,
             policyCount: 7,
@@ -14268,7 +14671,9 @@ describe('SFA API (e2e)', () => {
           const after = await soldDealModel.findById(migrated._id);
           // So later per-policy corrections keep the new total in step.
           expect(after!.premiumSource).toBe('snapshot');
-          expect(after!.soldDateYmd).toBe(20251001);
+          expect(after!.soldDate?.toISOString()).toBe(
+            onDay('2025-10-01').toISOString(),
+          );
         });
 
         it("keeps a manager's addition in the producer's book", async () => {
@@ -14411,7 +14816,7 @@ describe('SFA API (e2e)', () => {
         expect((await soldPolicyModel.findById(policy._id))!.items).toBe(7);
       });
 
-      it('never moves soldDateYmd — the Sold scorecard buckets on it', async () => {
+      it('never moves soldDate — the Sold scorecard buckets on it', async () => {
         const { lead } = await seedSoldLead(producerId);
         const created = await createAs(
           producerToken,
@@ -14429,7 +14834,6 @@ describe('SFA API (e2e)', () => {
         const after = await soldDealModel.findById(created.id);
         expect(after!.premium).toBe(900);
         // A Thursday correction must not re-date a Monday sale.
-        expect(after!.soldDateYmd).toBe(before!.soldDateYmd);
         expect(after!.soldDate?.toISOString()).toBe(
           before!.soldDate?.toISOString(),
         );
@@ -14567,8 +14971,7 @@ describe('SFA API (e2e)', () => {
           premium,
           itemCount: 1,
           policyCount: 1,
-          soldDateYmd: 20260301,
-          soldDate: new Date('2026-03-01T00:00:00.000Z'),
+          soldDate: onDay('2026-03-01'),
           businessType: 'new_business',
           isTestRecord: false,
         });
@@ -14623,6 +15026,8 @@ describe('SFA API (e2e)', () => {
           },
           members: [],
           leadSourceId: seed.leadSourceIds.mailer,
+          // The sale below is dated in March; a lead cannot post-date it.
+          createdDate: '2026-01-01',
           replacementIntent: { policyId, reason },
           ...overrides,
         })
@@ -14957,8 +15362,7 @@ describe('SFA API (e2e)', () => {
           premium: 777,
           itemCount: 1,
           policyCount: 1,
-          soldDateYmd: 20260310,
-          soldDate: new Date('2026-03-10T00:00:00.000Z'),
+          soldDate: onDay('2026-03-10'),
           isTestRecord: false,
         });
 

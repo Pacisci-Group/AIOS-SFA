@@ -60,6 +60,13 @@ export interface ProvisionTenantOptions {
 export interface ProvisionedTenant {
   agencyId: Types.ObjectId;
   branchId: Types.ObjectId;
+  /**
+   * `Agency.timezone` — the calendar the caller anchors day-only business
+   * dates on (`businessDateInstant`) and derives goal months on. Returned
+   * rather than re-read so neither caller is tempted to reach for a Central
+   * literal (PAC-141).
+   */
+  timeZone: string;
   agencyCreated: boolean;
   branchCreated: boolean;
   templates: { created: number; refreshed: number };
@@ -183,6 +190,7 @@ export async function provisionTenant(
   return {
     agencyId: agency._id,
     branchId: branch._id,
+    timeZone: agency.timezone,
     agencyCreated,
     branchCreated,
     templates,

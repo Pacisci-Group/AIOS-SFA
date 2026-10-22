@@ -16,6 +16,7 @@ headers {
 
 body:json {
   {
+    "createdDate": "2026-01-05",
     "primaryContact": {
       "firstName": "Dana",
       "lastName": "Whitfield",
@@ -68,6 +69,14 @@ script:post-response {
     bru.setVar("createdLeadId", res.getBody().id);
     bru.setVar("createdLeadToken", req.getBody().submissionToken);
   }
+  // Today on the agency's calendar (PAC-159) — the quote date the Quote Recaps
+  // folder sends. Set here, a folder ahead of its first use, so the body is
+  // interpolated from a variable that already exists whatever the order of
+  // interpolation and pre-request scripts within one request.
+  bru.setVar(
+    "quoteRecapQuoteDay",
+    new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }),
+  );
 }
 
 tests {
@@ -101,6 +110,7 @@ docs {
   ## Body
   | field                   | type   | required | rules                                        |
   |-------------------------|--------|----------|----------------------------------------------|
+  | createdDate             | string | no       | `YYYY-MM-DD`, the day the lead came in, on the agency's calendar (PAC-159). Not in the future. Absent means now. The New Lead form always sends it, pre-filled with the agency's today |
   | primaryContact.firstName| string | yes      | 1–60 chars                                   |
   | primaryContact.lastName | string | yes      | 1–60 chars                                   |
   | primaryContact.dateOfBirth | string | yes   | `YYYY-MM-DD`                                 |
@@ -120,6 +130,16 @@ docs {
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
 
   ## Behaviour worth knowing
+  **The lead date is a business date (PAC-159).** `createdDate` is when the lead
+  *came in*, distinct from the Mongoose `createdAt` entry timestamp: every lead
+  count, aging figure and lead-source matrix buckets it on the agency's
+  calendar at read time, so a lead typed in a week late is filed on the day it
+  arrived. Stored at that day's first instant in `Agency.timezone` — never UTC
+  midnight. The `lead_created` timeline row lands on it too. It is editable
+  afterwards on `PATCH /leads/:id`. This collection dates its lead
+  **2026-01-05** so the February sale the Sold Deals folder books on it can
+  never precede it.
+
   **Contact matching**, in two steps since PAC-91 §9.
 
   1. **The owner's identity rule, which is definite.** Same full name, same date

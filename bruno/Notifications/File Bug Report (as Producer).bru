@@ -1,0 +1,52 @@
+meta {
+  name: File Bug Report (as Producer)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/bug-reports
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "description": "Notifications folder: the badge did not update after I marked everything read.",
+    "severity": "normal",
+    "screenshots": [],
+    "context": {
+      "route": "/notifications",
+      "theme": "dark"
+    }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("notifBugReportId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /bug-reports — the trigger
+
+  Filed by the producer (the collection bearer). `BugReportsService.create`
+  then emits `notification/requested.v1` with `type: bug_report.filed`,
+  `recipientIds` = every active platform admin other than the reporter, and
+  `dedupeKey: bug_report.filed:<bugReportId>`. The emit is best-effort: a
+  failure is logged, the report is still a `201`, and the outbox sweep replays
+  the event.
+
+  See `Bug Reports/Create Bug Report` for the endpoint's own contract.
+}

@@ -455,6 +455,13 @@ export class AuthService {
       dataScope: access.dataScope,
       isPlatformAdmin: access.isPlatformAdmin,
       /**
+       * The agency's IANA zone (PAC-159). Every date input on the web defaults
+       * to, and is capped at, *today on the agency's calendar* — the same day
+       * the API's "not in the future" rule is judged on — and the browser's
+       * own zone is the wrong one for that. Platform admins get the default.
+       */
+      timeZone: access.timeZone,
+      /**
        * Whether this user still has their agency's first-run setup to finish
        * (PAC-69). Drives the redirect into `/welcome/agency`.
        *

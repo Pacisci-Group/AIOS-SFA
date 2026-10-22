@@ -561,8 +561,14 @@ export class DealAuditsService {
 
   /**
    * Load an audit item by id within the caller's agency and enforce data scope:
-   * `own` requires the item's producer to be the caller; `branch` requires the
-   * item's branch to match. Throws 404 if missing, 403 on scope violation.
+   * `own` requires the caller to be the item's producer **or** to own the
+   * parent audit; `branch` requires the item's branch to match. Throws 404 if
+   * missing, 403 on scope violation.
+   *
+   * The audit-owner arm is what makes a work transfer (PAC-136) usable: the
+   * successor inherits `auditAssignee`, while `item.producerId` stays as the
+   * record of who sold the deal. Same clamp as the board, so an own-scoped user
+   * can resolve exactly the items on the cards they can see.
    */
   private async loadOwnedItem(
     access: AccessContext,
@@ -581,7 +587,10 @@ export class DealAuditsService {
     }
 
     if (access.dataScope === DataScope.Own) {
-      if (item.producerId?.toString() !== access.userId) {
+      if (
+        item.producerId?.toString() !== access.userId &&
+        !(await this.ownsParentAudit(access, branchId, item))
+      ) {
         throw new ForbiddenException(
           'You can only resolve your own audit items.',
         );
@@ -594,6 +603,23 @@ export class DealAuditsService {
       }
     }
     return item;
+  }
+
+  /** Whether the caller is the `auditAssignee` of the audit `item` belongs to. */
+  private async ownsParentAudit(
+    access: AccessContext,
+    branchId: string | null,
+    item: DealAuditItemDocument,
+  ): Promise<boolean> {
+    if (!item.dealId) return false;
+    const owned = await this.dealAuditModel.exists({
+      ...buildScopeFilter<DealAudit>(access, branchId, {
+        ownerField: { path: 'auditAssignee', polymorphic: true },
+        excludeTestRecords: false,
+      }),
+      dealId: item.dealId,
+    });
+    return owned !== null;
   }
 
   // --- Workflow: assign → submit → review (PAC-72 section E) ----------------

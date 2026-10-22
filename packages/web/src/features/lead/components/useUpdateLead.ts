@@ -9,6 +9,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { leadSourcesKey } from "@/lib/lead-sources-api";
 import { updateLead } from "@/lib/leads-api";
+import { managementDashboardKey } from "@/lib/management-dashboard-api";
+import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 /** The detail query key. Exported so the page and the hook cannot disagree. */
 export function leadDetailKey(leadId: string) {
@@ -33,6 +35,8 @@ function applyLeadPatch(
 
   if (input.status !== undefined) next.status = input.status;
   if (input.temperature !== undefined) next.temperature = input.temperature;
+  // The server echoes the same day back, with `agingDays` recomputed.
+  if (input.createdDate !== undefined) next.createdDate = input.createdDate;
 
   if (input.leadSourceId !== undefined) {
     if (input.leadSourceId === LEAD_SOURCE_NONE) {
@@ -104,6 +108,8 @@ export function useUpdateLead(leadId: string) {
         current
           ? {
               ...current,
+              createdDate: result.createdDate,
+              agingDays: result.agingDays,
               status: result.status,
               temperature: result.temperature,
               leadSource: result.leadSource,
@@ -114,10 +120,16 @@ export function useUpdateLead(leadId: string) {
       toast.success("Lead updated");
     },
 
-    onSettled: () => {
+    onSettled: (_result, _error, input) => {
       // The list's status/temperature/source columns and its `lastActivityAt`
       // sort are both stale now — the row will have moved to the top.
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      // A re-dated lead moves the lead counts, the lead-source matrix and the
+      // aging figures on both management dashboards (PAC-159).
+      if (input.createdDate !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
+        void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
+      }
       // A terminal status resolves the lead's quote service ticket server-side,
       // so the CSR queue behind this page is stale too. Invalidated
       // unconditionally rather than only on a terminal status: this hook cannot

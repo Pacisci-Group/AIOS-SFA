@@ -55,9 +55,10 @@ docs {
   | soldDate | string | `YYYY-MM-DD`, a real date — the Sold form's own rule |
 
   ## What moves
-  - `soldDate` **and** `soldDateYmd`, in one write. The Sold scorecard and the
-    leaderboard bucket on `soldDateYmd` at query time, so the deal simply
-    reports in the new period.
+  - `soldDate`, stored at the new day's first instant in `Agency.timezone`
+    (PAC-159). The Sold scorecard and the leaderboard cut their windows on the
+    agency's calendar at query time, so the deal simply reports in the new
+    period.
   - The deal's `sold` timeline entry, whose meaning is "occurred on the sold
     date". The correction itself is timestamped *now* by the edit log.
 
@@ -82,8 +83,17 @@ docs {
   ## Response `200`
   The edit view — see `Get Sold Deal For Edit`.
 
+  ## Rules (PAC-159 §1b — `400`, judged on the agency's calendar; same day allowed)
+  Only a date that actually differs is checked: a patch naming the stored day
+  writes nothing and is never refused for a pre-existing (migrated) violation.
+  - not in the future — **Update Sold Deal (Future Date)**;
+  - not before the lead's `createdDate` — **Update Sold Deal (Before Lead)**;
+  - not before the `quoteDate` of the recap the deal was sold from
+    (`Deal.quoteRecapId`; a deal without one is checked against no quote) —
+    **Update Sold Deal (Before Quote)**.
+
   ## Errors
-  - `400 Bad Request` — missing or malformed `soldDate`.
+  - `400 Bad Request` — missing or malformed `soldDate`, or one of the rules above.
   - `401 Unauthorized` — missing/expired access token.
   - `403 Forbidden` — `deal_audits` disabled, or no `deal_audits:write`.
   - `404 Not Found` — unknown/malformed id, out of scope, or a company transfer.

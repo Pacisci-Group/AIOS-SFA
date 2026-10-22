@@ -25,8 +25,39 @@ export class ApiError extends Error {
   }
 }
 
-function getAccessToken(): string | null {
+/**
+ * The current access token, or null when signed out.
+ *
+ * Exported for the notification stream (PAC-154), whose `fetch` override reads
+ * it on every (re)connect — a header captured once would be the expired token
+ * forever. Everything else goes through {@link apiFetch}.
+ */
+/** Where `push-subscription.ts` records which user this browser is subscribed for. */
+export const PUSH_OWNER_STORAGE_KEY = 'push:ownerUserId';
+
+export function getAccessToken(): string | null {
   return localStorage.getItem('accessToken');
+}
+
+/**
+ * When the stored access token expires, as epoch milliseconds — or null when
+ * there is no token or it carries no `exp`. Read from the JWT's payload
+ * without verifying it: the browser cannot verify, and does not need to; this
+ * only decides whether to refresh *before* a long-lived request (the
+ * notification stream) rather than be refused mid-way (PAC-154 PR2).
+ */
+export function getAccessTokenExpiry(): number | null {
+  const token = getAccessToken();
+  const payload = token?.split('.')[1];
+  if (!payload) return null;
+  try {
+    const json = JSON.parse(
+      atob(payload.replace(/-/g, '+').replace(/_/g, '/')),
+    ) as { exp?: unknown };
+    return typeof json.exp === 'number' ? json.exp * 1000 : null;
+  } catch {
+    return null;
+  }
 }
 
 export function getRefreshToken(): string | null {
@@ -50,7 +81,16 @@ export function setTokens(accessToken: string, refreshToken: string) {
  * Keep this list short, and only add a key when leaking it to the next user of
  * the same machine would be harmless.
  */
-const PRESERVED_UI_PREFERENCE_KEYS = ['theme', 'sidebar:collapsed'] as const;
+const PRESERVED_UI_PREFERENCE_KEYS = [
+  'theme',
+  'sidebar:collapsed',
+  // Whose push subscription this browser holds (`push-subscription.ts`). It
+  // describes the *browser* — the subscription outlives the session — and
+  // wiping it is what made push turn itself off for the same user signing
+  // back in after an expired refresh token (PAC-154 PR4 review). An opaque
+  // ObjectId; the next person at the machine learns nothing from it.
+  PUSH_OWNER_STORAGE_KEY,
+] as const;
 
 /**
  * Key prefixes preserved alongside {@link PRESERVED_UI_PREFERENCE_KEYS}, for
@@ -122,6 +162,16 @@ export interface AuthUser {
   dataScope: string;
   isPlatformAdmin: boolean;
   /**
+   * The agency's IANA zone (PAC-159) — what "today" means for a sold, quote
+   * or lead date. Feed it to `agencyTodayYmd` (`@/lib/dates`); never default a
+   * business date from the browser's clock.
+   *
+   * Optional only because a blob stored before the field existed deserializes
+   * without it; `agencyTodayYmd` falls back to the browser's day until the
+   * next `/auth/me` refresh rewrites the blob.
+   */
+  timeZone?: string;
+  /**
    * Whether this user still owes their agency its first-run setup (PAC-69).
    *
    * True only for the owner of an agency onboarded through the Super Admin
@@ -152,7 +202,33 @@ export function setStoredUser(user: AuthUser) {
   localStorage.setItem('user', JSON.stringify(user));
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+/**
+ * The one refresh in flight, shared by every caller that hits a 401 at the
+ * same moment.
+ *
+ * The API rotates the refresh token on every use, so two concurrent refreshes
+ * with the same token are a race the second one loses — and it then clears the
+ * session for a 401 that was not a real sign-out. Two concurrent 401s were
+ * already possible (several queries refetching on focus); the notification
+ * stream's reconnect at the token's `exp` made it routine (PAC-154 PR2).
+ */
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Exchange the refresh token for a new pair. Single-flight: concurrent callers
+ * await the same request and get the same answer. Clears the session when the
+ * refresh is refused, so a caller that gets `null` back is signed out.
+ */
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function performRefresh(): Promise<string | null> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) return null;
 

@@ -49,6 +49,12 @@ interface LeadIntakePayload {
 }
 
 export interface CreateLeadPayload extends LeadIntakePayload {
+  /**
+   * The day the lead came in, `YYYY-MM-DD` on the agency's calendar
+   * (PAC-159). On `CreateLeadPayload` rather than the base type: the public
+   * form never asks, and the API reads a missing value as "now".
+   */
+  createdDate?: string;
   leadSourceId: string;
   /**
    * Pin the lead to a household the producer already has open — the Household

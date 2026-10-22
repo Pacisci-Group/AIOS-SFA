@@ -110,9 +110,10 @@ docs {
   of history. Volume means "how many leads this source sent", whatever they went
   on to buy.
 
-  A migrated lead's creation date is date-only, stored as UTC midnight. It is
-  read as that calendar day — not as the Chicago evening before it — the same
-  provenance rule `quoteDateYmd` applies.
+  Every lead is bucketed on the agency's calendar (`Agency.timezone`,
+  PAC-141) at read time. A day-only creation date (every migrated lead, a lead
+  the New Lead form dated) is stored at that day's first instant in the
+  agency's zone (PAC-159), so it reads as the day it names.
 
   ## Response `200`
   ```json

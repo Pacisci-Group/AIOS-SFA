@@ -70,11 +70,20 @@ docs {
   ## Body
   | field          | type   | rules                                                        |
   |----------------|--------|--------------------------------------------------------------|
+  | createdDate    | string | `YYYY-MM-DD` on the agency's calendar (PAC-159). Moved only when the day differs; not in the future and not after the lead's first quote or sale — see **Update Lead (Lead Date)** |
   | status         | enum   | a canonical `LEAD_STATUSES` label — raw codes are rejected   |
   | temperature    | enum   | `Hot` \| `Warm` \| `Cold`. **`Unknown` is not accepted.**    |
   | leadSourceId   | string | a row id from `GET /lead-sources`, or `__none__` to clear it |
 
   At least one must be present; `{}` is a `400`.
+
+  ## Every edit is logged (PAC-159)
+  A patch that changes at least one value writes a `field_changed` activity on
+  the lead — summary `Lead edited`, `subjectType: "lead"` — carrying
+  `{ field, label, kind, from, to }` for `createdDate` (as the agency day),
+  `status`, `temperature` and the lead source's **name**. Readable with
+  `agency:changelogs:read` on `GET /leads/:id`. A patch that changes nothing
+  writes nothing. A re-dated lead also moves its `lead_created` timeline row.
 
   ## Behaviour worth knowing
 

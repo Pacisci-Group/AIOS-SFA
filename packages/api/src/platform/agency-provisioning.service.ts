@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import {
   ALL_MODULE_KEYS,
   ModuleKey,
@@ -13,9 +13,10 @@ import {
   type OnboardAgencyResponse,
   type OwnerInviteEmailStatus,
 } from '@sfa/shared';
-import { Model, Types } from 'mongoose';
+import { Connection, Model, Types } from 'mongoose';
 import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { Branch, BranchDocument } from '../branches/schemas/branch.schema';
+import { assertMongoKnowsTimeZone } from '../common/dates/mongo-time-zone';
 import { AGENCY_OWNER_SLUG } from '../permissions/owner-protection.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
@@ -84,6 +85,7 @@ export class AgencyProvisioningService {
     @InjectModel(AuditTemplate.name)
     private auditTemplateModel: Model<AuditTemplate>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectConnection() private connection: Connection,
     private roleAssignments: RoleAssignmentsService,
     private usersService: UsersService,
     private appointments: AgencyCarrierAppointmentsService,
@@ -160,6 +162,7 @@ export class AgencyProvisioningService {
     const slug = input.agency.slug.trim().toLowerCase();
     const email = input.owner.email.trim().toLowerCase();
     const ticker = input.agency.ticker?.trim().toUpperCase();
+    const timezone = input.agency.timezone?.trim();
 
     // Pre-flight, before anything is written. These are the two failures an
     // operator actually hits, and catching them here means the common case never
@@ -167,6 +170,8 @@ export class AgencyProvisioningService {
     await this.assertSlugAvailable(slug);
     if (ticker) await this.assertTickerAvailable(ticker);
     await this.usersService.assertEmailAvailable(email);
+    // The DTO asked the runtime; the dashboards will ask Mongo (PAC-141).
+    if (timezone) await assertMongoKnowsTimeZone(this.connection, timezone);
 
     // Carrier appointments belong in the pre-flight for the reason the block
     // exists at all: a code collision found *after* the agency, roles, branch,
@@ -194,6 +199,8 @@ export class AgencyProvisioningService {
         ...(ticker ? { ticker } : {}),
         carrierAppointments,
         ...(input.agency.npn ? { npn: input.agency.npn.trim() } : {}),
+        // Omitted → the schema default (US Central), which the wizard shows.
+        ...(timezone ? { timezone } : {}),
         // The one place `pending` is ever written — see `AgencySetup`.
         setup: { status: 'pending' },
       });

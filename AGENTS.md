@@ -71,6 +71,8 @@ each screen is the matching Figma-mockup folder in `./agencyops_fe_mockups`
 | Service Dashboard | `/crm/service` | Service rep |
 | Ticket Workspace | `/crm/tickets` | CRM/service |
 | Household Details | `/clients/:id`, `/clients/demo` | 360° client view |
+| Analytics (PAC-152, part 2) | `/analytics` | Agency Owner + Branch Manager (`analytics:read`, grantable) — sales by producer / lead source / line / carrier / branch / ZIP / CSR, split by a second dimension, over time, with goal pacing; a Service tab for tickets |
+| Data Export (PAC-152) | `/data-export` | Data team (`data_export:read`) — request curated CSV/XLSX datasets; a worker prepares them, the requester is emailed, the file is downloaded from the export log |
 
 ---
 
@@ -171,6 +173,34 @@ temperature/aging that aren't first-class in legacy payloads. See
   the docblocks under `packages/api/src/mailers/**` and
   `packages/api/src/common/mailers/**` — read those before re-deciding
   something.
+- `docs/plans/pac-152-data-export-implementation-plan.md` — the Data Export page
+  (PAC-152): a new `data_export` module and curated CSV/XLSX datasets. An
+  export is **requested, not downloaded**: `POST /data-export/:dataset/exports`
+  queues it, the `DataExportGenerateFn` worker job writes the file to object
+  storage and emails the requester, and the page downloads it later from the
+  `dataExports` log through a presigned link; an hourly job deletes files past
+  `DATA_EXPORT_RETENTION_DAYS`. The engine (one file per dataset, registered
+  in `engine/registry.ts`) lives in `packages/api/src/common/data-export/` so
+  the worker may import it. The first module key added since the scaffold —
+  its migration enables the module on existing agencies, which
+  `api:sync:roles` never does.
+- `docs/plans/pac-152-analytics-implementation-plan.md` — the Analytics page
+  (PAC-152, part 2): a new `analytics` module (Branch Manager by template and
+  migration, owner via enabled modules). `packages/api/src/analytics/` breaks
+  sales down by any dimension through the **same** `soldMatch` + `linesPrefix`
+  pipeline as the Owner dashboard, so totals agree by construction; per-policy
+  dimensions (line, carrier) unwind `lines[]`, and `linesPrefix` gained an
+  opt-in `carrier` line field. The web page is the first to chart anything:
+  shadcn `chart` (recharts) over the validated `--chart-*` tokens.
+- `docs/plans/pac-159-business-dates-implementation-plan.md` — business dates
+  (PAC-159): `soldDateYmd` / `quoteDateYmd` are removed; every business date is a
+  UTC instant, bucketed in the agency zone at read time through one
+  `instantWindow(range, timeZone)`; a day-only entry (back-dated sale or quote,
+  migrated row) is stored at **agency-local midnight**, never UTC midnight. Quote
+  date and lead date become inputs and are editable, with cross-checks (no
+  future dates; a sale on or after its linked quote; the lead date as the
+  floor). ⚠ `parseFormDate` stays UTC-midnight for policy effective dates —
+  business dates go through `businessDateInstant`.
 - `docs/plans/pac-71-mailer-campaigns-implementation-plan.md` — the four-PR
   execution order for mailer campaigns (PAC-71). ⚠ **Add Mailers is gone** (page,
   route, panel tile, endpoints and worker function): a mailer now belongs to a
@@ -242,6 +272,18 @@ whenever you work under `packages/web`.
   Two API traps are written up in `docs/tanstack-form-spike-findings.md` —
   read it before touching the Sold wizard's per-card validation.
 - **A lead source is a `leadSources` row, referenced by `leadSourceId`** (PAC-135) — never a label on the record and never a hard-coded list. Platform rows have `agencyId: null`, an agency's own carry its id; find one in code by **`slug`**, never by name. The lead owns the fact: a sale or quote resolves its source *through its lead*, with `Deal.leadSourceId` only as the fallback. Read paths resolve names through `LeadSourcesService.labelsFor`, not `$lookup`.
+- **A business date is a UTC instant, bucketed on the agency's calendar at read time** (PAC-159).
+  `Deal.soldDate`, `QuoteRecap.quoteDate` and `Lead.createdDate` are when the sale, quote or lead
+  *happened*; `createdAt` is when the record was typed in. A day-only entry (a form's `YYYY-MM-DD`,
+  a migrated row) is stored at that day's first instant in `Agency.timezone` through
+  `businessDateInstant` — **never UTC midnight**, which a US calendar reads as the evening before
+  (`parseFormDate` stays UTC-midnight for calendar-only facts such as a policy's effective date).
+  Readers turn a calendar range into two instants once, in Node (`instantWindow` / `dateWindow`),
+  and match a plain indexed `Date` range; buckets use Mongo's `timezone`; display and the change
+  log use `businessDay` / `changeBusinessDate`. Never store a calendar label beside the instant —
+  the `soldDateYmd` / `quoteDateYmd` integers were exactly that and cost a ticket to remove.
+  Every business date is editable, bounded by `common/dates/business-date-rules.ts` (not in the
+  future, a sale on or after its linked quote, the lead date as the floor), judged as agency days.
 - Preserve `legacySmartSuiteId` on any schema that maps to legacy data (migration reconciliation).
 - **Model the domain, never the SmartSuite field type.** When a SmartSuite field is an array, a select code or a `{ date, include_time }` object, the Mongo field is whatever the *business fact* actually is — not a mirror of how SmartSuite happens to type it. The schemas were generated straight from the API docs and this went wrong three times, each costing a ticket: `Contact.emails: string[]` / `phones: string[]` because SmartSuite's Email field is `string[]` and its Phone field is `phone[]`, when a contact is **one person with one email and one phone** (PAC-91 §1 — every consumer already read `[0]`, which is the tell); raw option codes stored where labels belong, so 2,095 households render `b5qvJ` (PAC-80 §6); and a single `Contact.householdId` because SmartSuite's `Household` link is single-valued, when membership is genuinely many-to-many (PAC-91 §5). The test: if you cannot say what the array's *second* element would mean, it is not an array. **A denormalised copy is the same mistake in another shape** — `Lead.emails`, `Household.primaryContactName/primaryEmails/primaryPhones` were all copies of a fact that lives on the contact, nothing kept them in step, and they read as empty on every migrated record (PAC-91 §1–§4). Store the reference and resolve through it.
 - **Changes to data or indexes that already exist go in `packages/api/migrations/`** — the versioned migrate-mongo setup (`npm run db:migrate:create -- <description>`). Each file runs once per database, in filename order, recorded in `migrations_changelog`, and **the API applies pending ones at startup** before it binds a port, so a deploy migrates itself. Read `packages/api/migrations/README.md` first; the short version is that applied migrations are immutable (fix a mistake with a *new* one), they use the raw `db` handle and never a Mongoose model (importing a schema fires `autoIndex` and races the migration), and they must be idempotent because a failure is not recorded and retries from the top. Do **not** write another one-off `src/migration/backfill/`-style script — that pattern is what this replaces. Note `src/migration/` is a *different thing*: the one-time SmartSuite→Mongo data import for bringing up an empty database.

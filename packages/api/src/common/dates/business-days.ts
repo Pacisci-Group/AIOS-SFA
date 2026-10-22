@@ -15,7 +15,8 @@ import {
  * Same discipline as `performance.range.ts`: every function takes and returns
  * a `{year, month, day}` triple and does its arithmetic through a UTC anchor,
  * so there is no timezone offset to get wrong. The one place an instant enters
- * is the caller asking `chicagoParts(now)` for today's date.
+ * is the caller asking `zonedDate(now, access.timeZone)` for today's date on
+ * the agency's calendar.
  *
  * ## Which holidays
  *
@@ -171,10 +172,11 @@ export function businessDaysBetween(
  *     aging ⇔ toYmd(recordDate) < toYmd(agingCutoff(today, slaDays))
  *
  * Computed once per request so the Mongo predicate is a plain
- * `soldDateYmd < cutoff` that rides the existing `soldDateYmd` indexes, with
- * no per-row date maths in the pipeline. Equivalent to
- * `businessDaysBetween(recordDate, today) > slaDays`; the unit spec proves the
- * two agree.
+ * `soldDate < <start of the cutoff day in the agency's zone>` that rides the
+ * `soldDate` indexes, with no per-row date maths in the pipeline (the caller
+ * turns the calendar cutoff into an instant with `instantWindow`). Equivalent
+ * to `businessDaysBetween(recordDate, today) > slaDays`; the unit spec proves
+ * the two agree.
  */
 export function agingCutoff(
   today: CalendarDate,

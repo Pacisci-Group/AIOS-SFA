@@ -1,0 +1,62 @@
+meta {
+  name: Get Export File URL
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/data-export/exports/{{dataExportId}}/url
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+tests {
+  test("a link once ready, a 409 while still being prepared", function () {
+    // 200 needs the worker to have run: the API serving its functions inline
+    // (`WORKER_INLINE`, the default) and an Inngest dev server pointed at it.
+    // Run straight after the request, the job may not have finished.
+    expect([200, 409]).to.include(res.getStatus());
+  });
+
+  test("a ready link is a named attachment", function () {
+    if (res.getStatus() !== 200) return;
+    const body = res.getBody();
+    expect(body.url).to.be.a("string");
+    expect(body.filename).to.match(/_sold_deals_2026-01-01_all\.csv$/);
+    expect(body.expiresIn).to.be.above(0);
+  });
+}
+
+docs {
+  # GET /data-export/exports/:id/url — a download link for a finished export
+
+  - **Module:** `data_export`
+  - **Permission:** `data_export:read`
+  - **Data scope:** the history's rule — agency scope may fetch any export in
+    the agency; branch/own scope only their own. A row the caller cannot see
+    is a `404`, never a `403` that confirms it exists.
+
+  Mints a presigned `GET` for the stored file, `Content-Disposition:
+  attachment` with the export's filename. Minted **on click** and never
+  stored: it is a bearer capability valid for `expiresIn` seconds
+  (`STORAGE_DOWNLOAD_URL_TTL_SECONDS`, default 300). Each one minted
+  increments the row's `downloadCount` — the audit trail of who took the file.
+
+  `:id` is the `export.id` from the request (captured as `dataExportId`).
+
+  ## Response `200`
+
+  ```json
+  { "url": "https://…signed…", "filename": "demo-agency_sold_deals_2026-01-01_all.csv", "expiresIn": 300 }
+  ```
+
+  ## Errors
+  - `400` — `:id` is not an ObjectId.
+  - `404` — no such export visible to the caller, or a `failed` one (no file).
+  - `409` — still `queued` or `processing`.
+  - `410` — `expired`: retention deleted the file. Request it again.
+}

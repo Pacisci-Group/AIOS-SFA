@@ -110,7 +110,6 @@ export const DEAL_FIELDS = {
   title: 'title',
   autonumber: 'autonumber',
   soldDate: 'sold_date',
-  soldDateYmd: 's6476659a2',
   premiumRollup: 's0675d21ce',
   premiumSnapshot: 'total_premium_snapshot',
   totalItems: 'sc76a6a409',

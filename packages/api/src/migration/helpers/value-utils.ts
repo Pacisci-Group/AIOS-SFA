@@ -178,15 +178,3 @@ export function toRichText(value: unknown): string | undefined {
 export function toBool(value: unknown): boolean {
   return value === true || value === 'true' || value === 1;
 }
-
-/**
- * Derive a YYYYMMDD integer from a date. Uses the date parts directly (SmartSuite
- * stores calendar dates without a meaningful time), matching legacy sold_yyyymmdd_num.
- */
-export function toYmd(date: Date | undefined): number | undefined {
-  if (!date) return undefined;
-  const y = date.getUTCFullYear();
-  const m = date.getUTCMonth() + 1;
-  const d = date.getUTCDate();
-  return y * 10000 + m * 100 + d;
-}

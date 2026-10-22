@@ -13,6 +13,8 @@ import { LoginPage } from '@/pages/LoginPage';
 import { DevNavPage } from '@/pages/DevNavPage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { ReportBugWidget } from '@/features/bug-report/ReportBugWidget';
+import { NotificationStream } from '@/features/notifications/NotificationStream';
+import { PwaUpdateToast } from '@/features/notifications/PwaUpdateToast';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -21,6 +23,10 @@ const ProducerDashboardPage = lazy(
 );
 const ManagementDashboardPage = lazy(
   () => import('@/features/management/ManagementDashboardPage'),
+);
+const AnalyticsPage = lazy(() => import('@/features/analytics/AnalyticsPage'));
+const DataExportPage = lazy(
+  () => import('@/features/data-export/DataExportPage'),
 );
 const CommandCenterPage = lazy(
   () => import('@/features/command-center/CommandCenterPage'),
@@ -72,6 +78,9 @@ const RolePermissionsPage = lazy(
 );
 const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
 const BrandingPage = lazy(() => import('@/features/settings/BrandingPage'));
+const AgencyProfilePage = lazy(
+  () => import('@/features/settings/AgencyProfilePage'),
+);
 const DomainsPage = lazy(() => import('@/features/settings/DomainsPage'));
 const EmailSenderPage = lazy(
   () => import('@/features/settings/EmailSenderPage'),
@@ -113,6 +122,9 @@ const AcceptInvitePage = lazy(() => import('@/pages/AcceptInvitePage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
 const ProfilePage = lazy(() => import('@/features/settings/ProfilePage'));
+const NotificationsPage = lazy(
+  () => import('@/features/notifications/NotificationsPage'),
+);
 const WorkspaceSettingsPage = lazy(
   () => import('@/features/settings/WorkspaceSettingsPage'),
 );
@@ -360,6 +372,42 @@ export function App() {
                 />
               </Route>
 
+              {/* The Data Export page (PAC-152). Its own module, so the owner
+                  grants it from the role matrix like any page; the Data Team
+                  role holds it by default. */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.DataExport}:read`} />
+                }
+              >
+                <Route
+                  path="/data-export"
+                  element={
+                    <LazyPage>
+                      <DataExportPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The Analytics page (PAC-152, part 2). The owner holds it
+                  through enabled modules, the Branch Manager by template; the
+                  owner grants it to anyone else from the role matrix. */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.Analytics}:read`} />
+                }
+              >
+                <Route
+                  path="/analytics"
+                  element={
+                    <LazyPage>
+                      <AnalyticsPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
               {/* The mock demo page stays behind the Clients page permission.
                   No sidebar entry points here any more (see AppSidebar) — it is
                   reachable from the dev Screen Navigator at `/`.
@@ -562,6 +610,20 @@ export function App() {
                 }
               />
 
+              {/*
+                The notification centre (PAC-154). Ungated for the same reason
+                as the profile: a notification is addressed to you, and the
+                page each one opens keeps its own `RequirePermission`.
+              */}
+              <Route
+                path="/notifications"
+                element={
+                  <LazyPage>
+                    <NotificationsPage />
+                  </LazyPage>
+                }
+              />
+
               {/* Owner-only role & per-user permission management */}
               {/*
                 `agency:roles:read`, not `agency:users:permissions`: this page
@@ -603,6 +665,21 @@ export function App() {
                   element={
                     <LazyPage>
                       <BrandingPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              {/* The agency's working day — time zone and end-of-day hour
+                  (PAC-141, PAC-149). Its own pair, not branding's: the page
+                  sets the whole office Away each night. */}
+              <Route
+                element={<RequirePermission permission="agency:settings:read" />}
+              >
+                <Route
+                  path="/settings/agency"
+                  element={
+                    <LazyPage>
+                      <AgencyProfilePage />
                     </LazyPage>
                   }
                 />
@@ -923,6 +1000,12 @@ export function App() {
               router context to record which page a report came from. It renders
               nothing when signed out. */}
           <ReportBugWidget />
+          {/* Same placement, same reasons: one live notification stream per
+              signed-in tab, whose toast action needs `useNavigate` (PAC-154). */}
+          <NotificationStream />
+          {/* "New version available — Reload" for the prompt-mode service
+              worker (PAC-154 PR4). Renders nothing until a build is waiting. */}
+          <PwaUpdateToast />
           </BrowserRouter>
           {/* `sonner` was installed but never mounted, so `toast()` silently
               no-opped. Used by the share-link dialog's copy action. */}

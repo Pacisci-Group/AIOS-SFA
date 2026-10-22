@@ -1,0 +1,96 @@
+meta {
+  name: Transfer Work
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/users/{{activeUserId}}/work-transfer
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+body:json {
+  {
+    "toUserId": "{{successorUserId}}"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("names the colleague and counts what moved", function () {
+    const body = res.getBody();
+    expect(body.toUserId).to.equal(bru.getVar("successorUserId"));
+    expect(body).to.have.property("toName");
+    expect(body).to.have.property("tickets");
+    expect(body).to.have.property("households");
+  });
+}
+
+docs {
+  # POST /users/:userId/work-transfer
+
+  Hand a person's **open** work to a named colleague (PAC-136) — the
+  departing-employee case that used to need a hand-written migration. Works on
+  an active **or an already-removed** person. Removing someone *and* handing
+  their work over in one step is `DELETE /users/:userId` with `successorId`.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:work_transfer:write`
+  + `agency:users:read`, granted per role (Agency Owner by default) — **and the
+  role must be agency-wide**. A branch- or own-scoped holder is refused with
+  `403` even with the permission (product owner, 2026-10-05).
+
+  **No cross-branch transfers.** The successor must be in the departing
+  person's branch, unless either of them has no branch (typically an owner).
+
+  **Body** — `{ "toUserId": "<24-hex user id>" }`. Pick it from **List Transfer
+  Candidates**, which applies the same rules.
+
+  ## What moves
+  Still-to-do work, plus the fields that mint the *next* piece of work:
+  - Non-terminal service tickets (`assignedUserId` + `assignedRep`), each with a
+    "Reassigned from X to Y." timeline note.
+  - In-progress onboardings and renewal cycles (`assignedCsrId`) — so the next
+    onboarding call and renewal tickets are created for the successor.
+  - Households (`assignedCrmId`) and their deal mirror (`deals.assignedCrmId`).
+  - Non-terminal leads (`producerId`), with a `lead_reassigned` activity each.
+  - **Every outstanding audit responsibility** (product owner, 2026-10-05):
+    open deal audits where the person is the user assignee or reviewer; open
+    audits on their sales that nobody was assigned to; and every **unresolved**
+    audit item on their sales (`producerId` + `producerName`). The successor can
+    resolve them, and the Manager dashboard counts them against the successor.
+    Role-owned audits stay with their role.
+  - Live share links (`producerId`), so public URLs keep working.
+  - Round-robin slots (`crmRotations.crmId`): taken over where the successor has
+    no active slot for that producer, switched off otherwise — a pool is never
+    doubled, and `activeForProducer` is never turned on.
+
+  ## What never moves
+  Attribution — `deals/quoteRecaps.producerId`, **resolved** audit items, `createdBy*`,
+  `completedBy*`, timeline authors, activity actors — and `branchId`. Closed
+  tickets, sold/lost leads, finished onboardings and passed audits stay put.
+
+  Every touched `_id` is recorded in `workTransfers`.
+
+  **Response `201`** — the preview's counts plus `{ fromUserId, toUserId, toName }`.
+
+  **Errors**
+  - `400` — `toUserId` is the same person, or malformed.
+  - `403` — missing permission, or the caller's role is not agency-wide.
+  - `404` — either user is not in this agency (or is a platform admin).
+  - `409` — the successor is not an active user, or holds none of the
+    departing person's roles (a producer's book goes to a producer, a CSR's to
+    a CSR; anyone is allowed only if the departing person holds no role), or
+    works in a different branch.
+
+  ## ⚠ Side effect on the demo tenant
+  This really moves the demo user's open work to `successorUserId`. Restore with
+  `npm run api:seed:demo:dev -- --fresh` if you need the demo data intact.
+}

@@ -53,6 +53,14 @@ export interface JwtPayload {
    * genuinely present, not because anything authorizes off it.
    */
   iat?: number;
+  /**
+   * Expiry, in seconds since the epoch. Added by `jsonwebtoken` from
+   * `JWT_ACCESS_EXPIRES` and passed through like `iat`. The one consumer is
+   * the notification SSE stream (PAC-154), which closes itself at this instant
+   * so a stream never outlives the token it was opened with — `tokenVersion`
+   * is checked once at connect, so `exp` is the bound on that window.
+   */
+  exp?: number;
 }
 
 /**
@@ -85,6 +93,21 @@ export interface AccessContext {
    * owner's view.
    */
   roleIds: string[];
+  /**
+   * The IANA zone of the caller's agency — `Agency.timezone` — or
+   * `DEFAULT_AGENCY_TIME_ZONE` for a user with no agency (PAC-141).
+   *
+   * Not an authorisation input. It rides on the context because the dashboards
+   * cut every date window ("today", MTD, business-day aging) on the agency's
+   * calendar, and the agency document is already read while this context is
+   * built; carrying the zone here means no request reads it twice. Changing an
+   * agency's zone invalidates the agency's cached contexts, the same way a
+   * module toggle does.
+   *
+   * ⚠ The same cache-version warning as `roleIds` applies: this field bumped
+   * the Redis prefix to `v5`.
+   */
+  timeZone: string;
   /**
    * The live credential generation, straight off the user document (PAC-79).
    * `AccessContextGuard` rejects a request whose JWT carries an older one.

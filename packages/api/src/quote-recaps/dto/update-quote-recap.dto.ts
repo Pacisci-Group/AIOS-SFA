@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { clearable, trimmedText } from '../../common/dto/clearable';
 import { quotedPolicySchema } from './create-quote-recap.dto';
 import { quoteDocumentSchema } from './presign-quote-document.dto';
+import { ymd } from '../../common/dto/business-date.dto';
 
 /**
  * `PATCH /quote-recaps/:id` — the Quote Summary card's edit button (PAC-56 #11).
@@ -15,11 +16,6 @@ import { quoteDocumentSchema } from './presign-quote-document.dto';
  * `leadId` / `householdId` — re-parenting a recap to a different lead is a merge,
  * not an edit, and nothing in the UI can express it.
  *
- * `quoteDate` / `quoteDateYmd` — the day the quote was given. `quoteDateYmd` is
- * the **Quoted scorecard's** indexed bucket key, so moving it would retroactively
- * change a number that has already been reported. A producer fixing a premium on
- * Thursday is correcting Monday's quote, not re-quoting today.
- *
  * `premium` / `itemCount` / `productsQuoted` — derived server-side from
  * `policies`, and recomputed on every patch that sends them.
  *
@@ -31,6 +27,13 @@ import { quoteDocumentSchema } from './presign-quote-document.dto';
  */
 export const updateQuoteRecapSchema = z
   .object({
+    /**
+     * Move the quote to another day (PAC-159): the sold-date edit's own rule,
+     * so the two cannot disagree about what a date is. The service moves the
+     * recap only when the day actually differs, and bounds it — not in the
+     * future, not before the lead, not after a sale sold from this quote.
+     */
+    quoteDate: ymd.optional(),
     /**
      * **Full replacement**, not a per-row patch — see the note on
      * `UpdateQuoteRecapInput.policies` in `@sfa/shared`. Validated through the

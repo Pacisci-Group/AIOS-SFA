@@ -10,6 +10,10 @@ import {
   resolvePermissionSet,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import {
+  DEFAULT_AGENCY_TIME_ZONE,
+  isIanaTimeZone,
+} from '../common/dates/time-zones';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
 import {
   AgencyRole,
@@ -33,6 +37,8 @@ interface ResolvedRole {
 /** Everything the four resolve* methods need, from one round trip. */
 interface AccessData {
   enabledModules: string[];
+  /** The agency's calendar (PAC-141). See {@link AccessContext.timeZone}. */
+  timeZone: string;
   roles: ResolvedRole[];
   grants: string[];
   revokes: string[];
@@ -40,6 +46,7 @@ interface AccessData {
 
 const EMPTY: AccessData = {
   enabledModules: [],
+  timeZone: DEFAULT_AGENCY_TIME_ZONE,
   roles: [],
   grants: [],
   revokes: [],
@@ -157,7 +164,10 @@ export class PermissionsService {
     ]);
 
     const [agency, overrides] = await Promise.all([
-      this.agencyModel.findById(user.agencyId).select({ modules: 1 }).lean(),
+      this.agencyModel
+        .findById(user.agencyId)
+        .select({ modules: 1, timezone: 1 })
+        .lean(),
       this.userPermissionModel
         .find({ userId: user._id })
         .select({ permissionKey: 1, effect: 1 })
@@ -168,6 +178,13 @@ export class PermissionsService {
       enabledModules: Object.entries(agency?.modules ?? {})
         .filter(([, entry]) => entry.enabled)
         .map(([key]) => key),
+      // Validated, not just defaulted: a zone the runtime cannot resolve would
+      // otherwise surface as a 500 in the first date helper of every request.
+      // The schema validator and the write paths make this unreachable; the
+      // check is for a row edited by hand.
+      timeZone: isIanaTimeZone(agency?.timezone)
+        ? agency.timezone
+        : DEFAULT_AGENCY_TIME_ZONE,
       roles: (row?.roles ?? []).map((role) => ({
         roleId: role._id.toString(),
         name: role.name,
@@ -289,6 +306,9 @@ export class PermissionsService {
         dataScope: DataScope.Agency,
         permissions: ALL_PLATFORM_PERMISSIONS,
         roleIds: [],
+        // A platform admin holds no agency permission, so no date helper ever
+        // runs on their behalf; the field is filled so the context is whole.
+        timeZone: DEFAULT_AGENCY_TIME_ZONE,
         tokenVersion: user.tokenVersion ?? 0,
       };
     }
@@ -322,6 +342,7 @@ export class PermissionsService {
       // that `user.roleIds` is gone; drop it and the hand-off board silently
       // stops matching role-assigned audits.
       roleIds: data.roles.map((role) => role.roleId),
+      timeZone: data.timeZone,
       // Straight off the document, not derived. `AccessContextGuard` compares it
       // to the caller's signed claim so a password reset ends every session that
       // was live when it happened (PAC-79).

@@ -9,7 +9,7 @@ import {
   resolveRange,
 } from '../../performance/performance.range';
 import type { QuoteRecapDocument } from '../../quote-recaps/schemas/quote-recap.schema';
-import { ymdWindow } from './sales-pipelines';
+import { dateWindow } from './sales-pipelines';
 
 /**
  * The `$match` half of every sales read the management dashboards make
@@ -29,12 +29,14 @@ export interface ResolvedPeriod {
   previous: YmdRange;
 }
 
+/** `timeZone` is the caller's `access.timeZone` — the agency's calendar. */
 export function resolvePeriod(
   query: Pick<DashboardFilterQuery, 'range' | 'from' | 'to'>,
+  timeZone: string,
 ): ResolvedPeriod {
   const custom = { from: query.from, to: query.to };
-  const current = resolveRange(query.range, custom);
-  const previous = resolveComparison(query.range, custom);
+  const current = resolveRange(query.range, timeZone, custom);
+  const previous = resolveComparison(query.range, timeZone, custom);
   return {
     current,
     previous,
@@ -69,7 +71,9 @@ export function soldMatch(
     ...salesScope<DealDocument>(access, branchId, producerIds),
     // `$ne`, never `$eq`: `businessType` is absent on every historic deal.
     ...NEW_BUSINESS_MATCH,
-    ...ymdWindow('soldDateYmd', range),
+    // The calendar window as the instants it spans in the agency's zone
+    // (PAC-159): a plain indexed range on `soldDate`.
+    ...dateWindow('soldDate', range, access.timeZone),
   };
 }
 
@@ -82,6 +86,6 @@ export function quotedMatch(
 ): Record<string, unknown> {
   return {
     ...salesScope<QuoteRecapDocument>(access, branchId, producerIds),
-    ...ymdWindow('quoteDateYmd', range),
+    ...dateWindow('quoteDate', range, access.timeZone),
   };
 }

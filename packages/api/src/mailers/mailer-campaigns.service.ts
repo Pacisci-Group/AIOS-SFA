@@ -1296,7 +1296,9 @@ export class MailerCampaignsService {
       carrierAgencyNames: campaign.carrierAgencyNames,
       settings: plainSettings(campaign.settings),
       files: campaign.files.map((file) => this.fileDto(file)),
-      outputFile: campaign.outputFile ? this.fileDto(campaign.outputFile) : null,
+      outputFile: campaign.outputFile
+        ? this.fileDto(campaign.outputFile)
+        : null,
       newRowsFile: campaign.newRowsFile
         ? this.fileDto(campaign.newRowsFile)
         : null,

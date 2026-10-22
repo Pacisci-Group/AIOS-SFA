@@ -85,6 +85,8 @@ export interface OnboardAgencyInput {
      */
     carrierAppointments: CarrierAppointmentInput[];
     npn?: string;
+    /** IANA zone (PAC-141). Omitted, the API defaults to US Central. */
+    timezone?: string;
   };
   branch: {
     name: string;

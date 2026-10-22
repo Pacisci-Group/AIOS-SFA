@@ -163,6 +163,15 @@ async function bootstrap() {
       res.end('Bad Gateway');
     });
 
+    // The client going away must take the upstream request with it. `pipe`
+    // only propagates in one direction, so without this a browser that aborts
+    // a long-lived response (the notifications SSE stream closes on every tab
+    // hide) leaves an orphaned edge→nginx→API stream open until the API ends
+    // it itself — up to the token's `exp` — holding an fd on every hop and a
+    // registry entry that is still fed pings and Mongo reads. `destroy()`
+    // closes our side; nginx then closes its upstream, and the API's socket
+    // `close` fires the stream's teardown.
+    res.on('close', () => upstreamReq.destroy());
     req.pipe(upstreamReq);
   };
 

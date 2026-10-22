@@ -96,15 +96,6 @@ jobs:
         run: |
           enabled="${{ vars.INNGEST_ENABLED }}"
           echo "inngest_enabled=${enabled}" >> "$GITHUB_OUTPUT"
-          if [ "$autoscale" = "true" ] && [ "$node_edge" != "true" ]; then
-            # The pool assumes every node is interchangeable, which is only true
-            # once certificates come from MongoDB rather than a node's disk.
-            # With Caddy each droplet would run its own ACME client and race the
-            # others for the same tenant hostnames.
-            echo "::error::AUTOSCALE_ENABLED is true but NODE_EDGE_ENABLED is not. The pool requires the Node edge."
-            exit 1
-          fi
-
           if [ "$enabled" = "true" ]; then
             echo "Inngest is ENABLED for '${{ inputs.environment }}'."
           else
@@ -112,6 +103,40 @@ jobs:
             # explanation is indistinguishable from a broken workflow, which is
             # how this went unnoticed the first time.
             echo "::warning::INNGEST_ENABLED is '${enabled}' (not 'true') for the '${{ inputs.environment }}' Environment — deploy-inngest will be skipped and no async work will run. Set it under Settings > Environments > ${{ inputs.environment }} > Environment variables (NOT Secrets)."
+          fi
+
+          # The new topology: our own Node TLS edge instead of Caddy, the
+          # worker as its own container on 4001, certificates in MongoDB.
+          #
+          # ⚠ Must agree with terraform's `enable_node_edge` for the same
+          # environment. Terraform opens the firewall port and chooses the
+          # droplet's cloud-init; this chooses what runs on it. Half of each is
+          # an environment that passes every health check and runs no async
+          # work, or one with no edge at all.
+          node_edge="${{ vars.NODE_EDGE_ENABLED || 'false' }}"
+          echo "node_edge_enabled=${node_edge}" >> "$GITHUB_OUTPUT"
+          if [ "$node_edge" = "true" ]; then
+            echo "Node edge ENABLED for '${{ inputs.environment }}' - Caddy is not in use here."
+          else
+            echo "Node edge disabled for '${{ inputs.environment }}' - Caddy remains the edge, worker runs inline."
+          fi
+
+          # The app tier is an autoscale pool rather than one droplet. Implies
+          # the Node edge, and changes how a deploy reaches the app: pool members
+          # are never SSHed to, because a droplet created during a traffic spike
+          # has nothing to SSH to it. Config is published instead.
+          autoscale="${{ vars.AUTOSCALE_ENABLED || 'false' }}"
+          echo "autoscale_enabled=${autoscale}" >> "$GITHUB_OUTPUT"
+
+          # Both flags must be assigned before this runs. It used to sit above
+          # them, where both read as empty and the check could never fire.
+          if [ "$autoscale" = "true" ] && [ "$node_edge" != "true" ]; then
+            # The pool assumes every node is interchangeable, which is only true
+            # once certificates come from MongoDB rather than a node's disk.
+            # With Caddy each droplet would run its own ACME client and race the
+            # others for the same tenant hostnames.
+            echo "::error::AUTOSCALE_ENABLED is true but NODE_EDGE_ENABLED is not. The pool requires the Node edge."
+            exit 1
           fi
 
           # Migrations normally apply themselves at API startup, which is what
@@ -124,29 +149,6 @@ jobs:
           # hand-edited on the droplet, because the .env below is rewritten in
           # full on every deploy - a hand edit does not survive the very deploy
           # it was meant to control.
-          # The new topology: our own Node TLS edge instead of Caddy, the
-          # worker as its own container on 4001, certificates in MongoDB.
-          #
-          # ⚠ Must agree with terraform's `enable_node_edge` for the same
-          # environment. Terraform opens the firewall port and chooses the
-          # droplet's cloud-init; this chooses what runs on it. Half of each is
-          # an environment that passes every health check and runs no async
-          # work, or one with no edge at all.
-          # The app tier is an autoscale pool rather than one droplet. Implies
-          # the Node edge, and changes how a deploy reaches the app: pool members
-          # are never SSHed to, because a droplet created during a traffic spike
-          # has nothing to SSH to it. Config is published instead.
-          autoscale="${{ vars.AUTOSCALE_ENABLED || 'false' }}"
-          echo "autoscale_enabled=${autoscale}" >> "$GITHUB_OUTPUT"
-
-          node_edge="${{ vars.NODE_EDGE_ENABLED || 'false' }}"
-          echo "node_edge_enabled=${node_edge}" >> "$GITHUB_OUTPUT"
-          if [ "$node_edge" = "true" ]; then
-            echo "Node edge ENABLED for '${{ inputs.environment }}' - Caddy is not in use here."
-          else
-            echo "Node edge disabled for '${{ inputs.environment }}' - Caddy remains the edge, worker runs inline."
-          fi
-
           migrate_on_boot="${{ vars.DB_MIGRATE_ON_BOOT || 'true' }}"
           if [ "$migrate_on_boot" = "false" ]; then
             # Loud, and deliberately a warning rather than a note: left set, every
@@ -203,6 +205,17 @@ jobs:
           APP_PRIVATE_IP: ${{ secrets.APP_PRIVATE_IP }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           MAIL_DEFAULT_FROM: ${{ secrets.MAIL_DEFAULT_FROM }}
+          # Managed Valkey (PAC-154). Unset, the app boots and every check
+          # passes, but a notification written by the worker container only
+          # reaches a stream held by that same process — which is never, so
+          # live updates silently stop and the badge falls back to polling.
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          # Web push (PAC-154 PR4). Same failure shape as RESEND_API_KEY:
+          # unset, the worker records every push as `skipped`, the opt-in
+          # switch hides itself, and every check stays green.
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
           INNGEST_ENABLED: ${{ vars.INNGEST_ENABLED }}
           # TLS. Required only where the platform issues its own certificates.
           # CERT_ENCRYPTION_KEY unset means every issuance throws and every
@@ -227,7 +240,8 @@ jobs:
                     GHCR_PULL_TOKEN STORAGE_ENDPOINT STORAGE_REGION
                     STORAGE_BUCKET STORAGE_ACCESS_KEY_ID
                     STORAGE_SECRET_ACCESS_KEY PUBLIC_FORM_BASE_URL
-                    PLATFORM_HOST"
+                    PLATFORM_HOST REDIS_URL
+                    VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT"
 
           # The async secrets are required only where Inngest is turned on, so
           # an environment that predates async work keeps deploying unchanged.
@@ -400,7 +414,7 @@ jobs:
           # and its only authentication is the Inngest request signature.
           #
           # WORKER_INLINE must be a real environment variable, which env_file
-          # makes it: `main.ts` reads it while the module graph is built,
+          # makes it: 'main.ts' reads it while the module graph is built,
           # before ConfigModule has loaded any dotenv file.
           ${TOPOLOGY_LINES}
           INNGEST_BASE_URL=${{ secrets.INNGEST_BASE_URL }}
@@ -416,6 +430,21 @@ jobs:
           MAIL_DEFAULT_FROM=${{ secrets.MAIL_DEFAULT_FROM }}
           MAIL_REPLY_TO=${{ secrets.MAIL_REPLY_TO }}
 
+          # Managed Valkey: 'terraform output -raw redis_uri'. Read by both the
+          # api and the worker containers — the worker PUBLISHes a nudge for
+          # every notification it writes, every api node SUBSCRIBEs and
+          # forwards to the SSE streams it holds (PAC-154). Also switches on
+          # the Redis permission cache, which was dormant without it.
+          REDIS_URL=${{ secrets.REDIS_URL }}
+
+          # Web push (PAC-154 PR4). Read by both containers: the api serves the
+          # public key, the worker signs every push with the private one.
+          # 'npx web-push generate-vapid-keys', once per environment; rotating
+          # the pair invalidates every subscription.
+          VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT=${{ secrets.VAPID_SUBJECT }}
+
           # TLS certificates. The platform issues its own, for the platform
           # host and for every agency domain, and stores them in MongoDB so
           # any app node can serve any hostname.
@@ -429,7 +458,7 @@ jobs:
           ACME_CONTACT_EMAIL=${{ secrets.ACME_CONTACT_EMAIL }}
           CERT_ENCRYPTION_KEY=${{ secrets.CERT_ENCRYPTION_KEY }}
 
-          # The edge. Only started when the `edge` compose profile is active.
+          # The edge. Only started when the 'edge' compose profile is active.
           #
           # ⚠ EDGE_PROXY_PROTOCOL must be false until a load balancer sits in
           # front AND is configured to send the header. A header is a claim
@@ -439,6 +468,19 @@ jobs:
           # first bytes of a TLS handshake and every connection breaks.
           EDGE_PROXY_PROTOCOL=${{ vars.EDGE_PROXY_PROTOCOL || 'false' }}
           EOF
+
+          # The heredoc above is unquoted so ${...} expands, which means a
+          # backtick in one of its comments runs as a command. One did - the
+          # VAPID key generator - and its multi-line output landed in the file
+          # as bare 'Public Key:' lines. Compose refuses the whole file, every
+          # pool member's converge fails on pull, and the old stack keeps
+          # serving while this job and both health checks stay green. Every
+          # line must be blank, a comment, or KEY=value.
+          bad=$(grep -nvE '^[[:space:]]*($|#)|^[A-Za-z_][A-Za-z0-9_]*=' app.env | cut -d: -f1 | tr '\n' ' ' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::app.env is not a valid env file (bad line numbers: ${bad}). Look for a backtick or \$( in the heredoc above."
+            exit 1
+          fi
 
       # ── Autoscale pool: publish, do not deploy ──────────────────────────────
       #

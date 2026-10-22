@@ -1,0 +1,505 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import {
+  NOTIFICATION_TYPES,
+  NotificationRenderError,
+  renderNotification,
+  type NotificationType,
+  type RenderedNotification,
+} from '@sfa/shared';
+import { NonRetriableError } from 'inngest';
+import { Model, Types } from 'mongoose';
+import { mapWithConcurrency } from '../../common/async/map-with-concurrency';
+import { NotificationBus } from '../../common/redis/notification-bus';
+import {
+  notificationEmailRequested,
+  notificationRequested,
+  type NotificationRequestedData,
+} from '../../inngest/events';
+import {
+  INNGEST_CLIENT,
+  type InngestClient,
+} from '../../inngest/inngest.client';
+import {
+  deterministicEventId,
+  InngestService,
+} from '../../inngest/inngest.service';
+import {
+  InngestFunction,
+  type InngestFunctionProvider,
+} from '../../inngest/inngest-registry.service';
+import {
+  Notification,
+  NotificationDocument,
+  type NotificationChannelDeliverySubdoc,
+} from '../../notifications/schemas/notification.schema';
+import { TenantBrandingService } from '../../tenant-branding/tenant-branding.service';
+import { WebPushService, type PushPayload } from '../push/web-push.service';
+
+/**
+ * The sole writer of the `notifications` collection (PAC-154, decision 1).
+ *
+ * Every producer — an API feature service or another worker function — emits
+ * `notification/requested.v1` and this function does the rest: render the text
+ * once, insert one row per recipient, then fan out to the secondary channels.
+ * The channels arrived one PR at a time as further steps: `publish` (SSE nudge,
+ * PR2), `email` (PR3), `push` (PR4). Each is its own `step.run` so a crash in
+ * one never re-runs the ones before it.
+ *
+ * ## The nudge carries ids only
+ *
+ * `publish` tells the API tier `{ recipientId, notificationId }` and nothing
+ * else; whichever node holds the recipient's stream re-reads the row before
+ * writing the frame. A replayed step re-nudges, and the client invalidates
+ * rather than appends, so a duplicate nudge is harmless by construction.
+ *
+ * ## Email is a hand-off, not a send
+ *
+ * `email` emits one `notification/email.requested.v1` per row whose catalog
+ * type has the channel on (no user preferences yet — ticket decision 4) and
+ * `SendNotificationEmailFn` does the mailing. A separate function for the same
+ * reason the campaign commit mails from one: a mail provider outage must never
+ * fail, or retry, a notification that is already stored and already live.
+ * Emitting from inside a step is the `MailerCampaignCommitFn` precedent — it
+ * goes through `InngestService`, so the outbox row exists before the send and
+ * the sweeper replays a stranded one; a replayed step re-emits, and the mail
+ * function's `idempotency: 'event.data.notificationId'` collapses that.
+ *
+ * ## Push is a send, but a best-effort one
+ *
+ * `push` is the one channel this function delivers itself: `WebPushService`
+ * sends to every live subscription of the recipient and the outcome lands on
+ * the row as `delivery.push`. It is best-effort by construction — the service
+ * never throws, a dead device is soft-deleted and the rest are still tried —
+ * so a push failure can neither fail the run nor touch anything but
+ * `delivery.push` (PAC-148 FR-H4). The step re-reads the stored rows for the
+ * words, so the OS notification says exactly what the list does.
+ *
+ * ## Exactly once, twice over
+ *
+ * `idempotency: 'event.data.dedupeKey'` collapses duplicate events for 24
+ * hours. The unique `{ recipientId, dedupeKey }` index does so forever, which
+ * is what makes a cron trigger that reuses its key across days safe. The insert
+ * tolerates the E11000 that index produces and re-reads the rows that exist,
+ * so a retry after a partial insert converges rather than failing.
+ */
+@Injectable()
+@InngestFunction()
+export class DeliverNotificationFn implements InngestFunctionProvider {
+  private readonly logger = new Logger(DeliverNotificationFn.name);
+
+  constructor(
+    @Inject(INNGEST_CLIENT) private readonly inngest: InngestClient,
+    /** The outbox-backed sender — for events emitted *by* this function. */
+    private readonly events: InngestService,
+    @InjectModel(Notification.name)
+    private readonly notificationModel: Model<NotificationDocument>,
+    private readonly bus: NotificationBus,
+    private readonly webPush: WebPushService,
+    private readonly branding: TenantBrandingService,
+  ) {}
+
+  build() {
+    return this.inngest.createFunction(
+      {
+        id: 'deliver-notification',
+        name: 'Deliver notification',
+        triggers: [notificationRequested],
+        idempotency: 'event.data.dedupeKey',
+        /**
+         * Three attempts. The insert is idempotent, so retrying is free; the
+         * only thing a retry rides out is a Mongo blip. A render failure is a
+         * programming error and short-circuits this with `NonRetriableError`.
+         */
+        retries: 3,
+        /**
+         * Enforced server-side across every worker process. Bursty producers
+         * (a cron fanning out to a whole agency) should not starve the email
+         * and campaign functions of worker capacity.
+         */
+        concurrency: { limit: 10 },
+      },
+      ({ event, step }) => this.handle(event, step),
+    );
+  }
+
+  /**
+   * The handler body, lifted out so a test can call it with an inline `step`
+   * (same seam as `SendInviteEmailFn`).
+   */
+  async handle(
+    event: { id?: string; name: string; data: NotificationRequestedData },
+    step: StepLike,
+  ): Promise<{ notificationIds: string[] }> {
+    // Plain JSON only out of a step: Inngest serialises the result, so the
+    // ids come back as hex strings, never `ObjectId`s.
+    const inserted = (await step.run('insert', () =>
+      this.insert(event.data),
+    )) as InsertResult | LegacyInsertResult;
+    const rows = isLegacyInsertResult(inserted)
+      ? ((await step.run('insert-rows', () =>
+          this.rowsForIds(inserted.ids),
+        )) as InsertedRow[])
+      : inserted.rows;
+
+    // Best-effort by contract (the bus swallows transport errors), so this
+    // step cannot fail the run; it is a step at all so a retry of a later
+    // channel does not nudge every tab a second time.
+    await step.run('publish', () => this.publish(rows));
+
+    // A hand-off to the mail function, never a send — see the class note.
+    await step.run('email', () => this.requestEmails(event.data.type, rows));
+
+    // Delivered here, best-effort: the service never throws, and only
+    // `delivery.push` is ever written. Last so a push-service hang can delay
+    // nothing but itself.
+    await step.run('push', () => this.pushRows(event.data.type, rows));
+
+    return { notificationIds: rows.map((row) => row.id) };
+  }
+
+  /**
+   * The rows behind a PR1-shaped `insert` result. Inngest memoises a step's
+   * result for the life of the run, so a run that completed `insert` under
+   * PR1 and resumes under this code sees `{ ids }` and must not read
+   * `.rows` off it (PR2 review). The extra step only exists on that path —
+   * deterministic, because the cached result decides it — and is gone the
+   * moment every run started before the deploy has finished.
+   */
+  async rowsForIds(ids: string[]): Promise<InsertedRow[]> {
+    const rows = await this.notificationModel
+      .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } })
+      .select({ _id: 1, recipientId: 1, agencyId: 1 })
+      .lean<StoredRowKeys[]>();
+    return rows.map(toInsertedRow);
+  }
+
+  /**
+   * Render once, insert one row per distinct recipient, return every row that
+   * now exists for this `dedupeKey` — whether this call inserted it or an
+   * earlier attempt did.
+   */
+  async insert(data: NotificationRequestedData): Promise<InsertResult> {
+    const rendered = this.render(data);
+    const recipientIds = [...new Set(data.recipientIds)].map(
+      (id) => new Types.ObjectId(id),
+    );
+
+    const docs = recipientIds.map((recipientId) => ({
+      recipientId,
+      agencyId: data.agencyId ? new Types.ObjectId(data.agencyId) : null,
+      type: data.type,
+      title: rendered.title,
+      body: rendered.body,
+      href: rendered.href,
+      entity: { kind: data.entity.kind, id: data.entity.id },
+      actorId: data.actorId ? new Types.ObjectId(data.actorId) : null,
+      data: data.data,
+      readAt: null,
+      dedupeKey: data.dedupeKey,
+    }));
+
+    try {
+      // Unordered: a duplicate for one recipient must not stop the inserts for
+      // the others. Mongoose still throws afterwards, which is caught below.
+      await this.notificationModel.insertMany(docs, { ordered: false });
+    } catch (err) {
+      if (!isDuplicateKeyError(err)) throw err;
+      this.logger.log(
+        `Some rows for ${data.dedupeKey} already existed; keeping them.`,
+      );
+    }
+
+    const rows = await this.notificationModel
+      .find({ recipientId: { $in: recipientIds }, dedupeKey: data.dedupeKey })
+      .select({ _id: 1, recipientId: 1, agencyId: 1 })
+      .lean<StoredRowKeys[]>();
+
+    return { rows: rows.map(toInsertedRow) };
+  }
+
+  /**
+   * One nudge per row, all in flight at once. Returns a count so the step
+   * result is plain JSON.
+   *
+   * Concurrent, not sequential, because a publish is best-effort and the bus
+   * swallows its own failures: while Redis is unreachable each PUBLISH waits
+   * out a full ioredis reconnect cycle before it is rejected, and awaiting
+   * them one by one would make a broadcast to N recipients pay that wait N
+   * times — minutes, holding a worker slot, with the email and push steps
+   * queued behind it. Issued together they share one wait.
+   */
+  async publish(rows: InsertedRow[]): Promise<{ published: number }> {
+    await Promise.all(
+      rows.map((row) =>
+        this.bus.publish({
+          recipientId: row.recipientId,
+          notificationId: row.id,
+        }),
+      ),
+    );
+    return { published: rows.length };
+  }
+
+  /**
+   * One email request per row, for a type whose defaults include the channel.
+   *
+   * The decision is the catalog's alone until per-user preferences exist
+   * (ticket decision 4); when they land they filter this list, they do not
+   * replace it. Returns a count so the step result is plain JSON.
+   *
+   * ## The row's agency, not the event's
+   *
+   * `insert` returns every row that exists for the `dedupeKey`, including
+   * ones an earlier event created — and those carry their own `agencyId`.
+   * Stamping each request with *this* event's agency would make
+   * `SendNotificationEmailFn.load` refuse the mismatch (`NonRetriableError`)
+   * and that recipient's mail would vanish with no `delivery.email` record
+   * (PR3 review, second round). The row is the authority: the request
+   * carries what it stores.
+   *
+   * ## Stable event ids
+   *
+   * Each emit carries `deterministicEventId('notification-email', row.id)`.
+   * This step is one `step.run` over every row, so a failure on the ninth
+   * emit replays all nine. With fresh ids the first eight rows would each
+   * gain a second event: Inngest's function idempotency (on `notificationId`)
+   * would skip the duplicate *runs*, but nothing would ever mark the
+   * duplicates' outbox rows terminal, and the sweeper would re-emit them for
+   * 24 hours — no second email, but a day of stale-outbox noise for work that
+   * succeeded. With a stable id the replay *is* the original event: Inngest
+   * dedupes it and the outbox finds its row already written.
+   */
+  async requestEmails(
+    type: NotificationType,
+    rows: InsertedRow[],
+  ): Promise<{ requested: number }> {
+    if (!NOTIFICATION_TYPES[type].defaultChannels.email) {
+      return { requested: 0 };
+    }
+    for (const row of rows) {
+      await this.events.send(
+        notificationEmailRequested,
+        {
+          notificationId: row.id,
+          recipientId: row.recipientId,
+          agencyId: row.agencyId,
+        },
+        { id: deterministicEventId('notification-email', row.id) },
+      );
+    }
+    return { requested: rows.length };
+  }
+
+  /**
+   * Web push for every row, for a type whose defaults include the channel.
+   *
+   * The payload is built from the **stored** row — title, body and path as the
+   * list shows them — plus an absolute icon from
+   * `TenantBrandingService.pushIconFor` for the **row's** agency (resolved once
+   * per agency; the agency's mark on its own host, else the platform icon;
+   * never `APP_BASE_URL`: a service worker fetches the icon with no session,
+   * and only the agency's own host serves its files). Returns counts so the
+   * step result is plain JSON.
+   *
+   * Rows are pushed {@link PUSH_ROW_CONCURRENCY} at a time. Each row is a
+   * `sendToUser` with a 10 s timeout per device; one at a time, a fan-out to
+   * sixty users with two devices each and a hanging push service would hold
+   * a concurrency slot for twenty minutes and risk the step's own timeout,
+   * which replays the whole step (PR4 review, second round). The
+   * `delivery.push: null` filter below is what makes that replay safe.
+   */
+  async pushRows(
+    type: NotificationType,
+    rows: InsertedRow[],
+  ): Promise<{
+    pushed: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+  }> {
+    const summary = { pushed: 0, sent: 0, failed: 0, skipped: 0 };
+    if (!NOTIFICATION_TYPES[type].defaultChannels.push || rows.length === 0) {
+      return summary;
+    }
+
+    // Only rows with no push outcome yet. This step is one `step.run` over
+    // every row, so a failure on the ninth row replays all nine; without the
+    // filter the eight already pushed would be pushed again, and the shared
+    // `tag` only merges the two if the first is still on screen (PR4 review).
+    const stored = await this.notificationModel
+      .find({
+        _id: { $in: rows.map((row) => new Types.ObjectId(row.id)) },
+        'delivery.push': null,
+      })
+      .select({
+        _id: 1,
+        recipientId: 1,
+        agencyId: 1,
+        title: 1,
+        body: 1,
+        href: 1,
+      })
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          recipientId: Types.ObjectId;
+          agencyId: Types.ObjectId | null;
+          title: string;
+          body: string;
+          href: string;
+        }>
+      >();
+
+    // One icon lookup per agency, not per row.
+    const icons = new Map<string | null, Promise<string>>();
+    const iconFor = (agencyId: string | null): Promise<string> => {
+      let icon = icons.get(agencyId);
+      if (!icon) {
+        icon = this.iconFor(agencyId);
+        icons.set(agencyId, icon);
+      }
+      return icon;
+    };
+
+    const deliveries = await mapWithConcurrency(
+      stored,
+      PUSH_ROW_CONCURRENCY,
+      async (row) => {
+        const payload: PushPayload = {
+          id: row._id.toHexString(),
+          title: row.title,
+          body: row.body,
+          href: row.href,
+          icon: await iconFor(row.agencyId ? row.agencyId.toHexString() : null),
+        };
+        let delivery: NotificationChannelDeliverySubdoc;
+        try {
+          const outcome = await this.webPush.sendToUser(
+            row.recipientId.toHexString(),
+            payload,
+          );
+          delivery = {
+            status: outcome.status,
+            at: new Date(),
+            error: outcome.error,
+            emailMessageId: null,
+          };
+        } catch (err) {
+          // The service promises not to throw; this is the belt to that brace.
+          delivery = {
+            status: 'failed',
+            at: new Date(),
+            error: err instanceof Error ? err.message : String(err),
+            emailMessageId: null,
+          };
+        }
+        await this.notificationModel.updateOne(
+          { _id: row._id },
+          { $set: { 'delivery.push': delivery } },
+        );
+        return delivery.status;
+      },
+    );
+    for (const status of deliveries) {
+      summary.pushed += 1;
+      summary[status] += 1;
+    }
+    return summary;
+  }
+
+  /**
+   * The agency's favicon, else its logo, on the agency's **own** host; else
+   * the platform icon. The same helper, and the same rule, as the email
+   * masthead — the agency asset endpoints 404 on the platform host, so an
+   * agency without a domain gets the platform mark rather than a broken
+   * image (PR3/PR4 review).
+   */
+  private iconFor(agencyId: string | null): Promise<string> {
+    return this.branding.pushIconFor(agencyId, PLATFORM_ICON_PATH);
+  }
+
+  private render(data: NotificationRequestedData): RenderedNotification {
+    try {
+      return renderNotification(data.type, data.data);
+    } catch (err) {
+      // A type the catalog does not know, or a bad href: no retry can fix
+      // either, and Inngest should show it as a failure, not a hung run.
+      if (err instanceof NotificationRenderError) {
+        throw new NonRetriableError(err.message, { cause: err });
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * The platform mark the web app ships in `packages/web/public/` (PAC-153 §1).
+ * Served on every host by nginx, so it is a safe fallback for an agency with
+ * no favicon of its own; per-agency icons are PAC-153 §2.
+ */
+const PLATFORM_ICON_PATH = '/icon-192.png';
+
+/** Recipients pushed at once inside the `push` step — see `pushRows`. */
+const PUSH_ROW_CONCURRENCY = 8;
+
+/**
+ * E11000 from an unordered `insertMany`: either the top-level code, or every
+ * write error being one (Mongoose reports a bulk failure either way depending
+ * on how many rows collided).
+ */
+function isDuplicateKeyError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as {
+    code?: unknown;
+    writeErrors?: Array<{ code?: unknown }>;
+  };
+  if (candidate.code === 11000) return true;
+  return (
+    Array.isArray(candidate.writeErrors) &&
+    candidate.writeErrors.length > 0 &&
+    candidate.writeErrors.every((writeError) => writeError.code === 11000)
+  );
+}
+
+/** One stored row, as the `insert` step reports it to the later steps. */
+export interface InsertedRow {
+  id: string;
+  recipientId: string;
+  /** The row's own agency — the later steps use it, never the event's. */
+  agencyId: string | null;
+}
+
+interface StoredRowKeys {
+  _id: Types.ObjectId;
+  recipientId: Types.ObjectId;
+  agencyId: Types.ObjectId | null;
+}
+
+function toInsertedRow(row: StoredRowKeys): InsertedRow {
+  return {
+    id: row._id.toHexString(),
+    recipientId: row.recipientId.toHexString(),
+    agencyId: row.agencyId ? row.agencyId.toHexString() : null,
+  };
+}
+
+interface InsertResult {
+  rows: InsertedRow[];
+}
+
+/** What the `insert` step returned before PR2 — ids only. See `rowsForIds`. */
+interface LegacyInsertResult {
+  ids: string[];
+}
+
+function isLegacyInsertResult(
+  result: InsertResult | LegacyInsertResult,
+): result is LegacyInsertResult {
+  return !('rows' in result) && Array.isArray(result.ids);
+}
+
+/** The slice of Inngest's step tooling this handler uses — the test seam. */
+interface StepLike {
+  run<T>(id: string, fn: () => Promise<T> | T): Promise<unknown>;
+}

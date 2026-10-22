@@ -1,21 +1,19 @@
 /**
  * IANA timezones, and the local wall clock in one of them.
  *
- * ## Why this is not `performance.range.ts`
- *
- * That file's `AGENCY_TIME_ZONE` is the Chicago calendar every dashboard
- * window is cut on, and it is still a constant on purpose: making it read
- * `Agency.timezone` changes every date window in the app at once, and gets its
- * own ticket. This file is the per-agency half — the zone an agency *stores*
- * (PAC-139 §6a) and the one job that reads it, the end-of-day Away sweep.
- * When the dashboards move over, they move to here.
+ * The zone an agency keeps its working day in is `Agency.timezone` (PAC-139
+ * §6a). It is read in two places: once per request into
+ * `AccessContext.timeZone`, from where every dashboard date helper in
+ * `performance/performance.range.ts` takes it as a required argument
+ * (PAC-141), and by the worker's end-of-day Away sweep, which reads the
+ * agency row directly. There is deliberately no module-level "the agency
+ * zone" constant any more — a helper that could default to Central is a
+ * helper that will, silently, for the first agency that is not.
  */
 
-/**
- * US Central. Every agency on the platform today is in Oklahoma, which keeps
- * Central time and has no IANA zone of its own.
- */
-export const DEFAULT_AGENCY_TIME_ZONE = 'America/Chicago';
+import { DEFAULT_AGENCY_TIME_ZONE } from '@sfa/shared';
+
+export { DEFAULT_AGENCY_TIME_ZONE };
 
 /**
  * Whether the runtime knows this zone — the exact contract the worker needs,
@@ -25,6 +23,11 @@ export const DEFAULT_AGENCY_TIME_ZONE = 'America/Chicago';
  * holds canonical names only, so `US/Central` or `Asia/Calcutta` would be
  * refused although the formatter accepts them and resolves them correctly.
  * Constructing the formatter is what decides, so constructing it is the test.
+ *
+ * Note this is the *runtime's* opinion. MongoDB keeps its own zone table for
+ * `$dateToString`, and the two can disagree at the edges (case, raw offsets,
+ * very new zones) — `assertMongoKnowsTimeZone` in `mongo-time-zone.ts` is
+ * the other half of the check, run wherever a zone is written.
  */
 export function isIanaTimeZone(value: unknown): value is string {
   if (typeof value !== 'string' || value.trim() === '') return false;
@@ -34,6 +37,24 @@ export function isIanaTimeZone(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+/**
+ * The guard every zone-taking date helper runs first.
+ *
+ * Specs are transpiled without type-checking, so a stale call that forgot the
+ * new argument would not fail to compile there — it would hand `undefined` to
+ * `Intl`, which quietly means "the host's zone", or to a Mongo expression,
+ * which serialises it as `null` and drops every row from the window. Throwing
+ * turns both into a stack trace naming the call site.
+ */
+export function requireTimeZone(timeZone: unknown): string {
+  if (typeof timeZone !== 'string' || timeZone.trim() === '') {
+    throw new Error(
+      'A time zone is required: pass the agency zone (AccessContext.timeZone / Agency.timezone).',
+    );
+  }
+  return timeZone;
 }
 
 /** The wall clock at one instant in one zone. `date` is `YYYY-MM-DD`. */
@@ -54,7 +75,7 @@ export interface LocalClock {
  */
 export function localClock(at: Date, timeZone: string): LocalClock {
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
+    timeZone: requireTimeZone(timeZone),
     hourCycle: 'h23',
     year: 'numeric',
     month: '2-digit',

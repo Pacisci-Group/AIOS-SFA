@@ -6,6 +6,15 @@ import {
   type OutboundMessage,
   type SendResult,
 } from './mail-transport';
+import { RateGate } from './rate-gate';
+
+/**
+ * Resend's default account limit: 2 requests per second, across everything
+ * sent with the key. Enforced here, in front of every send from this process,
+ * because Inngest's `throttle` is per function and the account is shared by
+ * five of them (see `RateGate`).
+ */
+export const RESEND_REQUESTS_PER_SECOND = 2;
 
 /**
  * Resend error codes that will never succeed on retry.
@@ -36,7 +45,13 @@ const PERMANENT_ERROR_CODES = new Set([
 export class ResendTransport extends MailTransport {
   private readonly logger = new Logger(ResendTransport.name);
 
-  constructor(private readonly resend: Resend) {
+  constructor(
+    private readonly resend: Resend,
+    private readonly gate: RateGate = new RateGate(
+      RESEND_REQUESTS_PER_SECOND,
+      1_000,
+    ),
+  ) {
     super();
   }
 
@@ -44,6 +59,11 @@ export class ResendTransport extends MailTransport {
     message: OutboundMessage,
     idempotencyKey: string,
   ): Promise<SendResult> {
+    // The account-wide rate, paid before the request leaves. A 429 that
+    // still arrives (another process, a lower account limit) is transient
+    // below and Inngest retries it with backoff.
+    await this.gate.acquire();
+
     // ⚠ The Resend SDK does NOT throw on an API error — it resolves with
     // `{ data: null, error }`. An `await` with no check therefore looks like a
     // successful send and records a delivery that never happened. Every branch

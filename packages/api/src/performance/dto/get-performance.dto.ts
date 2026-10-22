@@ -12,7 +12,7 @@ import { refineCustomRange } from './custom-range.refine';
 export const getPerformanceSchema = z
   .object({
     range: z.enum(RANGE_KEYS).default('mtd'),
-    /** `YYYY-MM-DD`, Chicago calendar dates. `to` is inclusive. */
+    /** `YYYY-MM-DD`, calendar dates in the agency's timezone. `to` is inclusive. */
     from: z.string().trim().optional(),
     to: z.string().trim().optional(),
     scope: z.enum(['own', 'agency']).optional(),

@@ -1,0 +1,95 @@
+meta {
+  name: List Datasets
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/data-export/datasets
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("describes every dataset", function () {
+    const keys = res.getBody().datasets.map((d) => d.key);
+    expect(keys).to.include.members([
+      "leads", "quote_recaps", "sold_deals", "policies", "households", "contacts",
+    ]);
+  });
+
+  test("offers both formats and states the cap", function () {
+    const body = res.getBody();
+    expect(body.formats).to.deep.equal(["csv", "xlsx"]);
+    expect(body.maxRows).to.be.above(0);
+  });
+
+  test("each dataset has exactly one default date field", function () {
+    for (const dataset of res.getBody().datasets) {
+      expect(dataset.dateFields.filter((f) => f.isDefault)).to.have.length(1);
+    }
+  });
+
+  test("sold deals carry the Sold Log rollups", function () {
+    const soldDeals = res.getBody().datasets.find((d) => d.key === "sold_deals");
+    const columns = soldDeals.columns.map((c) => c.key);
+    expect(columns).to.include.members(["policy_numbers", "net_premium", "deal_audit_status"]);
+  });
+}
+
+docs {
+  # GET /data-export/datasets — the data dictionary
+
+  - **Module:** `data_export`
+  - **Permission:** `data_export:read`
+  - **Data scope:** none (static description)
+
+  Every dataset the page offers, in display order, with its date fields, the
+  filters it honours, the values its `status` filter accepts, and every column
+  — header, type and a one-line description. The page renders its column
+  preview from this, and it is the documentation the data team binds Alteryx
+  flows against: headers are snake_case and stable.
+
+  Column types decide encoding in both formats: `id` is text (leading zeros
+  survive in Excel), `date` is `YYYY-MM-DD` / a date cell, `datetime` is ISO
+  UTC / a date-time cell, `list` is `"; "`-joined. Some lists are **aligned**
+  (a household's `member_contact_ids`, `member_names`, `member_roles`), so a
+  blank item is kept rather than dropped.
+
+  ## Response `200`
+
+  ```json
+  {
+    "datasets": [
+      {
+        "key": "sold_deals",
+        "label": "Sold deals",
+        "description": "One row per sale (the Sold Log): …",
+        "scope": "producer",
+        "dateFields": [
+          { "key": "sold_date", "label": "Sold date", "isDefault": true },
+          { "key": "created", "label": "Recorded at", "isDefault": false }
+        ],
+        "filters": ["branchId", "producerIds", "leadSourceIds", "policyTypes"],
+        "columns": [
+          { "key": "deal_id", "type": "id", "description": "Deal record id." }
+        ]
+      }
+    ],
+    "formats": ["csv", "xlsx"],
+    "maxRows": 100000
+  }
+  ```
+
+  ## Errors
+  - `401` — not signed in.
+  - `403` — no `data_export:read`, or the module is disabled for the agency.
+}

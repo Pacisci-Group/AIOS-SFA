@@ -21,6 +21,8 @@ import {
   MailerLinkResolver,
   type ResolvedMailerLink,
 } from './mailer-link.resolver';
+import { businessDateInstant } from '../../common/dates/business-dates';
+import { requireTimeZone } from '../../common/dates/time-zones';
 
 /** A new lead starts here — `LEAD_STATUSES[0]`. */
 const INITIAL_STATUS = LEAD_STATUSES[0];
@@ -269,6 +271,14 @@ export class ResolveLeadStep {
     link: ResolvedMailerLink | null,
   ): Promise<ResolvedLead> {
     const now = new Date();
+    // The business "lead received on" date (PAC-159): the form's day at
+    // agency-local midnight when one was given, else the real instant.
+    const createdDate = input.createdDate
+      ? businessDateInstant(
+          input.createdDate,
+          requireTimeZone(deps.ctx.timeZone),
+        )
+      : now;
 
     const [created] = await this.leadModel.create(
       [
@@ -283,7 +293,7 @@ export class ResolveLeadStep {
           // "No source" filter matches and what reads render as "Unknown".
           leadSourceId: deps.ctx.leadSourceId ?? undefined,
           agingDays: 0,
-          createdDate: now,
+          createdDate,
           // REQUIRED: `GET /leads` sorts on `lastActivityAt` (updatedAt is
           // unusable — the migration stamped every record with the import time).
           // Without this the lead sinks to the bottom of its own list.
@@ -338,7 +348,7 @@ export class ResolveLeadStep {
     );
 
     deps.created.track(this.leadModel, created._id);
-    return { leadId: created._id, isNew: true };
+    return { leadId: created._id, isNew: true, createdDate };
   }
 
   /**

@@ -67,12 +67,18 @@ function monthName(iso: string): string {
 export function comparisonLabel(period: OwnerDashboardPeriod): string {
   const { key, current, previous } = period;
   switch (key) {
+    case "today":
+      return "yesterday";
+    case "yesterday":
+      return "previous day";
     case "mtd":
       return formatRangeLabel(previous.from, previous.to);
     case "lastMonth":
       return monthName(previous.from);
     case "last3Months":
       return "previous 3 months";
+    case "last12Months":
+      return "previous 12 months";
     case "ytd":
       return "same dates last year";
     case "lastYear":

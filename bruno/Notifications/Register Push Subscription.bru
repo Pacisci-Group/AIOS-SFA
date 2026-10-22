@@ -1,0 +1,94 @@
+meta {
+  name: Register Push Subscription
+  type: http
+  seq: 10
+}
+
+put {
+  url: {{baseUrl}}/notifications/push-subscriptions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/bruno-device-{{notifAdminUserId}}",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BPkBrunoPlaceholderP256dhKey",
+      "auth": "BrunoAuthSecret"
+    },
+    "userAgent": "Bruno CLI"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("pushEndpoint", res.getBody().endpoint);
+  }
+}
+
+tests {
+  test("returns 200 OK (an upsert, not a create)", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the row without the keys", function () {
+    const keys = Object.keys(res.getBody()).sort();
+    expect(keys).to.eql(["createdAt", "endpoint", "id", "lastSuccessAt", "userAgent"]);
+    expect(res.getBody().endpoint).to.contain("bruno-device-");
+  });
+}
+
+docs {
+  # PUT /notifications/push-subscriptions — register this browser for web push (PAC-154 PR4)
+
+  Authenticated, **no permission**, `@SkipTenant @SkipBranch @SkipModule` — a
+  platform admin subscribes too. The body is `PushSubscription.toJSON()` as
+  the browser hands it over, plus a `userAgent` for telling devices apart.
+
+  `PUT`, because the body *is* the resource: the `endpoint` identifies the
+  row. The same endpoint twice is one row, refreshed (`200` both times). A
+  shared machine re-subscribing under a new login **moves the row to that
+  user**, so the previous user's pushes stop. A row soft-deleted after a
+  `410` from the push service does not block the device subscribing again —
+  the unique index on `endpoint` is partial on `deletedAt: null`.
+
+  Here the endpoint is a placeholder: nothing is sent to it by this run (the
+  worker only pushes when a notification is written, and a fake endpoint
+  simply records `failed`/`skipped` on the row's `delivery.push`).
+
+  ## Body
+  ```json
+  {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/…",     // https only
+    "expirationTime": null,                                   // accepted, ignored
+    "keys": { "p256dh": "…", "auth": "…" },
+    "userAgent": "Mozilla/5.0 …"                              // optional
+  }
+  ```
+
+  ## Response `200`
+  ```json
+  {
+    "id": "68e5…",
+    "endpoint": "https://fcm.googleapis.com/fcm/send/…",
+    "userAgent": "Mozilla/5.0 …",
+    "createdAt": "2026-10-08T10:00:00.000Z",
+    "lastSuccessAt": null
+  }
+  ```
+  Never the keys.
+
+  ## Errors
+  - `400` — non-`https` endpoint, missing `keys.p256dh` / `keys.auth`.
+  - `401` — no session.
+}

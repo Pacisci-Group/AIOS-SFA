@@ -1,0 +1,13 @@
+{
+  // The service worker's own program (PAC-154 PR4). `src/sw.ts` runs in a
+  // `ServiceWorkerGlobalScope`, which lives in the `WebWorker` lib and
+  // conflicts with `DOM`; the main `tsconfig.json` excludes the file and this
+  // one checks it. `npm run lint` / `npm run build` run both.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker"],
+    "types": []
+  },
+  "include": ["src/sw.ts"],
+  "exclude": []
+}

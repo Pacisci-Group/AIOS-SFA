@@ -48,6 +48,10 @@ import {
   UserWorkReleaseService,
   type ReleasedWork,
 } from './user-work-release.service';
+import {
+  WorkTransferService,
+  type WorkTransferResult,
+} from './work-transfer.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
   ActingUser,
@@ -117,6 +121,7 @@ export class UsersService {
     private mailService: MailService,
     private configService: ConfigService,
     private workRelease: UserWorkReleaseService,
+    private workTransfer: WorkTransferService,
     private tenantUrls: TenantUrlService,
     private tenantBranding: TenantBrandingService,
     private hostResolver: HostTenantResolver,
@@ -472,12 +477,26 @@ export class UsersService {
    * for one on **every request** — so an already-issued JWT stops working as
    * soon as the cached context is dropped, which is the `invalidateUser` call at
    * the end. Without that call the old token keeps working until it expires.
+   *
+   * ## Where the open work goes — and why it goes first
+   * With no `successorId` it is released to the queue (PAC-76). With one, it is
+   * handed to that colleague (PAC-137).
+   *
+   * The work moves **before** the account is deactivated. The other order left
+   * a failed transfer (an aborted transaction, a refused successor) with the
+   * person already removed and their work stranded on an inactive account — and
+   * a retry then 409s on "already removed". This way round a failure leaves
+   * them fully active and the request simply retryable: moving work is
+   * idempotent, so a second attempt finds nothing left and deactivates. The
+   * window in which the still-active person could pick up something new is the
+   * length of one request.
    */
   async deactivateUser(
-    actor: ActingUser,
+    actor: AccessContext,
     agencyId: string,
     userId: string,
-  ): Promise<ReleasedWork> {
+    successorId?: string,
+  ): Promise<ReleasedWork | WorkTransferResult> {
     const actorUserId = actor.userId;
     if (!Types.ObjectId.isValid(userId)) {
       throw new NotFoundException('User not found');
@@ -521,6 +540,11 @@ export class UsersService {
     // OwnerProtectionService so RolesService enforces the identical rules.
     await this.ownerProtection.assertMayDeactivate(actor, agencyId, userId);
 
+    // First — see the docblock. `transfer` validates the successor itself.
+    const released = successorId
+      ? await this.workTransfer.transfer(actor, agencyId, userId, successorId)
+      : await this.workRelease.release(agencyId, userId);
+
     user.isActive = false;
     user.deactivatedAt = new Date();
     user.deactivatedByUserId =
@@ -534,8 +558,6 @@ export class UsersService {
     user.passwordResetToken = undefined;
     user.passwordResetExpiresAt = undefined;
     await user.save();
-
-    const released = await this.workRelease.release(agencyId, userId);
 
     // Last, and load-bearing — see the docblock. Their next request re-resolves
     // from Mongo, finds `isActive: false`, and gets nothing.
@@ -892,11 +914,12 @@ export class UsersService {
       this.resolveUserName(invitedByUserId),
     ]);
 
-    // Same origin as the invite link, so the logo is fetched from the host the
-    // invitee is about to visit — and so a tenant with its own domain never
-    // makes a mail client load an asset from a name the recipient has never
-    // heard of.
-    const brand = await this.resolveEmailBrand(agencyIdString, minted.baseUrl);
+    // The agency's name and, when it has a host of its own, its logo on that
+    // host. Deliberately not built on `minted.baseUrl`: the link's base falls
+    // back to the platform host for an agency without a domain, and the logo
+    // endpoint 404s there — every such invite carried a broken image until
+    // the rule moved into `emailBrandFor` (PAC-154 PR3 review).
+    const brand = await this.tenantBranding.emailBrandFor(agencyIdString);
 
     // `agencyId` is optional on the schema (a platform super admin has none)
     // but is guaranteed on every path into here: `inviteUser` sets it from a
@@ -993,35 +1016,6 @@ export class UsersService {
       );
     }
     return user;
-  }
-
-  /**
-   * Absolute, because the link is opened from an email client that has no origin
-   * to resolve a relative path against.
-   */
-  /**
-   * The agency's identity for the email masthead, or `undefined` to fall back
-   * to the platform wordmark.
-   *
-   * The logo URL is made **absolute against the same base as the invite link**.
-   * It cannot be a relative path (a mail client has no origin to resolve it
-   * against) and it cannot be a presigned storage URL (those expire, and an
-   * invite may sit unread for days — a broken image in a "set your password"
-   * email is exactly the thing that makes it look like phishing).
-   */
-  private async resolveEmailBrand(
-    agencyId: string | null,
-    baseUrl: string,
-  ): Promise<{ name: string; logoUrl: string | null } | undefined> {
-    if (!agencyId) return undefined;
-
-    const branding = await this.tenantBranding.forAgency(agencyId);
-    if (branding.kind !== 'agency') return undefined;
-
-    return {
-      name: branding.name,
-      logoUrl: branding.logoUrl ? `${baseUrl}${branding.logoUrl}` : null,
-    };
   }
 
   /**

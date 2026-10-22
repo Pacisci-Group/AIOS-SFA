@@ -62,10 +62,16 @@ export function SoldDateCard({
   value,
   onChange,
   disabled,
+  max,
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  /**
+   * Today on the agency's calendar (PAC-159) — the API rejects a later day,
+   * so the picker stops offering one.
+   */
+  max?: string;
 }) {
   return (
     <FieldShell
@@ -79,6 +85,7 @@ export function SoldDateCard({
           aria-describedby={describedBy}
           aria-invalid={invalid}
           disabled={disabled}
+          max={max}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />

@@ -28,7 +28,7 @@ import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { auditItemDueAt } from '../audit-generation/audit-due';
 import { normalizePolicyNumber } from '../policies/policy-number';
-import { quoteDateYmd } from '../quote-recaps/quote.normalize';
+import { businessDateInstant } from '../common/dates/business-dates';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
 import { Deal } from '../deals/schemas/deal.schema';
 import { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schema';
@@ -85,7 +85,6 @@ import {
   toPhoneArray,
   toStringArray,
   toText,
-  toYmd,
 } from './helpers/value-utils';
 import {
   MAX_POLICIES_PER_RECORD,
@@ -122,7 +121,8 @@ import {
   normalizeEmail,
   normalizePhone,
 } from '../leads/intake/intake.normalize';
-import { recentChicagoMonths } from '../performance/performance.range';
+import { recentMonthsIn } from '../performance/performance.range';
+import { DEFAULT_AGENCY_TIME_ZONE } from '../common/dates/time-zones';
 import {
   CollectionStat,
   MigrationReport,
@@ -134,6 +134,25 @@ import {
 } from './report';
 
 /**
+ * A SmartSuite business date — a lead's `created_date`, a quote's
+ * `quote_date`, a deal's `sold_date` — as the instant the app stores (PAC-159).
+ *
+ * SmartSuite holds these as **date-only** values, which `toDate` parses as UTC
+ * midnight; read on a US calendar that is the evening before, so every
+ * imported row would file on the wrong day. A value at exact UTC midnight is
+ * therefore taken as the calendar day it names and re-anchored to that day's
+ * first instant in the agency's zone — exactly what `businessDateInstant`
+ * does for a form date. A value carrying a time of day is a real instant and
+ * is kept as it is.
+ */
+function businessDate(value: unknown, timeZone: string): Date | undefined {
+  const date = toDate(value);
+  if (!date) return undefined;
+  if (date.getTime() % 86_400_000 !== 0) return date;
+  return businessDateInstant(date.toISOString().slice(0, 10), timeZone);
+}
+
+/**
  * Marks the goal rows this import owns, so a future goal-setting UI's rows are
  * distinguishable from derived ones and a re-run can tell them apart.
  */
@@ -141,7 +160,7 @@ const GOAL_SOURCE = 'migration:user-monthly-goal';
 
 /**
  * How many months of producer goals to write, counting back from the current
- * Chicago month.
+ * month on the agency's calendar.
  *
  * A year, because SmartSuite holds one standing goal with no month dimension and
  * the leaderboard is queryable per month: writing only the current one left
@@ -176,6 +195,8 @@ interface TenantCtx {
   branchId: string;
   agencyObjectId: Types.ObjectId;
   branchObjectId: Types.ObjectId;
+  /** `Agency.timezone` — the calendar day labels and goal months are cut on. */
+  timeZone: string;
   dryRun: boolean;
 }
 
@@ -794,6 +815,7 @@ export class MigrationService {
       branchId: tenant.branchId.toString(),
       agencyObjectId: tenant.agencyId,
       branchObjectId: tenant.branchId,
+      timeZone: tenant.timeZone,
       dryRun: options.dryRun,
     };
   }
@@ -827,6 +849,9 @@ export class MigrationService {
       branchId: branchObjectId.toString(),
       agencyObjectId,
       branchObjectId,
+      // An agency that would be created gets the schema default; an existing
+      // one keeps whatever its owner set.
+      timeZone: agency?.timezone ?? DEFAULT_AGENCY_TIME_ZONE,
       dryRun: true,
     };
   }
@@ -1334,7 +1359,10 @@ export class MigrationService {
         stat,
         report,
       );
-      const createdDate = toDate(rec[LEAD_FIELDS.createdDate]);
+      const createdDate = businessDate(
+        rec[LEAD_FIELDS.createdDate],
+        ctx.timeZone,
+      );
       const lastActivityAt =
         toDate(rec[LEAD_FIELDS.lastUpdated]) ?? createdDate;
 
@@ -1697,7 +1725,10 @@ export class MigrationService {
       );
       const test = isTestRecord(null, producer?.name, toText(rec.title));
       if (test) stat.excludedTest++;
-      const quoteDate = toDate(rec[QUOTE_RECAP_FIELDS.quoteDate]);
+      const quoteDate = businessDate(
+        rec[QUOTE_RECAP_FIELDS.quoteDate],
+        ctx.timeZone,
+      );
 
       const legacyLeadId = firstLinkedId(rec[QUOTE_RECAP_FIELDS.lead]);
       const legacyHouseholdId = firstLinkedId(
@@ -1727,10 +1758,6 @@ export class MigrationService {
         {
           title: toText(rec.title),
           quoteDate,
-          // The Quoted scorecard's bucket key (PAC-10). Written on import, so
-          // a migrated agency needs no follow-up pass — recaps written before
-          // PAC-9 are invisible to every range query until a re-run heals them.
-          quoteDateYmd: quoteDate ? quoteDateYmd(quoteDate) : undefined,
           premium: toNumber(rec[QUOTE_RECAP_FIELDS.premium]),
           /*
            * Bounded by how many products the recap actually quotes — one recap
@@ -1844,7 +1871,7 @@ export class MigrationService {
         rec[DEAL_FIELDS.premiumRollup],
         rec[DEAL_FIELDS.premiumSnapshot],
       );
-      const soldDate = toDate(rec[DEAL_FIELDS.soldDate]);
+      const soldDate = businessDate(rec[DEAL_FIELDS.soldDate], ctx.timeZone);
       const policyLabels = policyTypeLabels(rec[DEAL_FIELDS.policyTypes]);
       this.flagUnmappedPolicyTypes(stat, policyLabels);
       const isBundle = toBool(rec[DEAL_FIELDS.bundle]);
@@ -1877,8 +1904,6 @@ export class MigrationService {
           title: toText(rec[DEAL_FIELDS.title]),
           dealAutoNumber: toNumber(rec[DEAL_FIELDS.autonumber]) || undefined,
           soldDate,
-          soldDateYmd:
-            toNumber(rec[DEAL_FIELDS.soldDateYmd]) || toYmd(soldDate),
           premium,
           premiumSource: source,
           itemCount: this.plausibleItemCount(
@@ -2871,14 +2896,14 @@ export class MigrationService {
     report: MigrationReport,
   ): Promise<void> {
     /*
-     * Chicago, not UTC (PAC-80).
+     * The agency's calendar, not UTC (PAC-80).
      *
      * `new Date().toISOString().slice(0, 7)` disagrees with the
-     * `currentChicagoMonth()` the leaderboard queries with for the first five or
-     * six hours of every month, so a migration run just after midnight UTC on
-     * the 1st wrote goals into a month nothing would ask for.
+     * `currentMonthIn(agency zone)` the leaderboard queries with for the first
+     * five or six hours of every month, so a migration run just after midnight
+     * UTC on the 1st wrote goals into a month nothing would ask for.
      */
-    const months = recentChicagoMonths(GOAL_MONTHS_WRITTEN);
+    const months = recentMonthsIn(GOAL_MONTHS_WRITTEN, ctx.timeZone);
     const withoutGoal: string[] = [];
     let created = 0;
 

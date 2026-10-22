@@ -77,6 +77,8 @@ All of these are **required** — the deploy fails preflight if any is empty.
 | `STORAGE_BUCKET` | `terraform output -raw spaces_bucket` |
 | `STORAGE_ACCESS_KEY_ID` | `terraform output -raw spaces_access_key_id` |
 | `STORAGE_SECRET_ACCESS_KEY` | `terraform output -raw spaces_secret_access_key` |
+| `REDIS_URL` | Managed Valkey URI (`terraform output -raw redis_uri`). Notification fan-out between the worker and the API nodes (PAC-154) **and** the permission cache. Unset, live notifications silently stop crossing processes while every check stays green — see "Notifications" below. |
+| `VAPID_PUBLIC_KEY` · `VAPID_PRIVATE_KEY` · `VAPID_SUBJECT` | Web push (PAC-154 PR4). One pair per environment from `npx web-push generate-vapid-keys`; the subject is a `mailto:` URI. Unset, the worker records every push as `skipped` and the opt-in switch hides itself — nothing else looks wrong, which is why all three are required. Rotating the pair invalidates every subscription. See "Web push" below. |
 
 Optional tuning knobs for the public intake routes, defaulted in
 `packages/api/src/config/rate-limit.config.ts` if left unset: `RATE_LIMIT_SHORT`,
@@ -157,6 +159,94 @@ infrastructure all read the same flag so they cannot disagree).
 > volume; the documented upgrade is `INNGEST_POSTGRES_URI` + `INNGEST_REDIS_URI`,
 > which is two environment variables rather than a rewrite. **Back the volume
 > up** — losing it loses scheduled-function state and run history.
+
+### Notifications: Redis pub/sub + SSE (PAC-154)
+
+The in-app notification centre is live: the worker writes a row, PUBLISHes
+`{ recipientId, notificationId }` on one Valkey channel, and every API node
+that SUBSCRIBEs forwards it to the Server-Sent Events streams it holds. Redis
+stores nothing and the bus is lossy by contract — the client refetches on
+every (re)connect, and the Mongo row is the truth.
+
+| What | Where it comes from |
+|------|---------------------|
+| `REDIS_URL` | `terraform output -raw redis_uri` — the `managed_redis` module's VPC URI, `rediss://` (TLS) on the private host, admitted by the same tag/droplet rules as MongoDB. |
+
+Deploy order for the first environment: `terraform apply` (creates the
+cluster) → copy `redis_uri` into the `REDIS_URL` Environment secret → deploy.
+The preflight refuses to run until the secret exists, which is the intent: an
+unset `REDIS_URL` is the silent kind of failure. Both containers read it — the
+worker publishes, the API subscribes — and setting it also switches on the
+Redis **permission cache**, which was dormant in production until now (a
+safety-TTL'd cache that fails open; accepted).
+
+> **The 25-second heartbeat is load-bearing.** The DigitalOcean balancer and
+> the edge both drop a connection that sits silent past their idle timeout, and
+> a dropped stream is a reconnect, a refetch and a gap. The API sends a `ping`
+> frame every 25 s and `packages/web/nginx.conf` holds the stream route open
+> for an hour with buffering off. If streams start dropping after an
+> infrastructure change, check the idle timeout on whatever was changed before
+> suspecting the app.
+
+> **Verify the Valkey endpoint from a pool droplet before the first deploy**
+> (`redis-cli -u "$(terraform output -raw redis_uri)" PING` from a member of
+> the pool, or from any allow-listed IP). Managed Valkey is TLS on a private
+> host: a wrong VPC, or a firewall rule that admits the single droplet but not
+> the pool tag, presents as the API logging `Redis connection error` on every
+> reconnect attempt while serving everything else normally.
+
+> **Two API replicas are the test.** Open the app in two browsers pinned to
+> different nodes, file a bug report as a producer, and both platform-admin
+> badges must move without a reload. Locally: two `api:dev` processes on
+> different ports with the same `REDIS_URL`, or `make up` with
+> `--scale api=2`.
+
+### Web push: VAPID + the service worker (PAC-154 PR4)
+
+A notification whose catalog type has the push channel on is also sent, by the
+worker, to every browser the recipient has subscribed (`pushSubscriptions`).
+The service worker shows **every** push as an OS notification, focused window
+or not — WebKit treats a push that shows nothing as a silent push and revokes
+the subscription after a few, and the installed iOS app is the target — and a
+click focuses the app on the row's `href`. A subscription endpoint must be on
+a known browser push service (`packages/api/src/common/push/push-endpoint.ts`);
+the API rejects anything else and the worker soft-deletes a stored row that
+fails the same check before sending, so the worker can never be pointed at an
+arbitrary host.
+
+| What | Where it comes from |
+|------|---------------------|
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | `npx web-push generate-vapid-keys`, run **once per environment** and kept. The public key is handed to every browser; the private key signs every push. |
+| `VAPID_SUBJECT` | A `mailto:` (or `https:`) URI the push services may use to reach us, e.g. `mailto:ops@example.com`. |
+
+Deploy order for the first environment: generate the pair → set the three
+Environment secrets → deploy. The preflight refuses to run until all three
+exist. **Rotating the pair invalidates every subscription** until each
+browser comes back: on the next app load a signed-in browser compares the key
+its subscription was made with against the published one and, on a mismatch,
+unsubscribes and subscribes again (`reconcilePushSubscription`). Until then
+the push services refuse pushes to the old subscriptions with `401`/`403`;
+those are recorded as `delivery.push.status: 'failed'` on the rows and the
+subscriptions stay live (soft-deleting on a `401`/`403` would, on a
+misconfigured key, wipe every subscription in the system). A rotation is a
+deliberate act with a gap, not routine hygiene.
+
+> **A `404`/`410` from a push service soft-deletes the subscription** (sets
+> `deletedAt`; nothing is hard-deleted, PAC-155). The unique index on
+> `endpoint` is partial on `deletedAt: null`, so the same device can
+> subscribe again. A push failure of any other kind is recorded on the
+> notification row as `delivery.push.status: 'failed'` and never touches the
+> in-app row.
+
+> **`sw.js` and `manifest.webmanifest` are served `Cache-Control: no-cache`**
+> by `packages/web/nginx.conf`, like `index.html`. The service worker is
+> registered in `prompt` mode — never silent auto-update — and the app shows
+> "New version available — Reload" when a new build is waiting; without that
+> prompt a new deploy only activates once every tab of the app is closed.
+
+> **iOS delivers web push only to a home-screen-installed app.** The platform
+> manifest and icons ship here (PAC-153 §1); the per-agency manifest and the
+> install/Lighthouse QA pass are PAC-153 §2/§3.
 
 ### TLS certificates (application-managed ACME)
 
@@ -333,9 +423,10 @@ re-issuing every certificate the platform holds.
    console, and send one real email to prove the worker is reachable on 4001.
 
 > **Scaling the app tier does not scale what is behind it.** Production Mongo is
-> still `node_count = 1` with no backups, there is no Redis so every request
-> resolves permissions from Mongo, Inngest is one droplet with SQLite, and the
-> rate limits are per-node once the pool grows past one. None of that blocks the
+> still `node_count = 1` with no backups, Redis is a single-node Valkey that
+> the permission cache and the notification bus both lean on (PAC-154), Inngest
+> is one droplet with SQLite, and the rate limits are per-node once the pool
+> grows past one. None of that blocks the
 > cutover; all of it is Phase 5.
 
 ### Horizontal autoscaling

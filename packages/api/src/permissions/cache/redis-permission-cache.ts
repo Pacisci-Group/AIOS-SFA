@@ -1,6 +1,6 @@
-import { Logger, OnModuleDestroy } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { AccessContext } from '@sfa/shared';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { PermissionCache } from './permission-cache';
 
 /**
@@ -19,19 +19,23 @@ import { PermissionCache } from './permission-cache';
  *        collections instead of arrays on the user and role documents.
  * `v4` = `tokenVersion` added so a password reset can end live sessions
  *        (PAC-79).
+ * `v5` = `timeZone` added, the agency's calendar for every dashboard window
+ *        (PAC-141). A `v4` entry would deserialize without it and throw in the
+ *        first date helper.
  */
-const KEY_PREFIX = 'sfa:perm:v4:';
+const KEY_PREFIX = 'sfa:perm:v5:';
 
 /**
  * Redis-backed cache for resolved access contexts. Entries carry a safety TTL
  * so that any missed invalidation self-heals within the TTL window. Explicit
  * invalidation (on role/permission/module changes) keeps entries fresh in the
  * common case.
+ *
+ * The client is borrowed, not owned: it is the shared `REDIS_CLIENT`, whose
+ * `error` events are logged and whose `quit()` is called by `RedisModule`.
+ * Nothing here closes it or listens to it (PAC-154 PR2 review).
  */
-export class RedisPermissionCache
-  extends PermissionCache
-  implements OnModuleDestroy
-{
+export class RedisPermissionCache extends PermissionCache {
   private readonly logger = new Logger(RedisPermissionCache.name);
 
   constructor(
@@ -39,9 +43,6 @@ export class RedisPermissionCache
     private readonly ttlSeconds: number,
   ) {
     super();
-    this.client.on('error', (err) =>
-      this.logger.error(`Redis permission cache error: ${err.message}`),
-    );
   }
 
   private key(userId: string): string {
@@ -89,9 +90,5 @@ export class RedisPermissionCache
     } catch (err) {
       this.logger.warn(`Cache delMany failed: ${String(err)}`);
     }
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.client.quit().catch(() => this.client.disconnect());
   }
 }

@@ -1,0 +1,60 @@
+meta {
+  name: List Transfer Candidates
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/users/{{activeUserId}}/work-transfer/candidates
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+script:post-response {
+  // The successor for Preview Work Transfer and Transfer Work.
+  if (res.getStatus() === 200 && res.getBody().length) {
+    bru.setVar("successorUserId", res.getBody()[0]._id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("never offers the person themselves", function () {
+    const ids = res.getBody().map((u) => u._id);
+    expect(ids).to.not.include(bru.getVar("activeUserId"));
+  });
+}
+
+docs {
+  # GET /users/:userId/work-transfer/candidates
+
+  Who `:userId`'s open work may be handed to — the options for the "Transfer
+  to" picker (PAC-136). **Active colleagues holding at least one of the same
+  roles**: a producer's book goes to a producer, a CSR's to a CSR. If the person
+  holds no role at all, every active colleague is offered. Roles survive
+  removal, so this works for someone who has already left.
+
+  **Same branch only:** colleagues in the departing person's branch, plus anyone
+  with no branch. If the departing person has no branch, every branch is
+  offered.
+
+  Needs an **agency-wide** role as well as the permission (`403` otherwise).
+
+  **Transfer Work** enforces exactly these rules, which is why the picker reads
+  from here and not from `GET /users/options`.
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:work_transfer:write`
+  + `agency:users:read`.
+
+  **Response `200`** — bare array of `{ _id, email, firstName?, lastName? }`,
+  sorted by last name, first name, email.
+
+  **Errors** — `403` missing permission or a role that is not agency-wide;
+  `404` no such user in this agency.
+}

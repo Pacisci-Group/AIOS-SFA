@@ -61,6 +61,7 @@ describe('Renewal materialization (e2e)', () => {
     dataScope: DataScope.Agency,
     permissions: ['crm_service:read', 'crm_service:write'],
     roleIds: [],
+    timeZone: 'America/Chicago',
   };
 
   /**

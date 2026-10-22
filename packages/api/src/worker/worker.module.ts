@@ -11,6 +11,10 @@ import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
+import { DataExportExpireFn } from './functions/data-export-expire.fn';
+import { DataExportGenerateFn } from './functions/data-export-generate.fn';
+import { DeliverNotificationFn } from './functions/deliver-notification.fn';
+import { SendNotificationEmailFn } from './functions/send-notification-email.fn';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
 import { TicketNumberService } from '../common/tickets/ticket-number.service';
 import { AcmeAccountService } from './acme/acme-account.service';
@@ -23,8 +27,11 @@ import {
   EmailMessage,
   EmailMessageSchema,
 } from './email/schemas/email-message.schema';
+import { webPushTransportProvider } from './push/web-push.provider';
+import { WebPushService } from './push/web-push.service';
 import { WorkerIndexesService } from './worker-indexes.service';
 import { TenantUrlService } from '../common/tenancy/tenant-url.service';
+import { TenantBrandingService } from '../tenant-branding/tenant-branding.service';
 import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
 import {
@@ -60,7 +67,46 @@ import {
 } from '../households/schemas/household.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import {
+  Notification,
+  NotificationSchema,
+} from '../notifications/schemas/notification.schema';
+import {
+  PushSubscription,
+  PushSubscriptionSchema,
+} from '../notifications/schemas/push-subscription.schema';
+import { RedisModule } from '../common/redis/redis.module';
 import { StorageModule } from '../storage/storage.module';
+import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
+import {
+  Chargeback,
+  ChargebackSchema,
+} from '../chargebacks/schemas/chargeback.schema';
+import {
+  DataExport,
+  DataExportSchema,
+} from '../data-export/schemas/data-export.schema';
+import {
+  DealAudit,
+  DealAuditSchema,
+} from '../deal-audits/schemas/deal-audit.schema';
+import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import {
+  HouseholdMember,
+  HouseholdMemberSchema,
+} from '../households/schemas/household-member.schema';
+import {
+  InterestedParty,
+  InterestedPartySchema,
+} from '../interested-parties/schemas/interested-party.schema';
+import {
+  LeadSource,
+  LeadSourceSchema,
+} from '../lead-sources/schemas/lead-source.schema';
+import {
+  QuoteRecap,
+  QuoteRecapSchema,
+} from '../quote-recaps/schemas/quote-recap.schema';
 import {
   AcmeAccount,
   AcmeAccountSchema,
@@ -136,12 +182,36 @@ import {
       { name: Household.name, schema: HouseholdSchema },
       { name: Contact.name, schema: ContactSchema },
       { name: User.name, schema: UserSchema },
+      // Owned by the API (`NotificationsModule` builds its indexes); the worker
+      // is its sole *writer* (PAC-154). Registered here so
+      // `DeliverNotificationFn` can insert, through the schema and nothing
+      // else. Do not add it to `WorkerIndexesService` — `syncIndexes()` would
+      // drop the API's indexes on it.
+      { name: Notification.name, schema: NotificationSchema },
+      // Same ownership as `Notification`: the API builds the indexes, the
+      // worker reads the live rows to fan out and soft-deletes the ones the
+      // push service reports gone (PAC-154 PR4). Not in `WorkerIndexesService`.
+      { name: PushSubscription.name, schema: PushSubscriptionSchema },
       // TLS certificate lifecycle. Owned by `src/tls/`, registered here
       // because the worker is what runs ACME — schemas are the one thing
       // the worker boundary lets across, and the issuer needs all three.
       { name: Certificate.name, schema: CertificateSchema },
       { name: AcmeChallenge.name, schema: AcmeChallengeSchema },
       { name: AcmeAccount.name, schema: AcmeAccountSchema },
+      // The Data Export job's collections (PAC-152). It reads every dataset
+      // and the label/child lookups behind them, and writes the export row.
+      // `Lead`, `Policy`, `Household`, `Contact` and `User` are registered
+      // above for other jobs; these are the rest. The engine itself lives in
+      // `common/data-export/` so this boundary holds.
+      { name: DataExport.name, schema: DataExportSchema },
+      { name: Deal.name, schema: DealSchema },
+      { name: QuoteRecap.name, schema: QuoteRecapSchema },
+      { name: HouseholdMember.name, schema: HouseholdMemberSchema },
+      { name: DealAudit.name, schema: DealAuditSchema },
+      { name: InterestedParty.name, schema: InterestedPartySchema },
+      { name: Chargeback.name, schema: ChargebackSchema },
+      { name: Branch.name, schema: BranchSchema },
+      { name: LeadSource.name, schema: LeadSourceSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
@@ -150,6 +220,10 @@ import {
     // `StorageService` the first time a file needed reading. The mailer campaign
     // jobs (PAC-71) are the next thing that will need it.
     StorageModule,
+    // The notification bus (PAC-154 PR2). Same reasoning as `StorageModule`
+    // above: not global, so the standalone worker must name it. The worker
+    // only publishes on it; subscribing is the API tier's job.
+    RedisModule,
   ],
   providers: [
     WorkerIndexesService,
@@ -166,6 +240,17 @@ import {
     // `common/` helper whose only dependencies are `ConfigService` and the
     // `AgencyDomain` schema, so the worker boundary is intact.
     TenantUrlService,
+    // The email masthead's identity (PAC-154 PR3). Declared here for the same
+    // reason `TenantUrlService` is: `TenantBrandingModule` is the API's. It
+    // depends only on the `Agency` model, registered above, and
+    // `tenant-branding/` is not a feature directory in the eslint boundary.
+    TenantBrandingService,
+    // Web push (PAC-154 PR4). The transport is picked from the VAPID settings
+    // the way the mail transport is from RESEND_API_KEY — disabled and loud
+    // when they are missing. Lives in `push/`, never `notifications/`: that is
+    // a feature directory name and the boundary regex matches import strings.
+    webPushTransportProvider,
+    WebPushService,
     // Certificate issuance. Lives in `src/worker/acme/` rather than
     // `src/worker/tls/`: these patterns match the import *string*, and
     // `tls` is a feature directory, so a worker subdirectory sharing that
@@ -188,6 +273,12 @@ import {
     // End-of-day Away sweep (PAC-139 §6a). Reads `Agency` and `User`, both
     // registered above.
     SetUsersAwayFn,
+    // The one writer of `notifications` rows (PAC-154). Every channel is a
+    // later step of the same function.
+    DeliverNotificationFn,
+    // Mails one stored row when the catalog says so (PAC-154 PR3). Reads
+    // `Notification`, `User` and `Agency`, all registered above.
+    SendNotificationEmailFn,
     // Declared here as well as in `CrmModule`: the standalone worker does not
     // import `AppModule`, so without these it would boot and then fail to
     // resolve them on the first renewal tick. Same reasoning as the explicit
@@ -199,6 +290,10 @@ import {
     MailerCampaignOutputEmailFn,
     IssueCertificateFn,
     RenewCertificatesFn,
+    // Data Export (PAC-152): produce a requested file into object storage and
+    // email the requester; delete files past retention.
+    DataExportGenerateFn,
+    DataExportExpireFn,
   ],
 })
 export class WorkerModule {}

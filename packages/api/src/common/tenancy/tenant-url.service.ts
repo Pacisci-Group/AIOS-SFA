@@ -50,8 +50,26 @@ export class TenantUrlService {
    * browser to this origin, so a dead scheme is a dead feature in dev.
    */
   async baseUrlFor(agencyId: string | null | undefined): Promise<string> {
+    return (await this.agencyBaseUrlFor(agencyId)) ?? this.platformBaseUrl();
+  }
+
+  /**
+   * The agency's **own** origin, or `null` when it has no active domain — the
+   * same answer as {@link baseUrlFor} minus the platform fallback.
+   *
+   * For a *link* the fallback is right: the user is served on the platform
+   * host, so that is where the link must land. For an *asset* it is wrong:
+   * `GET /public/tenant/logo` resolves the agency from its `Host`, so on the
+   * platform host it 404s, and a logo URL built there is a broken image in
+   * every email the agency sends until it verifies a domain. Callers that
+   * build asset URLs ask this and treat `null` as "no logo" — see
+   * `TenantBrandingService.emailBrandFor`.
+   */
+  async agencyBaseUrlFor(
+    agencyId: string | null | undefined,
+  ): Promise<string | null> {
     const hostname = await this.primaryHostFor(agencyId);
-    return hostname ? this.originFor(hostname) : this.platformBaseUrl();
+    return hostname ? this.originFor(hostname) : null;
   }
 
   /**

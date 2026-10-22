@@ -57,10 +57,9 @@ import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import {
   YmdRange,
-  chicagoDayStart,
-  chicagoParts,
-  fromYmd,
+  instantWindow,
   toYmd,
+  zonedDate,
 } from '../performance/performance.range';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import {
@@ -76,7 +75,9 @@ import type {
   ManagementAlertListQueryDto,
   ManagementDashboardQueryDto,
 } from './dto/management-dashboard-query.dto';
+import { buildScopeFilter } from '../common/access/scope-filter';
 import {
+  AUDIT_OWNER_FIELD,
   COUNT_STAGE,
   LATEST_QUOTE_LOOKUP,
   activePipelinePrefix,
@@ -86,8 +87,45 @@ import {
   overdueTicketsPrefix,
   pagedFacet,
   producerOpenAuditItems,
+  roleOwnedOpenAuditItems,
   stalledLeadsPrefix,
 } from './management-dashboard.pipelines';
+
+/**
+ * The clamp for open-audit backlogs: tenancy and branch as usual, with the
+ * person pinned on the audit's **responsible owner** (the pipelines compute it
+ * into {@link AUDIT_OWNER_FIELD}) rather than on who sold the deal. A producer
+ * who has left and had their work transferred carries no backlog; their
+ * successor carries it (PAC-136).
+ */
+function auditOwnerScope(
+  access: AccessContext,
+  branchId: string | null,
+  producerIds: readonly string[] | undefined,
+): Record<string, unknown> {
+  return buildScopeFilter(access, branchId, {
+    producerIds,
+    producerField: AUDIT_OWNER_FIELD,
+  });
+}
+
+/**
+ * `{ _owner: { $in: [...] } }` for a producer selection, or nothing without one.
+ * An all-malformed selection becomes `$in: []` and matches nothing, the same
+ * rule `buildScopeFilter` applies — a selection must never read as "none".
+ */
+function ownerPinFor(
+  producerIds: readonly string[] | undefined,
+): Record<string, unknown> | undefined {
+  if (!producerIds?.length) return undefined;
+  return {
+    [AUDIT_OWNER_FIELD]: {
+      $in: producerIds
+        .filter((id) => Types.ObjectId.isValid(id))
+        .map((id) => new Types.ObjectId(id)),
+    },
+  };
+}
 
 /** The role slug whose holders make up the Team Activity roster. */
 const PRODUCER_ROLE_SLUG = 'producer';
@@ -127,12 +165,14 @@ interface AgingDealLean {
   producerId?: Types.ObjectId;
   householdId?: Types.ObjectId;
   soldDate?: Date;
-  soldDateYmd?: number;
   _audit: {
     _id: Types.ObjectId;
     auditStatus?: string;
     openFailedCount?: number;
+    auditAssignee?: { type: string; id: Types.ObjectId } | null;
   }[];
+  /** Who is responsible for the audit — computed by `agingAuditsPrefix`. */
+  _owner?: Types.ObjectId | null;
 }
 
 interface OverdueTicketLean {
@@ -257,7 +297,7 @@ export class ManagementDashboardService {
     query: ManagementDashboardQueryDto,
   ): Promise<ManagementAlerts> {
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const [stalledLeads, agingAudits, overdueTickets] = await Promise.all([
       this.count(
@@ -283,7 +323,7 @@ export class ManagementDashboardService {
     query: ManagementAlertListQueryDto,
   ): Promise<ManagementAlertList<StalledLeadRow>> {
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const { total, items } = await this.page<StalledLeadLean>(
       this.leadModel,
@@ -325,24 +365,30 @@ export class ManagementDashboardService {
     query: ManagementAlertListQueryDto,
   ): Promise<ManagementAlertList<AgingAuditRow>> {
     const now = new Date();
-    const today = chicagoParts(now);
-    const { period, current } = resolvePeriod(query);
+    const today = zonedDate(now, access.timeZone);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const { total, items } = await this.page<AgingDealLean>(
       this.dealModel,
       this.agingPrefix(access, branchId, query, current, now),
       // Oldest sale first — the one that has been waiting longest.
-      { soldDateYmd: 1, _id: 1 },
+      { soldDate: 1, _id: 1 },
       query,
     );
 
+    const ownerOf = (deal: AgingDealLean): string => key(deal._owner);
     const names = await displayNamesFor(
       this.userModel,
-      [...new Set(items.map((deal) => key(deal.producerId)))].filter(Boolean),
+      [
+        ...new Set(
+          items.flatMap((deal) => [key(deal.producerId), ownerOf(deal)]),
+        ),
+      ].filter(Boolean),
     );
 
     return this.list(period, query, total, items, (deal) => {
       const audit = deal._audit[0];
+      const owner = ownerOf(deal);
       return {
         dealAuditId: audit._id.toString(),
         dealId: deal._id.toString(),
@@ -350,11 +396,16 @@ export class ManagementDashboardService {
         clientName: deal.clientName?.trim() || 'Unknown client',
         producerId: key(deal.producerId) || null,
         producerName: names.get(key(deal.producerId)) ?? null,
+        assigneeId: owner || null,
+        assigneeName: names.get(owner) ?? null,
         auditStatus: audit.auditStatus ?? 'Not Submitted',
         openFailedCount: audit.openFailedCount ?? 0,
         soldDate: iso(deal.soldDate),
-        businessDaysOpen: deal.soldDateYmd
-          ? businessDaysBetween(fromYmd(deal.soldDateYmd), today)
+        businessDaysOpen: deal.soldDate
+          ? businessDaysBetween(
+              zonedDate(deal.soldDate, access.timeZone),
+              today,
+            )
           : 0,
       };
     });
@@ -368,7 +419,7 @@ export class ManagementDashboardService {
     // `now` is for the row's `daysOverdue` only; the match reads the stored
     // status and needs no clock.
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const { total, items } = await this.page<OverdueTicketLean>(
       this.ticketModel,
@@ -403,14 +454,15 @@ export class ManagementDashboardService {
     branchId: string | null,
     query: ManagementDashboardQueryDto,
   ): Promise<TeamActivityResponse> {
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     // No producer multi-select here, by design: the table *is* the team.
-    const [sold, quoted, open, roster] = await Promise.all([
+    const [sold, quoted, open, roster, roleAssigned] = await Promise.all([
       this.householdsSoldBy(access, branchId, undefined, query, current),
       this.householdsQuotedBy(access, branchId, undefined, query, current),
       this.openItemsBy(access, branchId, undefined),
       this.roster(access, branchId),
+      this.roleOwnedOpenItems(access, branchId),
     ]);
 
     const ids = new Set<string>([
@@ -454,7 +506,12 @@ export class ManagementDashboardService {
         a.name.localeCompare(b.name),
     );
 
-    return { period, rows, totals: this.totalsOf(rows) };
+    return {
+      period,
+      rows,
+      totals: this.totalsOf(rows),
+      roleAssignedOpenAuditItems: roleAssigned,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -483,7 +540,7 @@ export class ManagementDashboardService {
     }
 
     const now = new Date();
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
     const pinned = [producerId];
 
     const [sold, quoted, open, pipeline, items] = await Promise.all([
@@ -495,6 +552,7 @@ export class ManagementDashboardService {
           salesScope<LeadDocument>(access, branchId, pinned),
           query,
           current,
+          access.timeZone,
         ),
         // Most recently worked first; `_id` keeps the order stable.
         { $sort: { lastActivityAt: -1, _id: -1 } },
@@ -504,7 +562,7 @@ export class ManagementDashboardService {
       this.dealAuditItemModel.aggregate<OpenItemLean>(
         producerOpenAuditItems(
           access.agencyId ?? '',
-          salesScope<DealDocument>(access, branchId, pinned),
+          auditOwnerScope(access, branchId, pinned),
         ),
       ),
     ]);
@@ -576,12 +634,15 @@ export class ManagementDashboardService {
       query,
       range,
       now,
+      access.timeZone,
     );
   }
 
   /**
-   * The business-day cutoff is folded into the sold-date window, so the
-   * predicate is a plain indexed range: aging ⇔ `soldDateYmd < cutoff`.
+   * The business-day cutoff is folded into the sold-date window — the range's
+   * `endYmd` becomes the cutoff day, and `soldMatch` turns that calendar range
+   * into instants — so the predicate stays a plain indexed range:
+   * aging ⇔ `soldDate < start of the cutoff day in the agency's zone`.
    */
   private agingPrefix(
     access: AccessContext,
@@ -591,15 +652,21 @@ export class ManagementDashboardService {
     now: Date,
   ): PipelineStage[] {
     const cutoffYmd = toYmd(
-      agingCutoff(chicagoParts(now), MANAGEMENT_AUDIT_SLA_BUSINESS_DAYS),
+      agingCutoff(
+        zonedDate(now, access.timeZone),
+        MANAGEMENT_AUDIT_SLA_BUSINESS_DAYS,
+      ),
     );
     const aged: YmdRange = {
       ...range,
       endYmd: Math.min(range.endYmd, cutoffYmd),
     };
+    // The producer filter is applied to the audit's responsible owner inside
+    // the pipeline, so the deal match carries none — see `agingAuditsPrefix`.
     return agingAuditsPrefix(
-      soldMatch(access, branchId, query.producerIds, aged),
+      soldMatch(access, branchId, undefined, aged),
       query,
+      ownerPinFor(query.producerIds),
     );
   }
 
@@ -609,13 +676,13 @@ export class ManagementDashboardService {
     query: ManagementDashboardQueryDto,
     range: YmdRange,
   ): PipelineStage[] {
-    // `openedAt` is a real instant, so the Chicago calendar window has to be
+    // `openedAt` is a real instant, so the agency's calendar window has to be
     // turned into two instants; `endYmd` is exclusive already.
-    const window = {
-      from: chicagoDayStart(fromYmd(range.startYmd)),
-      to: chicagoDayStart(fromYmd(range.endYmd)),
-    };
-    return overdueTicketsPrefix(ticketTenantFilter(access), query, window);
+    const { $gte: from, $lt: to } = instantWindow(range, access.timeZone);
+    return overdueTicketsPrefix(ticketTenantFilter(access), query, {
+      from,
+      to,
+    });
   }
 
   private async householdsSoldBy(
@@ -667,10 +734,29 @@ export class ManagementDashboardService {
     const rows = await this.dealAuditModel.aggregate<KeyedOpenItems>(
       openAuditItemsByProducer(
         access.agencyId ?? '',
-        salesScope<DealDocument>(access, branchId, producerIds),
+        auditOwnerScope(access, branchId, producerIds),
       ),
     );
     return new Map(rows.map((row) => [key(row._id), row.openAuditItems]));
+  }
+
+  /** Open audit items on role-owned audits — see `roleAssignedOpenAuditItems`. */
+  private async roleOwnedOpenItems(
+    access: AccessContext,
+    branchId: string | null,
+  ): Promise<number> {
+    const [row] = await this.dealAuditModel.aggregate<{
+      openAuditItems: number;
+    }>(
+      roleOwnedOpenAuditItems(
+        access.agencyId ?? '',
+        // Tenancy and branch only. An own-scoped caller's pin lands on a
+        // field audits do not have and matches nothing — a role's queue is
+        // nobody's *own* backlog.
+        buildScopeFilter(access, branchId),
+      ),
+    );
+    return row?.openAuditItems ?? 0;
   }
 
   // ---------------------------------------------------------------------------

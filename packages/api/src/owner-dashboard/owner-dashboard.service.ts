@@ -1,10 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import {
+  PRODUCER_NONE,
+  QUOTE_BACKLOG_DAYS,
+  normalizeLeadStatus,
+} from '@sfa/shared';
 import type {
   AccessContext,
   OwnerDashboardSummary,
   OwnerLeadSourceRow,
   OwnerLeadSourcesResponse,
+  OwnerOpenQuotesResponse,
+  OwnerProducerQuotesResponse,
+  OwnerProducerQuotesRow,
   OwnerProducerRow,
   OwnerProducersResponse,
 } from '@sfa/shared';
@@ -16,22 +24,52 @@ import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { avgPerHousehold } from '../performance/performance.normalize';
-import { YmdRange } from '../performance/performance.range';
+import {
+  YmdRange,
+  addDays,
+  customRange,
+  instantWindow,
+  parseIsoDate,
+  toIsoDate,
+} from '../performance/performance.range';
+import { businessDaysDiff } from '../common/dates/business-dates';
+import {
+  loadConversionDeals,
+  resolveQuoteConversions,
+} from '../common/sales-metrics/quote-conversion';
 import {
   QuoteRecap,
   QuoteRecapDocument,
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { OwnerDashboardQueryDto } from './dto/owner-dashboard-query.dto';
+import type {
+  OwnerDashboardQueryDto,
+  OwnerOpenQuotesQueryDto,
+} from './dto/owner-dashboard-query.dto';
 import {
   closingPct,
+  round1,
   roundCents,
+  toBlendedClosingRatio,
   toClosingRatio,
   toLobMix,
+  toQuoteClosingRatio,
   toTrend,
+  toUnsoldQuotesClosed,
 } from './owner-dashboard.normalize';
 import {
-  LEAD_CREATED_YMD_EXPR,
+  type CohortLead,
+  type CohortQuote,
+  type Conversions,
+  EMPTY_COUNTS,
+  backlogStats,
+  clientNameOf,
+  outcomeOf,
+  producerQuoteCounts,
+  productsOf,
+} from './quote-cohort';
+import {
+  leadCreatedYmdExpr,
   QUOTED_LINES,
   SOLD_LINES,
   linesPrefix,
@@ -85,7 +123,26 @@ const EMPTY_SOLD: SoldWindow = {
   lob: [],
 };
 
-const key = (id: GroupKey): string => (id ? id.toString() : '');
+const key = (id: GroupKey | undefined): string => (id ? id.toString() : '');
+
+/**
+ * The quotes written in the `QUOTE_BACKLOG_DAYS` before `range` starts — the
+ * span the "Unsold quotes closed" card looks back over.
+ */
+function backlogSpan(range: YmdRange): YmdRange {
+  const start = parseIsoDate(range.from);
+  return customRange(
+    toIsoDate(addDays(start, -QUOTE_BACKLOG_DAYS)),
+    toIsoDate(addDays(start, -1)),
+  );
+}
+
+/** One copy of each quote, for a request that reads overlapping cohorts. */
+function uniqueQuotes(...cohorts: CohortQuote[][]): CohortQuote[] {
+  const out = new Map<string, CohortQuote>();
+  for (const quote of cohorts.flat()) out.set(key(quote._id), quote);
+  return [...out.values()];
+}
 
 /**
  * The Owner View dashboard — "Strategy Hub" (PAC-135).
@@ -105,7 +162,7 @@ const key = (id: GroupKey): string => (id ? id.toString() : '');
  * ## Live
  *
  * No rollup collection and no job. An agency-year is a few thousand rows behind
- * `{ agencyId, soldDateYmd }`; and distinct households are not additive across
+ * `{ agencyId, soldDate }`; and distinct households are not additive across
  * days, so there is nothing a rollup could pre-compute that survives an
  * arbitrary range plus three multi-select filters.
  */
@@ -126,14 +183,42 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerDashboardSummary> {
-    const { period, current, previous } = resolvePeriod(query);
+    const { period, current, previous } = resolvePeriod(query, access.timeZone);
 
-    const [sold, quoted, priorSold, priorQuoted] = await Promise.all([
+    const [
+      sold,
+      quoted,
+      priorSold,
+      priorQuoted,
+      cohort,
+      priorCohort,
+      backlog,
+      priorBacklog,
+    ] = await Promise.all([
       this.soldWindow(access, branchId, query, current),
       this.quotedWindow(access, branchId, query, current),
       this.soldWindow(access, branchId, query, previous),
       this.quotedWindow(access, branchId, query, previous),
+      this.quoteCohort(access, branchId, query, current),
+      this.quoteCohort(access, branchId, query, previous),
+      this.quoteCohort(access, branchId, query, backlogSpan(current)),
+      this.quoteCohort(access, branchId, query, backlogSpan(previous)),
     ]);
+
+    // One conversion pass over every quote the card row reads; lead statuses
+    // only for the backlog, the one place "lost" enters a summary figure.
+    const backlogQuotes = uniqueQuotes(backlog, priorBacklog);
+    const [conversions, leads] = await Promise.all([
+      this.conversionsFor(
+        access,
+        uniqueQuotes(cohort, priorCohort, backlogQuotes),
+      ),
+      this.leadsFor(access, backlogQuotes),
+    ]);
+    const quoteSide = (quotes: CohortQuote[]) => ({
+      written: quotes.length,
+      sold: quotes.filter((q) => conversions.has(key(q._id))).length,
+    });
 
     // "Was there anything to compare with?" is asked of the window's sales.
     const hasPrior = priorSold.recordCount > 0;
@@ -151,21 +236,38 @@ export class OwnerDashboardService {
         avgPerHousehold(priorSold.premium, priorSold.householdCount),
         hasPrior,
       ),
-      closingRatio: toClosingRatio(
-        {
-          soldPremium: sold.premium,
-          quotedPremium: quoted.premium,
-          quoteCount: quoted.recordCount,
-          soldCount: sold.recordCount,
-        },
-        {
-          soldPremium: priorSold.premium,
-          quotedPremium: priorQuoted.premium,
-          quoteCount: priorQuoted.recordCount,
-          soldCount: priorSold.recordCount,
-        },
+      closingRatio: toBlendedClosingRatio(
+        toClosingRatio(
+          {
+            soldPremium: sold.premium,
+            quotedPremium: quoted.premium,
+            quoteCount: quoted.recordCount,
+            soldCount: sold.recordCount,
+          },
+          {
+            soldPremium: priorSold.premium,
+            quotedPremium: priorQuoted.premium,
+            quoteCount: priorQuoted.recordCount,
+            soldCount: priorSold.recordCount,
+          },
+        ),
+        toQuoteClosingRatio(quoteSide(cohort), quoteSide(priorCohort)),
       ),
       lobMix: toLobMix(sold.lob),
+      unsoldQuotesClosed: toUnsoldQuotesClosed(
+        backlogStats(
+          backlog,
+          conversions,
+          leads,
+          instantWindow(current, access.timeZone),
+        ),
+        backlogStats(
+          priorBacklog,
+          conversions,
+          leads,
+          instantWindow(previous, access.timeZone),
+        ),
+      ),
     };
   }
 
@@ -175,7 +277,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerProducersResponse> {
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const [sold, quoted] = await Promise.all([
       this.soldBy(access, branchId, query, current, '$producerId', false),
@@ -233,7 +335,7 @@ export class OwnerDashboardService {
     branchId: string | null,
     query: OwnerDashboardQueryDto,
   ): Promise<OwnerLeadSourcesResponse> {
-    const { period, current } = resolvePeriod(query);
+    const { period, current } = resolvePeriod(query, access.timeZone);
 
     const [sold, quoted, volume, labels] = await Promise.all([
       this.soldBy(access, branchId, query, current, '$sourceId', true),
@@ -307,6 +409,233 @@ export class OwnerDashboardService {
         convGap: total.gap,
       },
     };
+  }
+
+  /**
+   * Quotes by producer: written, sold, open and lost, with the open premium —
+   * the card David asked for under the tables (15 Oct 2026).
+   *
+   * Same cohort as the summary's quote closing ratio and the leaderboard's
+   * Quotes written column, so `totals.written` equals both under any filter.
+   */
+  async producerQuotes(
+    access: AccessContext,
+    branchId: string | null,
+    query: OwnerDashboardQueryDto,
+  ): Promise<OwnerProducerQuotesResponse> {
+    const { period, current } = resolvePeriod(query, access.timeZone);
+    const cohort = await this.quoteCohort(access, branchId, query, current);
+    const [conversions, leads] = await Promise.all([
+      this.conversionsFor(access, cohort),
+      this.leadsFor(access, cohort),
+    ]);
+
+    const counts = producerQuoteCounts(cohort, conversions, leads);
+    const names = await displayNamesFor(
+      this.userModel,
+      [...counts.keys()].filter(Boolean),
+    );
+
+    const rows: OwnerProducerQuotesRow[] = [...counts.entries()].map(
+      ([id, row]) => {
+        const name = id ? (names.get(id) ?? 'Unknown Producer') : 'Unassigned';
+        return {
+          producerId: id || null,
+          name,
+          initials: initialsFrom(id ? name : ''),
+          ...row,
+          openPremium: roundCents(row.openPremium),
+          closePct: closePct(row.sold, row.written),
+        };
+      },
+    );
+
+    // Most open quotes first — the card exists to show uncaptured revenue —
+    // then most written, then name; "Unassigned" always last.
+    rows.sort(
+      (a, b) =>
+        Number(a.producerId === null) - Number(b.producerId === null) ||
+        b.open - a.open ||
+        b.written - a.written ||
+        a.name.localeCompare(b.name),
+    );
+
+    const totals = rows.reduce(
+      (sum, row) => ({
+        written: sum.written + row.written,
+        sold: sum.sold + row.sold,
+        open: sum.open + row.open,
+        lost: sum.lost + row.lost,
+        openPremium: sum.openPremium + row.openPremium,
+      }),
+      { ...EMPTY_COUNTS },
+    );
+
+    return {
+      period,
+      rows,
+      totals: {
+        ...totals,
+        openPremium: roundCents(totals.openPremium),
+        closePct: closePct(totals.sold, totals.written),
+      },
+    };
+  }
+
+  /**
+   * One producer's open quotes for the window, newest first, paged — the
+   * drawer the Quotes by producer card opens.
+   *
+   * Paged in Node, not with `$skip`/`$limit`: whether a quote is open depends
+   * on its conversion and its lead's status, both resolved here after the read,
+   * so a database page would be a page of the wrong set. A window holds
+   * hundreds of quotes, not thousands.
+   *
+   * `producer` narrows within the caller's scope like the bar's multi-select;
+   * one outside it gets an empty page, the same answer as a producer with none.
+   */
+  async openQuotes(
+    access: AccessContext,
+    branchId: string | null,
+    query: OwnerOpenQuotesQueryDto,
+  ): Promise<OwnerOpenQuotesResponse> {
+    const { period, current } = resolvePeriod(query, access.timeZone);
+    const none = query.producer === PRODUCER_NONE;
+    const pinned =
+      query.producer && !none ? [query.producer] : query.producerIds;
+
+    const cohort = await this.quoteCohort(
+      access,
+      branchId,
+      { ...query, producerIds: pinned },
+      current,
+      // `null` matches a missing field too: "no producer" either way.
+      none ? { producerId: null } : undefined,
+    );
+    const [conversions, leads, names] = await Promise.all([
+      this.conversionsFor(access, cohort),
+      this.leadsFor(access, cohort),
+      query.producer && !none
+        ? displayNamesFor(this.userModel, [query.producer])
+        : Promise.resolve(new Map<string, string>()),
+    ]);
+
+    const open = cohort
+      .filter((quote) => outcomeOf(quote, conversions, leads) === 'open')
+      .sort(
+        (a, b) =>
+          b.quoteDate.getTime() - a.quoteDate.getTime() ||
+          key(b._id).localeCompare(key(a._id)),
+      );
+
+    const now = new Date();
+    const start = (query.page - 1) * query.pageSize;
+    const name = none
+      ? 'Unassigned'
+      : query.producer
+        ? (names.get(query.producer) ?? 'Unknown Producer')
+        : 'All producers';
+
+    return {
+      period,
+      producer: {
+        producerId: none ? null : (query.producer ?? null),
+        name,
+        initials: initialsFrom(none ? '' : name),
+      },
+      page: query.page,
+      pageSize: query.pageSize,
+      total: open.length,
+      totalPages: Math.ceil(open.length / query.pageSize),
+      items: open.slice(start, start + query.pageSize).map((quote) => {
+        const lead = leads.get(key(quote.leadId));
+        return {
+          quoteRecapId: key(quote._id),
+          leadId: key(quote.leadId) || null,
+          householdId: key(quote.householdId) || null,
+          clientName: clientNameOf(lead),
+          quoteDate: quote.quoteDate.toISOString(),
+          productsQuoted: productsOf(quote),
+          quotedPremium: roundCents(quote.linePremium ?? 0),
+          leadStatus: normalizeLeadStatus(lead?.status),
+          daysOpen: Math.max(
+            0,
+            businessDaysDiff(quote.quoteDate, now, access.timeZone),
+          ),
+        };
+      }),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Quotes
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The quote recaps written in `range`, exactly the rows the leaderboard's
+   * Quotes written column counts (`quotedBy` over the same prefix), trimmed to
+   * what the quote figures read. `extraMatch` narrows after the prefix.
+   */
+  private quoteCohort(
+    access: AccessContext,
+    branchId: string | null,
+    query: OwnerDashboardQueryDto,
+    range: YmdRange,
+    extraMatch?: Record<string, unknown>,
+  ): Promise<CohortQuote[]> {
+    return this.quoteRecapModel.aggregate<CohortQuote>([
+      ...linesPrefix(
+        quotedMatch(access, branchId, query.producerIds, range),
+        QUOTED_LINES,
+        query,
+        false,
+      ),
+      ...(extraMatch ? [{ $match: extraMatch }] : []),
+      {
+        $project: {
+          producerId: 1,
+          leadId: 1,
+          householdId: 1,
+          quoteDate: 1,
+          linePremium: 1,
+          productsQuoted: 1,
+          'policies.policyType': 1,
+        },
+      },
+    ]);
+  }
+
+  /** Each quote's sale, by the one quote-to-sale rule. */
+  private async conversionsFor(
+    access: AccessContext,
+    quotes: readonly CohortQuote[],
+  ): Promise<Conversions> {
+    if (!quotes.length) return new Map();
+    const deals = await loadConversionDeals(
+      { deal: this.dealModel, quoteRecap: this.quoteRecapModel },
+      access.agencyId ?? '',
+      quotes,
+    );
+    return resolveQuoteConversions(quotes, deals, access.timeZone);
+  }
+
+  /** The quotes' leads — name and current status — by id. */
+  private async leadsFor(
+    access: AccessContext,
+    quotes: readonly CohortQuote[],
+  ): Promise<Map<string, CohortLead>> {
+    const ids = [...new Set(quotes.map((q) => key(q.leadId)).filter(Boolean))];
+    if (!ids.length) return new Map();
+    const rows = await this.leadModel
+      .find(
+        {
+          agencyId: access.agencyId,
+          _id: { $in: ids.map((id) => new Types.ObjectId(id)) },
+        },
+        { firstName: 1, lastName: 1, status: 1 },
+      )
+      .lean<CohortLead[]>();
+    return new Map(rows.map((row) => [key(row._id), row]));
   }
 
   // ---------------------------------------------------------------------------
@@ -467,7 +796,7 @@ export class OwnerDashboardService {
     }>([
       { $match: salesScope<LeadDocument>(access, branchId, query.producerIds) },
       ...sourceMatch(query.leadSourceIds, 'leadSourceId'),
-      { $addFields: { createdYmd: LEAD_CREATED_YMD_EXPR } },
+      { $addFields: { createdYmd: leadCreatedYmdExpr(access.timeZone) } },
       { $match: ymdWindow('createdYmd', range) },
       {
         $group: {
@@ -478,4 +807,9 @@ export class OwnerDashboardService {
     ]);
     return new Map(rows.map((row) => [key(row._id), row.count]));
   }
+}
+
+/** `sold ÷ written × 100`, or `null` when nothing was written. */
+function closePct(sold: number, written: number): number | null {
+  return written > 0 ? round1((sold / written) * 100) : null;
 }

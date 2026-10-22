@@ -5,8 +5,8 @@ import {
   NotFoundException,
   Param,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../common/decorators/access.decorators';
+import { SkipAllThrottlers } from '../common/decorators/throttle.decorators';
 import { AcmeChallengeService } from './acme-challenge.service';
 
 /**
@@ -33,13 +33,15 @@ import { AcmeChallengeService } from './acme-challenge.service';
  *    arrives on a hostname that resolves to no tenant yet. `HostTenantGuard`
  *    404s unknown hosts for exactly the right reasons; a challenge for a domain
  *    being verified for the first time is the one case that must get past it.
- * 2. **`@SkipThrottle()`** — `TrustedProxyThrottlerGuard` runs first and
+ * 2. **`@SkipAllThrottlers()`** — `TrustedProxyThrottlerGuard` runs first and
  *    globally. Behind a TLS-passthrough load balancer, before PROXY protocol is
  *    wired through, every caller shares one bucket — and a throttled validation
  *    request means no certificate, for everyone, until someone works out why.
  *    The surface being skipped is a single indexed lookup returning one short
  *    string, with no write and nothing enumerable: guessing a token is guessing
- *    128 bits.
+ *    128 bits. Not the bare `@SkipThrottle()` it first carried: our throttlers
+ *    are named, and the bare form targets one called `default`, so it skipped
+ *    nothing (found in the PAC-154 PR2 review; see `THROTTLER_NAMES`).
  * 3. **Excluded from the global `api/v1` prefix** (see `main.ts`). RFC 8555
  *    fixes this path at the root; there is no version of it that lives under an
  *    API prefix.
@@ -68,7 +70,7 @@ export class AcmeChallengeController {
    * challenge on our account.
    */
   @Public()
-  @SkipThrottle()
+  @SkipAllThrottlers()
   @Get(':token')
   @Header('Content-Type', 'text/plain')
   async respond(@Param('token') token: string): Promise<string> {

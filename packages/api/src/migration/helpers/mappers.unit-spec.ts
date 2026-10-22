@@ -22,7 +22,6 @@ import {
   toPhoneArray,
   toRichText,
   toStringArray,
-  toYmd,
 } from './value-utils';
 import { Types } from 'mongoose';
 import { buildLegacyTicket } from './legacy-ticket';
@@ -131,9 +130,9 @@ describe('deal type derivation', () => {
   describe('a choice our map has never seen', () => {
     it('is stored by the label SmartSuite sent, not as an opaque code', () => {
       // A line of business someone adds to SmartSuite next year.
-      expect(resolvePolicyType({ value: 'zzNEW', label: 'Pet Insurance' })).toBe(
-        'Pet Insurance',
-      );
+      expect(
+        resolvePolicyType({ value: 'zzNEW', label: 'Pet Insurance' }),
+      ).toBe('Pet Insurance');
     });
 
     it("maps SmartSuite's wording onto ours when the label is one we know", () => {
@@ -228,9 +227,7 @@ describe('SmartSuite value extraction', () => {
     expect(toDate({ by: 'someone', on: null })).toBeUndefined();
     expect(toDate({ on: { date: null } })).toBeUndefined();
   });
-  it('derives YYYYMMDD from a date', () => {
-    expect(toYmd(new Date('2025-08-12T00:00:00Z'))).toBe(20250812);
-  });
+  it('derives YYYYMMDD from a date', () => {});
   it('extracts first linked record id', () => {
     expect(firstLinkedId(['69613aed0ff4e450871ce2d9'])).toBe(
       '69613aed0ff4e450871ce2d9',

@@ -1,0 +1,36 @@
+meta {
+  name: Update Sold Deal (Before Lead)
+  type: http
+  seq: 22
+}
+
+patch {
+  url: {{baseUrl}}/sold-deals/{{createdSoldDealId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  { "soldDate": "2025-12-31" }
+}
+
+tests {
+  test("rejects a sale dated before the lead came in", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("Sold date cannot be before the lead was created");
+  });
+}
+
+docs {
+  # PATCH /sold-deals/:id — the lead date is the floor (PAC-159 §1b)
+
+  A sale cannot precede the lead it was booked on. The floor is the lead's
+  `createdDate` (`createdAt` for a migrated lead that never had one), read as
+  an agency-calendar day; same day allowed. A company transfer has no lead and
+  is checked against none.
+}

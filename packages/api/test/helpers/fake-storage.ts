@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { readFile } from 'fs/promises';
 import { Readable } from 'stream';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { StorageService } from '../../src/storage/storage.service';
@@ -37,12 +38,22 @@ export class FakeStorage {
     agencyId,
     purpose,
     filename,
+    parts = [],
+    unique = true,
   }: {
     agencyId: string;
     purpose: string;
     filename: string;
+    parts?: string[];
+    unique?: boolean;
   }): string {
-    return `agencies/${agencyId}/${purpose}/${randomUUID()}-${safe(filename)}`;
+    const name = unique ? `${randomUUID()}-${safe(filename)}` : safe(filename);
+    return [
+      `agencies/${agencyId}/${purpose}`,
+      String(new Date().getUTCFullYear()),
+      ...parts.map((part) => safe(part)).filter(Boolean),
+      name,
+    ].join('/');
   }
 
   assertKeyOwnership(
@@ -123,6 +134,12 @@ export class FakeStorage {
   putObject(key: string, body: Buffer, contentType: string) {
     this.objects.set(key, { body, contentType });
     return Promise.resolve({ key, size: body.byteLength });
+  }
+
+  async putObjectFromFile(key: string, path: string, contentType: string) {
+    const body = await readFile(path);
+    this.objects.set(key, { body, contentType });
+    return { key, size: body.byteLength };
   }
 
   statObject(key: string) {

@@ -1,0 +1,281 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  type MessageEvent,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Sse,
+} from '@nestjs/common';
+import type {
+  AccessContext,
+  JwtPayload,
+  MarkAllNotificationsReadResponse,
+  NotificationListResponse,
+  NotificationRecord,
+  PushSubscriptionResponse,
+  UnreadCountResponse,
+} from '@sfa/shared';
+import {
+  interval,
+  map,
+  merge,
+  type Observable,
+  of,
+  takeUntil,
+  timer,
+} from 'rxjs';
+import {
+  SkipBranch,
+  SkipModule,
+  SkipTenant,
+} from '../common/decorators/access.decorators';
+import { SkipAllThrottlers } from '../common/decorators/throttle.decorators';
+import { Access, CurrentUser } from '../common/decorators/user.decorators';
+import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import {
+  listNotificationsSchema,
+  type ListNotificationsDto,
+} from './dto/notifications.dto';
+import {
+  pushSubscriptionSchema,
+  removePushSubscriptionSchema,
+  type PushSubscriptionDto,
+  type RemovePushSubscriptionDto,
+} from './dto/push-subscriptions.dto';
+import { NotificationsService } from './notifications.service';
+import { PushSubscriptionsService } from './push-subscriptions.service';
+import {
+  MAX_STREAMS_PER_USER,
+  NotificationStreamRegistry,
+} from './stream/notification-stream.registry';
+
+/**
+ * How often the stream sends a `ping` while nothing happens. Load-bearing:
+ * the DigitalOcean balancer and the edge both drop a connection that stays
+ * silent past their idle timeout (60 s is the common default), and a dropped
+ * stream is a reconnect, a refetch, and a gap. 25 s clears every hop with
+ * room to spare.
+ */
+export const STREAM_PING_MS = 25_000;
+
+/** What the client should wait before reconnecting after a close. */
+const STREAM_RETRY_MS = 3_000;
+
+/**
+ * Closed this long before the token's `exp`, so the server ends the stream
+ * cleanly and the client reconnects with a refreshed token — rather than the
+ * JWT guard refusing the reconnect of a token that expired mid-flight.
+ */
+const STREAM_EXP_MARGIN_MS = 1_000;
+
+/**
+ * The longest a stream may live when the token carries no `exp` at all.
+ * `JWT_ACCESS_EXPIRES` defaults to 15 minutes in both signers, so every token
+ * we mint has one and this is a backstop, not a path: without it a token with
+ * no expiry would hold a stream open for the life of the connection, and
+ * `tokenVersion` is only checked at connect (PR2 review).
+ */
+const STREAM_MAX_MS = 15 * 60_000;
+
+/**
+ * The caller's own notifications (PAC-154).
+ *
+ * ## The guard stack, and why it is this permissive
+ *
+ * Authenticated, and nothing more — the same shape as `bug-reports`. No
+ * `@RequirePermissions` (a notification is addressed to you, ticket decision
+ * 8); `@SkipModule()` because it is not a feature of any module; `@SkipTenant()`
+ * and `@SkipBranch()` because a platform admin — who has neither — is a
+ * recipient the day a bug report is filed. Identity is `request.access.userId`,
+ * resolved from the database on every request; nothing here is client-supplied.
+ *
+ * Impersonation is deliberately not special-cased: the resolved context *is*
+ * the impersonated user's, so an operator sees and marks exactly what they
+ * would (ticket decision 6).
+ */
+@Controller('notifications')
+@SkipTenant()
+@SkipBranch()
+@SkipModule()
+export class NotificationsController {
+  constructor(
+    private readonly service: NotificationsService,
+    private readonly registry: NotificationStreamRegistry,
+    private readonly pushSubscriptions: PushSubscriptionsService,
+  ) {}
+
+  /**
+   * The live stream (PAC-154, decision 3): one Server-Sent Events connection
+   * per tab, carrying every notification addressed to the caller as it is
+   * written.
+   *
+   * ## Frames
+   *
+   * - `ready` — the first frame, sent at once. Nest commits the response
+   *   headers lazily on the first message; without this a quiet user would
+   *   sit on an uncommitted response that a proxy may hold indefinitely. The
+   *   client treats every open as a reason to refetch the count and the list,
+   *   which is what makes the lossy bus behind this acceptable.
+   * - `ping` — every {@link STREAM_PING_MS}. A named event rather than an SSE
+   *   comment because Nest's `MessageEvent` cannot emit a bare `: ping`; the
+   *   effect on idle timeouts is the same, and the client ignores it.
+   * - `notification` — the stored row, re-read by id after the worker's
+   *   nudge. `id:` is the row id. The registry reads it once per recipient
+   *   and hands the same record to every tab; a nudge for a row that is not
+   *   the caller's is dropped there.
+   *
+   * ## Authentication, and why it is checked once
+   *
+   * Every global guard runs, at connect: a Bearer header from the
+   * fetch-based client (native `EventSource` cannot set one, and a token in
+   * the URL would land in every proxy log). Nothing re-checks `tokenVersion`
+   * mid-stream; instead the stream ends itself at the token's `exp` — 15
+   * minutes at most — and the client reconnects with a refreshed token. A
+   * password reset therefore stops the old session's stream within one token
+   * lifetime, which is the same bound every other request already lives under
+   * between refreshes. A token with no `exp` gets {@link STREAM_MAX_MS}.
+   *
+   * ## Bounded per user
+   *
+   * The throttlers are skipped (below), so the only limit on open streams is
+   * {@link MAX_STREAMS_PER_USER} per node, enforced here as a plain `429`
+   * before the observable exists — the headers are not committed until the
+   * first frame, so this is an ordinary error response the client backs off
+   * from and retries.
+   *
+   * ## What is deliberately not here
+   *
+   * `@Header('Cache-Control')` / `@Header('X-Accel-Buffering')`: Nest's
+   * `SseStream` writes both (plus `no-transform` and `Connection: keep-alive`)
+   * when it commits the headers, and `writeHead` would override a decorator's
+   * value anyway.
+   *
+   * ## Why `SkipAllThrottlers()` and not `@SkipThrottle()`
+   *
+   * A stream is one request held open, and a reconnect wave after a deploy —
+   * every tab in an office, through one NAT, reconnecting within seconds —
+   * must not 429 the badge. The bare `@SkipThrottle()` this first shipped with
+   * did not achieve that: it targets a throttler named `default`, and ours are
+   * named, so the stream stayed under the same per-IP budget as every other
+   * call. See `THROTTLER_NAMES`.
+   */
+  @Sse('stream')
+  @SkipAllThrottlers()
+  stream(
+    @Access() access: AccessContext,
+    @CurrentUser() user: JwtPayload,
+  ): Observable<MessageEvent> {
+    if (!this.registry.canOpen(access.userId)) {
+      throw new HttpException(
+        `Too many open notification streams (limit ${MAX_STREAMS_PER_USER}); close a tab and retry.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const untilExp =
+      user.exp !== undefined
+        ? Math.min(
+            STREAM_MAX_MS,
+            Math.max(0, user.exp * 1000 - Date.now() - STREAM_EXP_MARGIN_MS),
+          )
+        : STREAM_MAX_MS;
+
+    const ready$ = of<MessageEvent>({
+      type: 'ready',
+      data: '',
+      retry: STREAM_RETRY_MS,
+    });
+    const ping$ = interval(STREAM_PING_MS).pipe(
+      map((): MessageEvent => ({ type: 'ping', data: '' })),
+    );
+    const rows$ = this.registry.open(access.userId).pipe(
+      map((row): MessageEvent => ({
+        type: 'notification',
+        id: row.id,
+        data: row,
+      })),
+    );
+
+    // Completing the observable is how Nest ends the response; `finalize` in
+    // the registry then drops this stream from the map. Two reasons to
+    // complete: the token's `exp`, and the module shutting down — `ping$`
+    // never completes on its own, so without the second `app.close()` would
+    // wait for every open token to expire.
+    return merge(ready$, ping$, rows$).pipe(
+      takeUntil(timer(untilExp)),
+      takeUntil(this.registry.closed$),
+    );
+  }
+
+  @Get()
+  list(
+    @Access() access: AccessContext,
+    @Query(new ZodValidationPipe(listNotificationsSchema))
+    query: ListNotificationsDto,
+  ): Promise<NotificationListResponse> {
+    return this.service.list(access.userId, query);
+  }
+
+  @Get('unread-count')
+  unreadCount(@Access() access: AccessContext): Promise<UnreadCountResponse> {
+    return this.service.unreadCount(access.userId);
+  }
+
+  @Patch(':id/read')
+  markRead(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+  ): Promise<NotificationRecord> {
+    return this.service.markRead(access.userId, id);
+  }
+
+  @Post('read-all')
+  @HttpCode(200)
+  markAllRead(
+    @Access() access: AccessContext,
+  ): Promise<MarkAllNotificationsReadResponse> {
+    return this.service.markAllRead(access.userId);
+  }
+
+  /**
+   * Register this browser for web push (PAC-154, PR4). `PUT`, because the
+   * body *is* the resource: the same endpoint sent twice is one row, and the
+   * second call refreshes it. A device that was soft-deleted after a 410 and
+   * subscribes again lands here with a new endpoint — or the same one, which
+   * the partial unique index admits.
+   */
+  @Put('push-subscriptions')
+  @HttpCode(200)
+  registerPushSubscription(
+    @Access() access: AccessContext,
+    @Body(new ZodValidationPipe(pushSubscriptionSchema))
+    body: PushSubscriptionDto,
+  ): Promise<PushSubscriptionResponse> {
+    return this.pushSubscriptions.upsert(access.userId, body);
+  }
+
+  /**
+   * Withdraw this browser's subscription. The endpoint is in the **body**, not
+   * the path: it is a long URL with `/` and `%` in it, and nginx's
+   * `proxy_pass` with a URI part re-normalises encoded slashes — the path
+   * form would arrive mangled behind the production proxy. Somebody else's
+   * endpoint is a 404.
+   */
+  @Delete('push-subscriptions')
+  @HttpCode(204)
+  async removePushSubscription(
+    @Access() access: AccessContext,
+    @Body(new ZodValidationPipe(removePushSubscriptionSchema))
+    body: RemovePushSubscriptionDto,
+  ): Promise<void> {
+    await this.pushSubscriptions.remove(access.userId, body);
+  }
+}

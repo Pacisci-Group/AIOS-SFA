@@ -50,6 +50,43 @@ export function userStatus(user: AgencyUser): UserStatus {
 export interface ReleasedWork {
   ticketsUnassigned: number;
   rotationsDeactivated: number;
+  onboardingsUnassigned: number;
+  renewalCyclesUnassigned: number;
+  householdsUnassigned: number;
+  leadsUnassigned: number;
+}
+
+/**
+ * How much of a person's open work a transfer moves (PAC-136). Mirrors
+ * `WorkTransferCounts` in `packages/api/src/users/work-transfer.service.ts`.
+ */
+export interface WorkTransferCounts {
+  tickets: number;
+  onboardings: number;
+  renewalCycles: number;
+  households: number;
+  deals: number;
+  leads: number;
+  audits: number;
+  auditItems: number;
+  shareLinks: number;
+  rotationsTakenOver: number;
+  rotationsDeactivated: number;
+}
+
+export interface WorkTransferResult extends WorkTransferCounts {
+  fromUserId: string;
+  toUserId: string;
+  toName: string;
+}
+
+/** A removal's response: released to the queue, or handed to a successor. */
+export type RemovalResult = ReleasedWork | WorkTransferResult;
+
+export function isWorkTransfer(
+  result: RemovalResult,
+): result is WorkTransferResult {
+  return 'toUserId' in result;
 }
 
 export interface AgencyUserDetail extends AgencyUser {
@@ -263,8 +300,48 @@ export function revokeInvite(userId: string) {
  * name, and access is revoked on their very next request. Returns what was
  * released back to the unassigned queue.
  */
-export function deactivateUser(userId: string) {
-  return apiFetch<ReleasedWork>(`/users/${userId}`, { method: 'DELETE' });
+export function deactivateUser(userId: string, successorId?: string) {
+  return apiFetch<RemovalResult>(`/users/${userId}`, {
+    method: 'DELETE',
+    // With a successor the open work is handed to them instead (PAC-137),
+    // which also needs `agency:work_transfer:write`.
+    ...(successorId ? { body: JSON.stringify({ successorId }) } : {}),
+  });
+}
+
+/** What {@link deactivateUser} without a successor would release. */
+export function previewWorkRelease(userId: string) {
+  return apiFetch<ReleasedWork>(`/users/${userId}/work-release/preview`);
+}
+
+/**
+ * Who `userId`'s work may go to: active colleagues sharing one of their roles
+ * (a producer's book to a producer, a CSR's to a CSR). The transfer enforces
+ * the same rule, so the picker must read from here, not `/users/options`.
+ */
+export function listTransferCandidates(userId: string) {
+  return apiFetch<AgencyUserOption[]>(
+    `/users/${userId}/work-transfer/candidates`,
+  );
+}
+
+/** What handing `userId`'s open work to `toUserId` would move. Read-only. */
+export function previewWorkTransfer(userId: string, toUserId: string) {
+  const qs = new URLSearchParams({ toUserId });
+  return apiFetch<WorkTransferCounts>(
+    `/users/${userId}/work-transfer/preview?${qs.toString()}`,
+  );
+}
+
+/**
+ * Hand a person's open work to a colleague (PAC-136). Works for an active or
+ * an already-removed person; completed work stays credited to them.
+ */
+export function transferWork(userId: string, toUserId: string) {
+  return apiFetch<WorkTransferResult>(`/users/${userId}/work-transfer`, {
+    method: 'POST',
+    body: JSON.stringify({ toUserId }),
+  });
 }
 
 /** Restore a removed employee. Does not restore the work released on removal. */

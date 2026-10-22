@@ -910,6 +910,7 @@ that automatically when the base branch is deleted after merge).
 ### What David asked for (relayed by Asad, 25 Sep)
 - Statuses **Available / Busy / Away**; the sidebar menu shows the three names and **no sub-text**.
 - **Every active user of every role, the owner included, is set Away at 8 PM in the agency's timezone.**
+  (The hour is per agency since §17 / PAC-149 — `Agency.endOfDayHour`, default 8 PM.)
 - **No morning reset** — each person sets themself Available when they start work.
 - Agencies get a stored timezone, defaulted to Oklahoma / US Central.
 
@@ -921,19 +922,20 @@ that automatically when the base branch is deleted after merge).
   **`Agency.availabilitySweep { lastAwayDate, lastAwayAt }`** — the "done tonight" marker.
   Migration **`20260924233638-agency_timezone_backfill`** sets the default where missing.
 - **`common/dates/time-zones.ts`** (`DEFAULT_AGENCY_TIME_ZONE`, `isIanaTimeZone`, `localClock`) and
-  **`common/dates/end-of-day.ts`** (`END_OF_DAY_LOCAL_HOUR = 20`, `endOfDaySweepDate`). Both unit-tested,
-  DST and half-hour zones included.
+  **`common/dates/end-of-day.ts`** (~~`END_OF_DAY_LOCAL_HOUR = 20`~~ deleted in §17 — the hour is now a
+  required argument read off `Agency.endOfDayHour`; `endOfDaySweepDate`). Both unit-tested, DST and
+  half-hour zones included.
 - **`worker/functions/set-users-away.fn.ts`** — Inngest cron `*/30 * * * *` (UTC), `forEachAgency`,
-  per agency: local clock ≥ 20:00 and marker ≠ today's local date → **claim the marker with a
+  per agency: local clock ≥ its end-of-day hour (20:00 until §17) and marker ≠ today's local date → **claim the marker with a
   conditional `updateOne`, then `updateMany` users** (`isActive`, not platform admin, not already `away`).
   Claim-first is deliberate: a crash between the two skips a night rather than re-flipping someone who
   came back after 8 PM. e2e: `test/worker/set-users-away.e2e-spec.ts` (8 cases, fixture-scoped, all
   instants in 2025 so the marker it leaves on non-fixture agencies never blocks a real evening).
 
 ### Deliberately not done
-- **`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.** Rewiring the dashboards' Chicago
-  calendar onto `Agency.timezone` touches every date window in the app — its own ticket.
-- No timezone picker in the onboarding wizard or settings; the validator is there for when one lands.
+- ~~**`performance.range.ts`'s `AGENCY_TIME_ZONE` is still a constant.**~~ Done in §16 (PAC-141): the
+  constant is gone and every window is cut on `AccessContext.timeZone`.
+- ~~No timezone picker in the onboarding wizard or settings.~~ Done in §16 (PAC-141).
 - Not a `TZ=`-prefixed cron: that pins one zone for every tenant, which is what the field exists to avoid.
 
 ### Verified
@@ -942,3 +944,802 @@ unit 15/15 (2 new suites) · e2e `set-users-away` 8/8, `profile` + `management-d
 (52/52 across the three) · Bruno `Auth` + `Profile` + `Management Dashboard` + `Users` 38/39 — the one
 failure is `Get Alerts` "the demo seed guarantees something on every card", a stale dev seed, not this
 change. **Not done: the browser check of the sidebar menu** (needs a signed-in session).
+
+## 16. PAC-141 — agency timezone: editable, and the dashboards' calendar (handoff, 2026-10-05)
+
+One PR, branch `asad/pac-141-agency-timezone`, base `dev`. Plan file:
+`~/.claude/plans/linear-ticket-pac-141-ticket-deep-toucan.md`.
+
+### Decisions (Asad, 2 Oct) — do not re-litigate
+- **Settings home:** `/settings/agency` ("Agency" card on the hub) backed by **`GET/PATCH /agency/profile`**,
+  reusing **`agency:branding:read/write`** — same argument as `agency/setup`. No new permission string,
+  no `api:sync:roles`. `/settings/profile` is the *personal* profile; keep the names apart.
+  **Superseded by §17 (PAC-149):** the page and endpoint moved to their own `agency:settings:read/write`.
+- **Zone resolution:** a required **`AccessContext.timeZone`**, filled by `PermissionsService` from the
+  agency read it already does (validated fallback `DEFAULT_AGENCY_TIME_ZONE`). **Redis prefix bumped
+  `sfa:perm:v4:` → `v5:`.** `PATCH /agency/profile` invalidates the agency after the write.
+- **Away marker on a zone change:** re-stamped in the same `updateOne` so the next sweep is the next
+  8 PM on the new clock (`sweepMarkerAfterZoneChange`: tonight's date if ≥ 20:00 there, else `null`),
+  and only when the zone actually changes. Written up on `AgencyAvailabilitySweep`. (§17 renamed it
+  `sweepMarkerAfterScheduleChange` and extended the rule to an hour change.)
+- **A zone change is retroactive for everything but goals** (PAC-159 superseded the "half
+  retroactive" rule): sales, quotes and leads are instants bucketed on the agency calendar at read
+  time, so all three re-file on the next request; only `ProducerGoal.month` is a stored calendar key.
+  Said on `Agency.timezone` and in Bruno — deliberately **not** on the settings page (Asad: it
+  confused users). No re-derive job.
+
+### What exists now
+- `performance.range.ts`: `AGENCY_TIME_ZONE` **deleted**. `zonedDate(at, tz)`, `currentMonthIn(tz)`,
+  `recentMonthsIn(n, tz)`, `resolveRange(key, tz, custom?, now?)`, `resolveComparison(…)`,
+  `zonedDayStart(date, tz)` (binary search — the hourly walk was wrong for half-hour zones and past
+  UTC+12), `customRange(from, to)` (zone-free, the leaderboard's month). `requireTimeZone` throws on a
+  missing zone because specs are not type-checked (`isolatedModules`) — a stale call would otherwise
+  fall back to the host zone silently.
+- `leadCreatedYmdExpr(tz)` replaces the `LEAD_CREATED_YMD_EXPR` constant; `resolvePeriod(query, tz)`.
+  (`quoteDateYmd(date, tz)` and the stored `soldDateYmd` / `quoteDateYmd` integers were removed in
+  PAC-159 — see `docs/plans/pac-159-business-dates-implementation-plan.md`: every business date is an
+  instant, day-only entries sit at agency-local midnight via `businessDateInstant`, and readers match
+  a `Date` range from `instantWindow(range, tz)`.) Migration and demo seed read the tenant's zone from
+  `provisionTenant` (`TenantCtx.timeZone`, `Ctx.timeZone`) — no Central literal outside the schema
+  default.
+- `DEFAULT_AGENCY_TIME_ZONE` moved to `@sfa/shared` (`domain/agency-time-zone.ts`, with
+  `AgencyProfileView` — renamed `domain/agency-profile.ts` in §17); `common/dates/time-zones.ts` re-exports it. **Build shared before API unit
+  tests too.**
+- Two validators on every write: `timeZoneSchema` (zod: shape + runtime) and
+  `assertMongoKnowsTimeZone` (a `$documents` + `$dateToString` probe — Mongo's zone table is not
+  ICU's; a name only Node knows would 500 the Owner/Manager dashboards).
+- Onboarding: `agency.timezone` optional in the DTO, written on create; wizard `ComboboxField`
+  defaulting to Central, Review step echoes it.
+- Web: `components/form/fields/ComboboxField.tsx` (Popover + Command, client-side filter, registered
+  on `useAppForm`), `lib/time-zones.ts` (`Intl.supportedValuesOf`, US first, labels like
+  `America/Chicago (Central Time, UTC−5)`), `features/settings/AgencyProfilePage.tsx`,
+  `lib/agency-profile-api.ts`.
+- Bruno: `White Label/Get Agency Profile`, `Update Agency Profile` (sends Central so runs stay
+  idempotent); `Onboard Agency` body + docs; seven dashboard docs reworded off "Chicago".
+- e2e: `test/agency-profile.e2e-spec.ts` (permissions, 400s, marker re-stamp, unchanged-save no-op,
+  Kiritimati→Etc/GMT+12 zone flow through `GET /performance?range=today`); onboarding gains a stored-zone
+  case and two 400s.
+
+### Follow-ups noted, not done
+- `service-tickets.service.ts` host-local midnight; demo seed `ymd()`/`monthKey()` host-local dates.
+- No Super Admin agency *edit* page (the Agencies tile is still "Coming soon"): a platform account
+  changes a zone post-onboarding by impersonating the owner.
+
+## 17. PAC-149 — configurable end-of-day Away hour + `agency:settings:*` (handoff, 2026-10-06)
+
+One PR, branch `asad/pac-149-agency-settings-configurable-end-of-day-away-hour-and-a`, base `dev`.
+Plan file: `~/.claude/plans/create-an-implementation-plan-humming-codd.md`.
+
+### Decisions — do not re-litigate
+- **Own permission pair:** `agency:settings:read` / `agency:settings:write` (appended to
+  `AgencyPermission`, catalog rows "View/Manage agency settings"). The page sets the whole office Away
+  each night, so delegating "branding" must not hand it over. Owner-only by default (the Agency Owner
+  template spreads `AgencyPermission`); everyone else 403s and has no hub card. **PAC-148's working-days
+  calendar and holidays belong under this pair too.**
+- **Rollout by migration, not a manual `api:sync:roles` (Asad, 6 Oct).** The ticket asked for a deploy
+  step; the check found that without one the Super Admin **Onboard Agency** wizard 400s too ("Permission
+  catalog is missing" — the owner template names keys with no catalog row). So
+  **`20261006120100-agency_settings_permission_grant`** upserts both catalog rows (`$setOnInsert`, values
+  copied in) and grants both keys to every `agency_owner` role, at API boot, on every environment.
+  `api:sync:roles` remains the fallback. A signed-in owner sees the card after their next token refresh
+  or login (the web reads permissions from the `localStorage` user blob).
+- **`Agency.endOfDayHour`:** integer 0–23, default `20` (`DEFAULT_AGENCY_END_OF_DAY_HOUR` in
+  `@sfa/shared`, schema default + `.lean()` fallback only). **Whole hours** because the cron ticks every
+  30 min. Backfilled by **`20261006120000-agency_end_of_day_hour_backfill`**. Not on `AccessContext` — an
+  hour-only change invalidates no cache.
+- **Marker rule for an hour change** (same as a zone change): new hour already past on the agency's clock →
+  stamp today; still ahead → clear, so tonight's new hour runs. Only when the zone or hour actually changes.
+- **No explanatory copy** on the settings card: label + control + Save. The hour field is a `SelectField`
+  labelled "Set everyone Away at", options `12:00 AM`…`11:00 PM`.
+
+### What exists now
+- `common/dates/end-of-day.ts`: `END_OF_DAY_LOCAL_HOUR` **deleted**; `requireEndOfDayHour` (throws on
+  anything but an integer 0–23 — specs are not type-checked, a stale 3-arg call would otherwise read
+  as "due" every tick); `endOfDaySweepDate(now, tz, endOfDayHour, lastAwayDate)`;
+  `sweepMarkerAfterScheduleChange(now, tz, endOfDayHour)` (was `sweepMarkerAfterZoneChange`).
+- `SetUsersAwayFn` selects `endOfDayHour`, falls back to the shared default.
+- `GET /agency/profile` → `{ agencyName, timezone, endOfDayHour }`; `PATCH` takes either or both
+  (zod `.refine`, `{}` is 400, `"20"` is 400). The service reads the stored pair first (an hour-only
+  change is re-stamped on the stored zone), skips the write when nothing changed, then one conditional
+  `updateOne` with `$or` on the two fields.
+- `@sfa/shared` `domain/agency-time-zone.ts` → **`domain/agency-profile.ts`**.
+- Web: `/settings/agency` has its own `RequirePermission` (`agency:settings:read`); hub entry on
+  `SettingsRead`; `lib/end-of-day-hour.ts` (labels formatted in UTC so the viewer's zone cannot shift
+  them); card retitled "Working day"; the onboarding wizard's zone description no longer says "8 PM".
+- Bruno: `White Label/Get` + `Update Agency Profile` (permission, body, docs), `Login as Owner` asserts
+  the pair, `Profile/Set My Availability` docs.
+- Tests: `end-of-day.unit-spec` (guard + non-20 cases), new `agency-profile.dto.unit-spec`,
+  `white-label-controllers.unit-spec` on the new pair; e2e `agency-profile` (hour 400s, hour-only and
+  combined saves, marker past/ahead/unchanged, an owner **without** `agency:settings:write` but with
+  `agency:branding:write` gets 403 here and 200 on branding); e2e `set-users-away` gains a 6 PM fixture.
+
+### Not done (out of scope per the ticket)
+- Per-user / per-branch hours; a morning reset (§6a); weekend/holiday skipping (PAC-148).
+- The Super Admin onboarding wizard does not ask for the hour — new agencies start at 8 PM.
+
+---
+
+## 18. PAC-152 — Data Export page (handoff, 2026-10-06)
+
+Plan: `docs/plans/pac-152-data-export-implementation-plan.md`. Three PRs. **PR1 (API) and
+PR2 (web page) are built**, uncommitted, on `awaris/pac-152-data-export-api`; their file
+sets are disjoint apart from the docs, so they can be committed as two PRs. PR3 (deal audits,
+audit items, activities, service tickets, chargebacks) edits the same API files as PR1 and
+should start once PR1 is committed.
+
+Web (PR2): `features/data-export/` (`DataExportPage`, `DatasetList`, `ExportPanel`,
+`ColumnPreview`, `RecentExports`), `lib/data-export-api.ts`, `DateRangePicker`/`RangeChips`
+gained `maxSpanDays`, route `/data-export`, nav section "Data".
+
+**Background exports (user decision, 6 Oct, same day).** Downloads are no longer
+synchronous. *Request export* queues the export and toasts that the user will be emailed;
+the worker writes the file to object storage; Recent exports polls while a row is
+`Queued`/`Preparing` and offers **Download** once it is `Ready`. See "Background exports"
+below.
+
+### Decisions (user, 6 Oct) — do not re-litigate
+- **Curated joined datasets**, not raw table dumps: one row per entity, labels resolved, child
+  rollups computed, ids kept beside every label. Shaped after `docs/smartsuite-tables/`.
+- **CSV + XLSX**, one column model; each column's `type` decides the encoding.
+- **PII included** (contact name, phone, email, DOB, notes). Never storage keys or tokens.
+- **New module key `data_export`**; `data_export:read` is the whole gate, held by Data Team.
+
+### What exists now
+- **Engine** in `packages/api/src/common/data-export/` (in `common/` so the worker may import
+  it): `engine/` (types, date windows, cells, batched `ExportLookups`, registry +
+  `modelFor`), `writers/export-writer.ts` (streaming CSV with BOM, streaming XLSX),
+  `datasets/*.dataset.ts` (leads, quote recaps, sold deals, policies, households, contacts),
+  `plan.ts` (`planExport` — pure; validates and builds the pipeline) and `run.ts`
+  (`runExport` — cursor → lookups → writer → any `Writable`).
+- **API** in `packages/api/src/data-export/`: service (dictionary, options, `request`),
+  history service (`create`, `list`, `fileUrl`), controller. Routes:
+  `GET /data-export/datasets`, `/options`, `/history`,
+  `POST /data-export/:dataset/exports` (202, queued), `GET /data-export/exports/:id/url`
+  (presigned link; 409 while preparing, 410 once expired, 404 if not visible).
+- **Worker**: `DataExportGenerateFn` (`data-export/export.requested.v1`: claim → generate →
+  notify) and `DataExportExpireFn` (hourly cron).
+- Migration `20261006111528-data_export_module.js`: catalog rows, **module enabled on every
+  existing agency** (only where the key is absent), Data Team grant. Rehearsed up/down/up.
+- `dataExports` collection = the job and the audit trail (refusals included; the row
+  outlives its file).
+- Tests: unit specs beside the engine (`plan.unit-spec.ts` included) and the
+  `dataExportReady` template; e2e `test/worker/data-export.e2e-spec.ts` drives the real
+  request endpoint and then the worker function against `FakeStorage` and a capturing mail
+  transport. Bruno `Data Export/` (10 requests).
+
+### Background exports — how it works
+- `POST …/exports` plans and counts the export (over `DATA_EXPORT_MAX_ROWS` → immediate
+  `400 EXPORT_TOO_LARGE`, logged `failed`), writes a `queued` row carrying the filter echo
+  **and a scope snapshot** (user, branch, `X-Branch-Id`, data scope, role ids, timezone),
+  and sends the event through the outbox. It also resolves the agency's email brand (the
+  worker cannot import `TenantBrandingService`) and carries it on the event.
+- The worker **re-plans** from the row: a pipeline cannot be stored (`$` keys), so it rebuilds
+  an `AccessContext` from the snapshot and runs the same `planExport`. The file holds what the
+  requester could see when they asked.
+- File goes to a temp file, then `StorageService.putObjectFromFile` at
+  `agencies/<agencyId>/data-exports/<year>/<exportId>/<filename>` — deterministic, so a retry
+  overwrites itself (`buildObjectKey` gained `parts`/`unique`).
+- `claim` admits `queued`, or `failed` only when the job itself had started — a cap refusal
+  is never run. A replayed event is a no-op.
+- The email (`dataExportReady`) links to `/data-export` on the agency's host — **never** a
+  presigned link; the file is PII in bulk. A mail failure is recorded on
+  `notification.error` and never fails the export.
+- Statuses: `queued → processing → ready | failed → expired`. `truncated` is now a boolean.
+  Retention: `DATA_EXPORT_RETENTION_DAYS` (default 7, 1–30).
+- `data-export` and `lead-sources` were added to the worker boundary's `FEATURE_DIRS`;
+  `client-scope.ts` moved to `common/access/` (re-exported from `clients/`) and
+  `contactDisplayName` to `common/domain/contact-names.ts` (re-exported) so the engine has
+  no feature imports. `ExportLookups` reads the `LeadSource` model directly.
+- **Local end to end needs the Inngest dev server** pointed at the API (compose `inngest`
+  targets `:4000`). Without it a request stays `Queued`; Bruno's `Get Export File URL`
+  accepts `409` for that reason.
+- Removed with the synchronous path: `GET :dataset/download`, `apiFetchDownload`/`saveBlob`
+  (the API client is back to `HEAD`), CORS `exposedHeaders`, `common/http/`.
+
+### Gotchas
+- The scope clamps ignore `X-Branch-Id` at agency scope, so the export takes an explicit
+  `branchId` body field (agency scope only).
+- `csv-stringify` writes booleans as `1` / empty by default — `cells.ts` writes words.
+- Some list columns are **aligned** (household member ids/names/roles); blanks are kept.
+- Bruno against a local API needs `PLATFORM_HOST` to match the host Bruno calls.
+
+### Open for David / Carl (on the ticket)
+Net vs gross premium; audit item `days_open` anchor; over-cap refusals in history; CSV has no
+formula escaping (Excel users take XLSX).
+
+## 19. PAC-152, part 2 — Analytics page (handoff, 2026-10-07)
+
+Plan: `docs/plans/pac-152-analytics-implementation-plan.md` (decisions B1–B14 plus an
+"As built" table of where the build departed from it). Tracked on PAC-152 at the user's
+request. Uncommitted, on the same branch as the Data Export work.
+
+### Decisions (user, 7 Oct) — do not re-litigate
+- **New module key `analytics`**; `analytics:read` is the gate. Branch Manager by template
+  (and the `analytics_module` migration for existing agencies), Agency Owner via enabled
+  modules, anyone else by grant. Data Team is *not* granted by default.
+- **Sales and Service tabs** in v1.
+- **Headline = bound premium** (the Owner dashboard's definition), net of chargebacks beside it.
+
+### What exists now
+- **API** `packages/api/src/analytics/`: `GET /analytics/options`,
+  `sales/{summary,breakdown,timeseries}`, `service/{summary,breakdown,timeseries}`.
+  - Sales go through `soldMatch` + `linesPrefix` — the Owner dashboard's pipeline — so the
+    summary equals `/owner-dashboard/summary` for the same filters (asserted in e2e).
+  - `sales-dimensions.ts` is the registry: producer, leadSource (through the lead),
+    policyType and carrier (**per policy**, `$unwind lines`), branch, zip and csr (one
+    `$lookup households`). `segmentBy` splits rows by a second dimension in the same `$facet`.
+  - `time-buckets.ts`: day / Monday-week / month keys from the `YYYYMMDD` ints (no zone) and
+    from ticket instants (agency zone); zero-filled.
+  - `goal-pacing.ts`: month windows starting on the 1st, no line/source/carrier filter,
+    goals from `producerGoals` under the sales clamp.
+  - `linesPrefix` gained `LinesOptions { carrier, carriers }`; default stages unchanged
+    (unit-tested). `shared/domain/carrier.ts` gained `carrierQueryValues`.
+  - `OWNER_DASHBOARD_RANGE_KEYS` gained `last12Months`; the Owner/Manager chip guard is now
+    their own chip list.
+  - `common/access/filter-options.ts`: Data Export's branch/producer options, shared.
+- **Migration** `20261007085957-analytics_module.js` (catalog 140/141, enable where absent,
+  Branch Manager grant). Rehearsed up → down → up on a scratch DB.
+- **Web** `features/analytics/`: page with Sales | Service tabs, filter bar (period incl.
+  Last 12 Months, branch for agency scope, producers/assignees from `/analytics/options`,
+  lead sources, lines, carriers), KPI rows (goal pacing meter), breakdown panel (group by,
+  split by, measure, compare, Download CSV), trend panel (day/week/month). First charts in
+  the app: shadcn `chart` + `recharts@3.8`. Nav item under Management; route `/analytics`.
+  `KpiCard` and `TrendBadge` promoted to `components/common/`.
+- **Tests:** unit specs beside the engine; e2e `test/analytics.e2e-spec.ts` (41); Bruno
+  `Analytics/` (15 requests, re-runnable). Whole suites green: API unit 1,278, e2e 1,215,
+  shared 296.
+
+### Gotchas
+- `BranchGuard` 403s a `branchId` query param outside a branch- or own-scope caller's branch.
+- Tickets' `own` scope collapses to branch (CRM rule); sales' `own` pins to self.
+- Carrier is free text: alias codes (`B4tEH`) fold into their name, spelling variants don't.
+- Under a carrier filter, quote figures and the closing ratio are N/A, never 0.
+- Recharts sorts legend items by data key unless `itemSorter={null}`.
+- The dark `--chart-*` tokens were re-stepped to pass the palette validator on `--card`.
+
+### Open for David
+1. "Completed" tickets = `resolvedAt` in the window; `closed` tickets carry no timestamp.
+2. Canonicalise carrier spellings through the carrier catalog?
+3. Goal pacing reads `producerGoals`; until PAC-116 ships most months say "No goals set".
+4. Should Data Team hold `analytics:read` by default?
+
+---
+
+## 20. PAC-154 — Notifications, PR1 of 4: foundation (handoff, 2026-10-07)
+
+Branch `asad/pac-154-notifications-in-app-notification-centre-web-push`, base `dev`.
+Plan: `docs/plans/pac-154-notifications-implementation-plan.md` (four PRs; the ticket's
+Decisions table is authoritative, the plan is the execution order). This section is PR1 only.
+
+### Decisions — do not re-litigate
+- **Redis pub/sub stays for PR2's SSE fan-out, and PAC-154 provisions it.** Production has
+  *no* Redis today (`REDIS_URL` is absent from terraform, the deploy preflight and `app.env`).
+  Asad was offered a Mongo change stream (replica set everywhere, zero new infra) and chose to
+  keep the ticket's decision 2. PR2 therefore adds a `managed_redis` terraform module, the
+  secret in every deploy touchpoint, and a `LocalNotificationBus` fallback for `api:dev`/e2e.
+  Accepted side effect: the Redis permission cache switches on in production too.
+- **PR4 ships a minimal "New version available — Reload" toast** on `needRefresh` (a
+  prompt-mode service worker with nothing that prompts strands installed apps). PAC-153 §3
+  keeps only the install/Lighthouse QA.
+- **Unique `{ recipientId, dedupeKey }` index** on `notifications`. Inngest's function
+  `idempotency` is 24-hour scoped; the index is the durable exactly-once guard, and the writer
+  tolerates the E11000 it produces. A `dedupeKey` must be stable per business fact.
+- **The catalog has one type, `bug_report.filed`.** Only types with a real producer are listed;
+  PAC-127 adds a row + a renderer case per trigger as each sender is wired. Its `href` is
+  `/admin/bugs` — the queue page has no per-report URL.
+
+### What exists now
+- `@sfa/shared` `notifications/`: `NOTIFICATION_TYPES` (category + default channels),
+  `renderNotification(type, data) → { title, body, href }` (pure, throws
+  `NotificationRenderError`), `NotificationRecord` / `NotificationListResponse { items,
+  nextCursor }` — the repo's first keyset envelope. Spec: `render.spec.ts` (fixture per type).
+- `api/src/inngest/events/notification.events.ts`: `notification/requested.v1` — `{ type,
+  recipientIds[], agencyId|null, actorId|null, entity { kind, id }, data, dedupeKey }`.
+- `api/src/notifications/`: schema (does **not** extend `TenantRecord`; `readAt` is a Date
+  stored as an explicit null; three indexes), `NotificationsService` (keyset list on
+  `(createdAt, _id)` with a base64url cursor, unread count, mark read, read-all,
+  `findForStream` for PR2), controller on `notifications` with `@SkipTenant() @SkipBranch()
+  @SkipModule()` and **no permission** (decision 8). `notifications` is now in the eslint
+  `FEATURE_DIRS`.
+- `api/src/worker/functions/deliver-notification.fn.ts`: the **sole writer**.
+  `idempotency: 'event.data.dedupeKey'`, one `insert` step (render once, `insertMany`
+  unordered, swallow E11000, re-read ids). `publish` / `email` / `push` steps arrive in PR2–4.
+  Registered in `WorkerModule`; the schema is deliberately **not** in `WorkerIndexesService`.
+- **First real producer:** `BugReportsService.create` emits to every active platform admin
+  except the reporter, best-effort (a failed emit is logged; the outbox sweep replays it).
+- Web: `lib/notifications-api.ts`, `features/notifications/` (page with Unread/All on
+  `?tab=all`, `useInfiniteQuery` + "Load more", click = mark read + `navigate(href)`),
+  `/notifications` route under `ProtectedRoute` with no gate, sidebar row in Workspace with
+  the unread pill (expanded) / dot (collapsed). Unread count polls every 60 s — PR2 demotes
+  that to the fallback.
+- Bruno `Notifications/` (9 requests) — ⚠ needs the Inngest dev server + worker, like the
+  campaigns folder: the row is written off the queue.
+
+### Verified
+`build -w @sfa/shared` · shared spec 5/5 · `build -w @sfa/api` · `tsc -p packages/api`
+(no errors in touched files; the test-file baseline is unchanged) · web `lint` (tsc) ·
+eslint clean on every touched API file · e2e `notifications` 10/10 + `worker/deliver-notification`
+6/6 · Bruno `Auth` + `Notifications` 15/15 requests, 29/29 tests against the running
+`api:dev` · browser: badge "1" and row after a producer files a report, click → read +
+`/admin/bugs`, collapsed-rail dot, light theme, 375px.
+
+### Not in PR1 (per the plan)
+SSE + Redis + terraform (PR2) · email channel (PR3) · push + PWA shell + update toast (PR4) ·
+every trigger but bug reports (PAC-127) · a per-report URL on `/admin/bugs`.
+
+## 21. PAC-154 — Notifications, PR2 of 4: live (handoff, 2026-10-07)
+
+Branch `asad/pac-154-pr2-live-sse-redis`, stacked on PR1's branch
+(`asad/pac-154-notifications-in-app-notification-centre-web-push`, PR #138, base
+`dev`) — same pattern as PAC-139's #124 on #122. Rebase onto `dev` once #138
+merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md` §2.
+
+### Decisions — do not re-litigate
+- Everything in §18, plus:
+- **`@Header('Cache-Control')` / `@Header('X-Accel-Buffering')` are deliberately
+  not on the SSE handler.** Nest 11's `SseStream` writes both (and `no-transform`,
+  `Connection: keep-alive`) when it commits headers via `writeHead`, which would
+  override a decorator's value anyway. The e2e asserts the headers arrive.
+- **`ping` is a named event, not an SSE comment.** Nest's `MessageEvent` cannot
+  emit `: ping`; the client ignores the event. Same effect on idle timeouts.
+- **The nudge carries ids only** (`{ recipientId, notificationId }`); the API
+  node re-reads the row. The `insert` step now returns `{ rows: [{ id,
+  recipientId }] }` so `publish` knows who each row is for.
+- **Terraform admits the Valkey cluster the way it admits Mongo** (id for a
+  single droplet, tag for the pool) and pins it to the environment VPC via
+  `private_network_uuid`; `redis_uri` is the **private** `rediss://` URI. Engine
+  is `valkey` 8 (`redis` is retired for new DO clusters), `allkeys_lru` because
+  nothing durable lives there. `terraform` is not installed on this machine, so
+  `fmt`/`validate` were **not** run — run them before the first apply.
+- **Reconnect backoff is exponential** (1 s doubling to 30 s, reset on open),
+  not the plan's flat 3 s; the server's `retry: 3000` only applies when
+  `onerror` returns nothing.
+- **`connected` is a `useSyncExternalStore` module store**, not React context:
+  `NotificationStream` is a sibling of `Routes` (beside `ReportBugWidget`) and a
+  sibling cannot provide context to them.
+
+### What exists now
+- `api/src/common/redis/`: `REDIS_CLIENT` (`Redis | null`; `error` log in
+  production when unset), abstract `NotificationBus` + `isNotificationNudge`,
+  `RedisNotificationBus` (channel `sfa:notify:v1`, lazy `duplicate()` subscriber,
+  errors logged and swallowed), `LocalNotificationBus` (EventEmitter), and a
+  **non-global** `RedisModule` imported by `NotificationsModule` and
+  `WorkerModule` (it closes both connections on destroy).
+- `api/src/notifications/stream/notification-stream.registry.ts`:
+  `Map<userId, Set<Subject>>`, `open()` is a `defer` + `finalize` so bookkeeping
+  follows the subscription; one bus subscription per process. Unit spec 6/6.
+- `GET /notifications/stream` (`@Sse`, `@SkipThrottle`): `ready` (retry 3 s) →
+  `ping` every 25 s → `notification` frames (`id:` = row id); `takeUntil(timer)`
+  at the token's `exp` minus 1 s. `JwtPayload.exp` is now declared in shared.
+  `Last-Event-ID` added to CORS `allowedHeaders`.
+- `deliver-notification.fn.ts`: step `publish` after `insert`, one nudge per
+  row, result `{ published }`.
+- Infra: `infra/terraform/modules/managed_redis/`, `module "redis"` in
+  `stacks/sfa/main.tf` (+ project resources, `redis_size`,
+  `redis_allowed_ip_addresses`, `redis_uri`/`redis_host` outputs, re-exported in
+  dev/production/_template, presets carry `redis_size`); deploy preflight env +
+  unconditional `required=` + `app.env` line; `DEPLOYMENT.md` secrets row +
+  "Notifications" subsection; compose `worker` gets `REDIS_URL:
+  ${REDIS_URL:+redis://redis:6379}`; `.env.example`; `test/setup-env.ts` pins
+  `REDIS_URL=''`; `web/nginx.conf` `location = /api/v1/notifications/stream`
+  (buffering off, 1 h read timeout, `Connection ""`).
+- Web: `getAccessToken` exported, `refreshAccessToken` exported and
+  **single-flight**; `@microsoft/fetch-event-source`;
+  `features/notifications/use-notification-stream.ts` (fetch override injects
+  the Bearer on every attempt, `onopen` 401 → refresh → retry, `onclose` throws
+  retriable, invalidates `notificationsKey` on every open and every
+  `notification`, sonner toast with a View action), `NotificationStream.tsx`
+  mounted beside `ReportBugWidget`, `notification-stream-status.ts`;
+  `useUnreadCount` polls only while `connected` is false.
+- Bruno: the stream is **not** in the collection (the CLI cannot consume SSE);
+  `bruno/README.md` says so and gives the `curl -N` recipe.
+- **Redis is documented as required, not optional** (Asad, 2026-10-07):
+  `.env.example` ships with `REDIS_URL` set, `.env.prod.example` carries it,
+  and the compose / Makefile / `running-the-stack` wording says so. The code's
+  in-process fallback stays for e2e only.
+
+### Second review round (2026-10-13)
+Abu Bakar's review agent raised nine more points on #139; all are in. Per-user
+stream cap (`MAX_STREAMS_PER_USER` = 8 per node, 429 past it), `closed$` from the
+registry so `app.close()` ends every stream, the PR1 `{ ids }` step shape accepted
+on resume, token refreshed *before* the `exp` reconnect (+ immediate reconnect
+after a clean close), `Infinity` → `STREAM_MAX_MS`, one `findForStream` per
+recipient per nudge (the read now lives in the registry), focus refetch off while
+the stream is up, the permission cache on the shared `REDIS_CLIENT`, and a
+self-skipping `.bru` for the stream. Details and reasoning: the plan's "Found in
+the second review round" list.
+
+### Not in PR2 (per the plan)
+Email channel (PR3) · push + PWA shell + update toast (PR4) · `BroadcastChannel`
+multi-tab dedupe.
+
+
+### Review follow-ups on #139 (2026-10-09, commit `6b53a9a`)
+Abu Bakar's five findings plus the edge one, all confirmed against the
+installed library source and fixed: `edge.ts` destroys the upstream request
+on client close (an aborted stream used to orphan edge→nginx→API until `exp`);
+`RedisNotificationBus` SUBSCRIBEs from `ready` on every (re)connect (ioredis
+only replays channels with a successful reply, so a boot-time SUBSCRIBE lost
+in the offline queue was never retried); the bare `@SkipThrottle()` skipped
+nothing because our throttlers are named — `THROTTLER_NAMES` +
+`SkipAllThrottlers()` now, on the stream and the ACME route; a rejected
+`findForStream` no longer errors the stream or leaks the driver message
+(per-nudge `catchError → EMPTY`); the worker `publish` step is `Promise.all`;
+the badge keeps a 5-minute poll while connected
+(`UNREAD_COUNT_CONNECTED_POLL_MS`). New: `redis-notification-bus.unit-spec`,
+`throttle.decorators.unit-spec`, a stream e2e case for the failed read. Full
+list in the plan's "Found in review".
+
+## 22. PAC-154 — Notifications, PR3 of 4: email channel (handoff, 2026-10-07)
+
+> **Second review round (2026-10-13):** five more points from Abu Bakar's review
+> agent, all in — the account-wide Resend `RateGate` in the transport, each row's
+> own `agencyId` on the email hand-off, the guarded failed-status write, the
+> atomic `record` (PAC-157, done here: `emailMessages.idempotencyKeyHash` +
+> upsert + `findRecorded()` in `load`), and the honest dev-mail log line. See
+> the plan's "Found in the second review round — PR3". ⚠ PAC-157 can be closed
+> when #141 merges.
+
+Branch `asad/pac-154-pr3-email-channel`, stacked on PR2's branch
+(`asad/pac-154-pr2-live-sse-redis`, PR #139 → PR #138 → `dev`). Rebase onto
+`dev` as the stack merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md`
+§3 (PR3).
+
+### Decisions — do not re-litigate
+- Everything in §18 and §19, plus:
+- **`bug_report.filed` now has `email: true`.** It was off in PR1. Flipped
+  because a platform admin is rarely in the app when a report lands, the queue
+  has no other way to reach them, and it is the only producer wired today — so
+  it is what exercises the channel end to end (the ticket's acceptance
+  criterion needs a type with email on). One boolean in
+  `shared/src/notifications/catalog.ts` reverts it. ⚠ Consequence: filing a bug
+  report in any environment with `RESEND_API_KEY` set emails every active
+  platform admin — including the Bruno `Notifications` folder against the
+  local stack.
+- **The `email` step emits through `InngestService`, not the raw client.**
+  The plan wrote `this.inngest.send(...)` but cites the outbox as the reason
+  the replay is safe; `InngestService` *is* the outbox (`MailerCampaignCommitFn`
+  precedent). The raw client stays injected for `createFunction`.
+- **The mail function re-reads the row and checks `delivery.email.status`
+  before sending.** Inngest's `idempotency: 'event.data.notificationId'` is
+  24-hour scoped; a row already `sent` is the durable guard past it (a sweeper
+  replaying an old event, a re-run by hand). `already-sent` is a no-op result,
+  not an error.
+- **A failed send is written to the row as `failed` *before* the rethrow**,
+  so a row whose mail never left reads `failed` rather than nothing, and a
+  later successful attempt overwrites it with `sent`. Only `delivery.email` is
+  ever written by this function (PAC-148 FR-H4); the e2e asserts every other
+  field is byte-identical after a failure.
+- **A recipient with no mailable address is `skipped`, recorded, and done** —
+  not four retries and a red run. Deactivated (`isActive: false`) or missing
+  user → `delivery.email = { status: 'skipped', error }`.
+- **Brand and host come from the row's `agencyId`** (`TenantBrandingService.forAgency`
+  + `TenantUrlService.baseUrlFor`), per the plan; `null` → platform brand on
+  `platformBaseUrl()`. The recipient's own agency is not consulted — today
+  every agency-scoped type's row carries the recipient's agency, and the one
+  platform type carries `null`.
+- **`MailDeliveryService.record` now returns `{ emailMessageId }`**; the four
+  existing callers ignore it.
+
+### What exists now
+- `api/src/inngest/events/notification.events.ts`:
+  `notification/email.requested.v1` — `{ notificationId, recipientId,
+  agencyId|null }`, ids only.
+- `deliver-notification.fn.ts`: step `email` after `publish` — one event per
+  inserted row when `NOTIFICATION_TYPES[type].defaultChannels.email` is on
+  (no user preferences, decision 4); result `{ requested }`.
+- `api/src/worker/functions/send-notification-email.fn.ts`
+  (`idempotency: 'event.data.notificationId'`, `retries: 4`, `concurrency 5`):
+  steps `load` (row + `User` + branding + base URL → plain-JSON
+  `NotificationEmailData`, or `missing` / `already-sent` / `skipped`) →
+  `send` (`MailDeliveryService.send('notification', data,
+  'notification:<id>', agencyId)`; on throw writes `failed` and rethrows) →
+  `record` (`mail.record` + `delivery.email = { status: 'sent', at,
+  emailMessageId }`).
+- `api/src/worker/email/templates/notification.template.ts`: key
+  `notification` (stored in `emailMessages.templateKey` — permanent). Subject
+  **is** the row's title; body = greeting, title, body, one "View in the app"
+  button on the absolute `href`, raw-URL fallback; preheader is the body cut
+  to 120 chars. Registered in `registry.ts`; fixture + spec in
+  `templates.unit-spec.ts`.
+- `WorkerModule` gains `TenantBrandingService` (depends only on the `Agency`
+  model, already registered; `tenant-branding/` is not a `FEATURE_DIRS` entry)
+  and `SendNotificationEmailFn`.
+- `bruno/README.md`: the File Bug Report row says it now also emails. No new
+  HTTP endpoint, so no new request.
+
+### Verified
+`build -w @sfa/shared` · shared jest 286/286 · `build -w @sfa/api` ·
+`tsc -p packages/api` (no errors in touched files; test-file baseline
+unchanged) · eslint clean on every touched file · unit `templates` 53/53 ·
+e2e `worker/send-notification-email` 8/8 + `worker/deliver-notification`
+10/10 (tenant host in every link and in the logo `src`, `localhost` nowhere;
+platform row on `127.0.0.1:5173` under AgencyOps; `delivery.email` ↔
+`emailMessages._id`; re-run → `already-sent`, one mail; failure → `failed` on
+the row, no `emailMessages` row, rest untouched; deactivated → `skipped`) ·
+Bruno `Auth` + `Notifications` 15/15 requests, 29/29 tests against the running
+`api:dev` + Inngest dev server, after which both new rows read
+`delivery.email.status: 'sent'` with matching `emailMessages` rows
+(`templateKey: notification`, `eventType: notification/email.requested.v1`)
+and both `eventLog` rows `succeeded`. ⚠ That run went through **real Resend**
+(the local `.env` has `RESEND_API_KEY`), so it mailed the two platform admins.
+
+### Not in PR3 (per the plan)
+Digests · per-user opt-out / preferences (decision 4) · "only if still unread
+after N minutes" · push + PWA shell + update toast (PR4) · every trigger but
+bug reports (PAC-127).
+
+### Review follow-ups on #141 (2026-10-09)
+Rebased onto the PR2 fix commit, then: `throttle: { limit: 2, period: '1s' }`
+on `send-notification-email` (`concurrency` caps runs in flight, not rate);
+`load()` reads recipient + agency from the **row** and throws
+`NonRetriableError` when the event disagrees; the **link** is built on the
+recipient's host (`User.agencyId`, null → platform) and the **brand** on the
+row's agency through the new `TenantBrandingService.emailBrandFor`, which
+puts the logo on the agency's own host or omits it when there is none — the
+invite email now goes through the same helper (its logo was a broken image
+for every domainless agency since PAC-69); `TenantUrlService.agencyBaseUrlFor`
+is the no-fallback half of `baseUrlFor`; the `email` step emits with
+`deterministicEventId('notification-email', rowId)` and
+`EventLogService.recordPending` is an insert-only upsert, so a replayed step
+dedupes instead of leaving `pending` outbox rows; a third skip reason
+(`recipient has no email address`); preheader cut on code points; the
+`inlineStep` helper lives in `test/helpers/inline-step.ts`; the catalog is
+`jest.replaceProperty`'d, never mutated. **Real sends outside production**
+are now gated: with `RESEND_API_KEY` set and `NODE_ENV != production`, Resend
+is wrapped in `AllowlistedMailTransport` and reaches only
+`MAIL_DEV_ALLOWED_RECIPIENTS` (`.env.example`); with a key and no list,
+nothing is sent and the API logs an error. **Deferred to its own ticket:**
+`MailDeliveryService.record` atomicity (upsert `emailMessages` on the
+idempotency key; the invite function shares the shape).
+
+## 23. PAC-154 — Notifications, PR4 of 4: push + PWA shell (handoff, 2026-10-08)
+
+> **Second review round (2026-10-13):** six more points from Abu Bakar's review
+> agent, all in — the push owner recorded under a `clearTokens()`-proof key so
+> the same user keeps push after a refresh-token expiry, bounded parallel pushes
+> (`mapWithConcurrency`: 8 rows × 4 devices), iOS status bar `default`,
+> `getRegistration()` waiting for an *active* worker, endpoint takeover only
+> with matching keys (else 409), and an E11000 retry on a racing first
+> registration. See the plan's "Found in the second review round — PR4".
+> **The stack is now merge-based** (dev → PR1 → PR2 → PR3 → PR4, each a merge
+> commit) rather than rebased, so the handoff sections were renumbered 20–23
+> behind PAC-152's 18–19.
+
+Branch `asad/pac-154-pr4-push-pwa-shell`, stacked on PR3's branch
+(`asad/pac-154-pr3-email-channel`, PR #141 → #139 → #138 → `dev`). Rebase onto
+`dev` as the stack merges. Plan: `docs/plans/pac-154-notifications-implementation-plan.md`
+§4 (PR4). PAC-153 §1 (plugin, service worker, platform manifest, icons) is
+folded in here per ticket decision 5.
+
+### Decisions — do not re-litigate
+- Everything in §18–§20, plus:
+- **The VAPID public key is served from `GET /public/push/vapid-public-key`**
+  (the ticket's path), on its own `PublicNotificationsController` — the
+  `PublicDomainsController` precedent: a `@Public()` route never shares a
+  class with authenticated handlers. The plan's `public/notifications` prefix
+  was not used. `404` when `VAPID_PUBLIC_KEY` is unset; the opt-in switch
+  hides itself on that answer.
+- **`DELETE /notifications/push-subscriptions` takes `{ endpoint }` in the
+  body**, not a path param (plan: nginx `proxy_pass` re-normalises encoded
+  slashes). Documented in Bruno as the deliberate deviation from the ticket's
+  table. The endpoint must be `https:` (zod) — the worker would otherwise
+  POST an encrypted payload at whatever host a client named.
+- **Upsert is keyed on the live row for the endpoint, whoever owns it.** A
+  shared machine signing in as someone else moves the row to the new user;
+  on sign-out and on `adoptSession` to a different user the browser also
+  `unsubscribe()`s locally (no token needed — the server row then dies on its
+  next 410), and `logout` additionally fires a `keepalive` `DELETE` with the
+  token captured *before* `clearTokens()`.
+- **`WebPushService.sendToUser` never throws; the `push` step records the
+  outcome and moves on.** Outcome → `delivery.push.status`: `sent` (≥1
+  subscription accepted), `failed` (every live one refused), `skipped`
+  (push unconfigured, no live subscription, or every subscription had
+  expired). A 404/410 soft-deletes the row (`deletedAt`, PAC-155); any other
+  error leaves it live. Only `delivery.push` is ever written (PAC-148 FR-H4),
+  asserted by the e2e.
+- **The `push` step re-reads the stored rows** for title/body/href, and
+  the icon is the agency favicon → logo → `/icon-192.png`, made absolute on
+  the row's tenant host via `TenantUrlService.baseUrlFor` (never
+  `APP_BASE_URL`). Platform rows (`agencyId: null`) get the platform icon on
+  the platform host. Payload `{ id, title, body, href, icon }`, `tag`/`topic`
+  = row id, `TTL` 3600, `urgency: normal`.
+- **The transport is a seam (`WebPushTransport`), same shape as
+  `MailTransport`**: `WebPushLibTransport` wraps `web-push`,
+  `DisabledWebPushTransport` is what an unconfigured environment runs
+  (`error` log in production — the `mail-transport.provider.ts` temperament).
+  A *malformed* key is logged and disabled rather than crashing the worker,
+  which would also stop email and the campaign jobs.
+- **`notificationclick` with a window open posts `{ type: 'NOTIFICATION_CLICK',
+  id, href }` and the SPA marks read + navigates** (`usePushClick`, mounted in
+  `NotificationStream`). With nothing open it `openWindow(href)` and the row
+  is **not** marked read on that path — the worker has no session. Accepted.
+- **The web `tsconfig.json` excludes `src/sw.ts`; `tsconfig.sw.json` checks it
+  with the `WebWorker` lib.** `lint` and `build` run both. The child config
+  must re-declare `"exclude": []` or it inherits the parent's exclusion of
+  its only input and tsc reports "No inputs were found".
+- **No favicon `<link>` was added** for the platform: the pre-paint tenant
+  script in `index.html` appends the agency's, and a second `rel=icon` would
+  compete with it. Only `apple-touch-icon` is linked.
+- **The platform icons are a hand-rolled PNG render** (shield on `--primary`,
+  matching `BrandMark`'s fallback), produced by a throwaway Node script —
+  `qlmanage`, headless Chrome and ImageMagick are all unavailable in the
+  sandbox. Per-agency icons are PAC-153 §2.
+
+### What exists now
+- `@sfa/shared` `notifications/types.ts`: `PushSubscriptionInput`,
+  `RemovePushSubscriptionInput`, `PushSubscriptionResponse` (never the keys),
+  `VapidPublicKeyResponse`.
+- `api/src/notifications/`: `schemas/push-subscription.schema.ts`
+  (`pushSubscriptions`; `userId`, `endpoint`, `keys { p256dh, auth }`,
+  `userAgent`, `lastSuccessAt`, `deletedAt` — explicit nulls; **unique
+  `{ endpoint }` partial on `deletedAt: { $type: 'null' }`**, plus
+  `{ userId, deletedAt }`), `push-subscriptions.service.ts` (`upsert`,
+  `remove` → 404 when not the caller's live row), `dto/push-subscriptions.dto.ts`,
+  `PUT`/`DELETE /notifications/push-subscriptions` on the existing controller,
+  `public-notifications.controller.ts`. Module registers the schema (API owns
+  the indexes), the service and the public controller.
+- `api/src/worker/push/`: `web-push.transport.ts` (seam + lib + disabled),
+  `web-push.provider.ts` (VAPID from config, loud when missing),
+  `web-push.service.ts` (`sendToUser`). `WorkerModule` registers
+  `PushSubscription` (not in `WorkerIndexesService`), the provider and the
+  service. **Not** under `worker/notifications/` — `FEATURE_DIRS` name.
+- `deliver-notification.fn.ts`: step `push` after `email`
+  (`insert → publish → email → push`), result
+  `{ pushed, sent, failed, skipped }`. Injects `WebPushService`,
+  `TenantBrandingService`, `TenantUrlService`.
+- Env: `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` in
+  `.env.example`, `.env.prod.example`, the deploy preflight `env:` map +
+  **unconditional `required=`**, the `app.env` heredoc, `DEPLOYMENT.md`
+  (secrets row + "Web push" subsection), `test/setup-env.ts` (pinned empty).
+  The local `.env` carries a dev pair generated 2026-10-08.
+- Web: `vite-plugin-pwa` 2.0 (`injectManifest`, `registerType: 'prompt'`,
+  `injectRegister: false`, `devOptions.enabled: false`, platform manifest,
+  `maximumFileSizeToCacheInBytes` 6 MiB — the main chunk is ~0.9 MB);
+  `src/sw.ts` (precache + `NavigationRoute` with `/api/` denylist, **no
+  runtime route** — that absence is the network-only guarantee; `push`
+  suppressed when any window is `focused`; `notificationclick`;
+  `SKIP_WAITING`); `public/icon-192.png`, `icon-512.png`,
+  `icon-maskable-512.png`, `apple-touch-icon.png`; `index.html` theme-color
+  (light/dark) + Apple metas; `nginx.conf` `location = /sw.js` and
+  `/manifest.webmanifest` → `Cache-Control: no-cache` (+ the manifest MIME
+  type, which stock nginx lacks); `lib/notifications-api.ts`
+  (`getVapidPublicKey` via `publicFetch`, `registerPushSubscription`,
+  `removePushSubscription`); `features/notifications/push-subscription.ts`
+  (support check, `getRegistration` — never `ready`, which hangs with no
+  worker — subscribe/unsubscribe, `forgetPushSubscriptionOnSignOut`,
+  `urlBase64ToUint8Array`), `PushOptIn.tsx` on `/settings/profile` (replaces
+  the "coming soon" card; hidden when unsupported or the key 404s; disabled
+  with a reason when no worker is registered or permission is denied),
+  `PwaUpdateToast.tsx` (mounted beside `NotificationStream`; hourly
+  `registration.update()`), `use-push-click.ts`. `auth-context` calls
+  `forgetPushSubscriptionOnSignOut()` on `logout` and on `adoptSession` to a
+  different user.
+- Bruno `Notifications/`: `Register Push Subscription` (seq 10, captures
+  `pushEndpoint`), `Remove Push Subscription` (11), `Get VAPID Public Key
+  (Public)` (12; accepts 200 or 404). README rows added.
+- `.claude/launch.json` gains `web-preview` (`vite preview` on 4173 serving
+  `dist/`, proxying `/api/v1` to 4000) — push and the update toast can only be
+  seen against a production build.
+
+### Verified
+`build -w @sfa/shared` · shared jest 286/286 · `build -w @sfa/api` ·
+`tsc -p packages/api` (no errors in touched files; baseline unchanged) ·
+eslint clean on every touched API file and both test files · e2e
+`worker/deliver-notification` 16/16 (`ran` is now
+`['insert','publish','email','push']`; one push per live subscription, dead
+one skipped, payload shape + `< 4 KB` + absolute icon, `TTL`/`urgency`/`topic`,
+`delivery.push: sent` and `lastSuccessAt`; 410 soft-deletes and the rest still
+send; 404 = 410; 503 → `failed` on the row with everything else byte-identical
+and the subscription still live; no subscription → `skipped`; push off in the
+catalog → nothing sent, `delivery.push` null) + `push-subscriptions` 12/12
+(partial index declared as `{ $type: 'null' }`; 401s; upsert echoes without
+keys and stores an explicit null; same endpoint twice = one row refreshed;
+shared device moves to the new user; re-subscribe after soft delete = a second
+live-then-dead pair, no E11000; several devices per user; `http:` and missing
+keys → 400; body-param delete soft-deletes; other user / already withdrawn →
+404; public key 404 while unset) · web `tsc` (main + sw) · `vite build` emits
+`sw.js` (190 precache entries, none under `/api/`), `manifest.webmanifest`,
+the four icons · Bruno `Auth` + `Notifications/{Login as Super Admin, Register
+Push Subscription, Remove Push Subscription, Get VAPID Public Key}` 10/10
+requests, 19/19 tests against `api:dev` (**File Bug Report was deliberately
+not run** — it emails every platform admin through the real Resend key in
+`.env`) · browser against `vite preview` + `api:dev`: worker `activated` and
+controlling, one `workbox-precache` cache with 186 entries and **zero `/api/`
+keys**, manifest linked, both theme-colors present; the Notifications card
+renders disabled with "Blocked for this site in your browser settings" (the
+embedded browser denies `Notification` permission, so **subscribe → OS
+notification → click was not exercised in a browser**; the worker→push-service
+path is the e2e's); rebuilt with a marker → `registration.update()` → the
+"New version available — Reload" toast appeared with a worker `waiting:
+installed` → Reload → `waiting: null`, the page runs the new build, toast
+gone.
+
+### Not in PR4 (per the plan and the ticket)
+Per-agency manifest and icons (PAC-153 §2) · install / Lighthouse /
+double-deploy QA pass (PAC-153 §3) · `BroadcastChannel` multi-tab dedupe ·
+per-user / per-type / per-channel preferences (decision 4) · digests · marking
+a row read on a cold-start `openWindow` click · every trigger but bug reports
+(PAC-127).
+
+### Review follow-ups on #143 (2026-10-09)
+Rebased onto the PR3 fix commit, then: **SSRF** — `isAllowedPushEndpoint`
+(`common/push/push-endpoint.ts`) allowlists the browser push services
+(FCM, Mozilla, Apple, WNS); the DTO refuses anything else and
+`WebPushService` re-checks every stored row before sending, soft-deleting a
+failure. **Another user's pushes after sign-in** — `login()` and
+`adoptSession` call `forgetPushSubscriptionLocally()` when the previous user
+differs or is unknown (read from a ref, never inside a `setUser` updater);
+`logout()` keeps the `DELETE` + local path. **VAPID rotation** —
+`subscriptionUsesKey` compares `options.applicationServerKey` byte for byte;
+`subscribeThisBrowser` re-subscribes on a mismatch and
+`usePushSubscriptionRefresh` (mounted in `NotificationStream`) runs
+`reconcilePushSubscription` once per sign-in when permission is already
+granted; `401`/`403` from the push service are logged as a VAPID rejection
+and recorded `failed`, deliberately **not** soft-deleted (decision: a
+misconfigured key must not wipe every subscription). **Retry-safe `push`
+step** — the re-read filters `'delivery.push': null`. **Safari** — the
+service worker always calls `showNotification` (a generic fallback for an
+unreadable payload); the ticket's "suppressed when a window is focused" rule
+is withdrawn (decision, Asad 2026-10-09: always show, over a user-agent
+check). **`hasWorker`** — `getRegistration()` races `serviceWorker.ready`
+against 3 s when nothing is registered yet. `forgetPushSubscriptionOnSignOut`
+uses `API_BASE`. `iconFor` goes through the shared
+`TenantBrandingService.pushIconFor` (agency favicon/logo on the agency's own
+host, else the platform icon on the platform host). The catalog flip in the
+e2e is `jest.replaceProperty`'d. New e2e cases: replayed step pushes nobody
+twice; a stored off-allowlist endpoint is soft-deleted and never sent;
+off-allowlist `PUT`s are 400. **Not fixed here, by decision:** the dismissed
+update toast not returning for the same worker is PAC-153 §3 (comment on the
+ticket; the `PwaUpdateToast` docblock now says what actually happens).
+
+
+---
+
+## 24. Owner dashboard follow-ups — quotes as uncaptured revenue (handoff, 2026-10-15)
+
+David (14–15 Oct 2026, chat, no PAC ticket yet): average the closing ratio with a quote closing
+ratio; a quotes-per-producer card whose rows open that producer's open quotes in a drawer; Today
+and Yesterday chips; and, "the biggest item", open quotes as uncaptured revenue with a metric like
+"we closed 30% more unsold quotes this month". Full plan and every judgment call:
+`~/.claude/plans/make-the-judgment-calls-prancy-thacker.md` — copy it to
+`docs/plans/pac-NNN-…` once a ticket exists.
+
+### What exists now
+- **Today / Yesterday** on the management bar (`dashboard-range.ts`), so the Manager view has them
+  too. The API already resolved both (`resolveRange`; a day compares with the day before).
+- **One quote-to-sale rule**, `common/sales-metrics/quote-conversion.ts`, used by the Owner
+  dashboard *and* the quote-recaps export: a deal naming the recap wins; else the lead's
+  new-business sale on or after the quote's agency day. **One sale to one quote** — the latest
+  recap before it, arbitrated over *every* recap on the lead (siblings are loaded), so a May quote
+  does not claim a June sale that a June requote owns. `ExportLookups.dealsBy` now excludes company
+  transfers for every dataset (leads' `sold` / `deal_count` / `first_*` columns included).
+- **Summary**: `closingRatio` is now `OwnerBlendedClosingRatio` — headline = mean of the premium
+  ratio (unchanged, still `OwnerClosingRatio`, still what Analytics shows) and the **quote ratio**
+  (cohort: quotes *written in the window* that have *since* sold; ≤ 100, no `MIN_QUOTES_PER_SALE`
+  guard). One side N/A → the other; `basis` says which. New `unsoldQuotesClosed`: quotes from the
+  365 days before the window (`QUOTE_BACKLOG_DAYS`) still open at its start, and how many sold
+  inside it; trend on the count, `ratePct` against the backlog.
+- **`GET /owner-dashboard/producer-quotes`** (written / sold / open / lost / open premium / close %,
+  most open first, Unassigned last) and **`GET /owner-dashboard/open-quotes`** (`producer` = id or
+  `__none__` = `PRODUCER_NONE`, paged in Node because "open" is resolved after the read).
+  `totals.written` = leaderboard `totals.quotes` = `closingRatio.quote.written`, asserted under all
+  seven filters in "the three reads agree".
+- **Lost** = `LOST_LEAD_STATUSES` (Not Qualified · Lost · Closed, on the lead's *current* status,
+  codes normalised). A quote with no lead, or on a lead marked Sold with no deal, is **open**.
+- Web: five KPI cards; `ProducerQuotesTable` full width under the 60/40 pair; `OpenQuotesDrawer`
+  keyed on `?quotesProducer=` (not `producer`, which the Manager drawer owns). The tab switch on
+  `ManagementDashboardPage` now clears both tabs' drawer keys, as its comment always claimed.
+
+### Prod dump (local `sfa`, Oct 2026), through the shared rule
+2026 YTD: 724 quotes written, 440 sold (60.8%), 278 open, 6 lost. Sep: 36 / 16 / 20 / 0.
+Aug: 43 / 31 / 11 / 1. Only 92 of 1,699 deals carry `quoteRecapId`; the lead fallback is
+load-bearing.
+
+### Still open
+- ⚠ **Not yet checked in a browser** (light + dark, the drawer's paging, narrow widths). Bruno's two
+  new requests (`Get Producer Quotes`, `List Open Quotes`) not run against a live API.
+- **For David:** the cohort definition of the quote ratio; whether the Manager view's household
+  close ratio should follow it; whether a year is the right backlog bound.
+- A requoted lead's earlier recap reads as *open* once the later recap takes the sale — visible by
+  its Sold badge in the drawer; ~6 leads a year.

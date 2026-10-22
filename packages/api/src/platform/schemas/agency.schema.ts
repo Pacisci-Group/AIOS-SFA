@@ -1,4 +1,8 @@
-import type { AgencySetupStatus, ModuleEntitlements } from '@sfa/shared';
+import {
+  DEFAULT_AGENCY_END_OF_DAY_HOUR,
+  type AgencySetupStatus,
+  type ModuleEntitlements,
+} from '@sfa/shared';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, IndexOptions, Types } from 'mongoose';
 import {
@@ -253,7 +257,8 @@ export const CarrierAppointmentSchema =
  * Where the end-of-day Away sweep is up to for this agency (PAC-139 §6a).
  *
  * The worker's `SetUsersAwayFn` ticks every thirty minutes and asks, per
- * agency, "is it 8 PM or later here, and have I already done tonight?". This
+ * agency, "is it {@link Agency.endOfDayHour} or later here, and have I already
+ * done tonight?". This
  * is the second half of that question. It is a **local calendar date** rather
  * than an instant on purpose: "tonight" is defined by the agency's clock, and
  * comparing dates keeps the answer stable across a DST change. Written with a
@@ -261,6 +266,21 @@ export const CarrierAppointmentSchema =
  *
  * Absent on every agency until its first sweep — readers must treat a missing
  * sub-document as "never", which `$ne` on the marker already does.
+ *
+ * ## When the zone or the hour changes (PAC-141, PAC-149)
+ *
+ * The marker answers "has tonight run?" for the *old* schedule, and read
+ * against the new one it can fire the sweep in the middle of a workday
+ * (moving east to a zone where it is already past the hour, or moving the
+ * hour from 20 to 9 at midday) or skip tonight's (moving west after it ran,
+ * or moving the hour from 20 to 22 at 9 PM). `AgencyProfileService.update`
+ * therefore re-stamps it in the same write that changes either field:
+ * tonight's date if the new hour has already passed on the new clock,
+ * otherwise `null` (`sweepMarkerAfterScheduleChange`). Either way the next
+ * sweep is the next end-of-day hour on the new schedule. Only when something
+ * actually changed — an unchanged save must not clear a marker the worker is
+ * about to catch up on. `lastAwayAt` is left alone — it records a sweep that
+ * did run.
  */
 @Schema({ _id: false })
 export class AgencyAvailabilitySweep {
@@ -358,19 +378,32 @@ export class Agency {
   /**
    * IANA zone the agency keeps its working day in, e.g. `America/Chicago`
    * (PAC-139 §6a). Defaults to US Central because every agency on the platform
-   * today is in Oklahoma, which has no zone of its own. Backfilled onto rows
-   * that predate it by the `agency_timezone_backfill` migration, so a raw or
-   * `.lean()` read can rely on the field being there — the sweep still
-   * defaults in code, for a database that has not migrated yet.
+   * when the field was added is in Oklahoma, which has no zone of its own.
+   * Backfilled onto rows that predate it by the `agency_timezone_backfill`
+   * migration, so a raw or `.lean()` read can rely on the field being there —
+   * the sweep still defaults in code, for a database that has not migrated yet.
    *
-   * Read today by one job: the worker's end-of-day Away sweep. The dashboards'
-   * Chicago calendar (`performance.range.ts`'s `AGENCY_TIME_ZONE`) is still a
-   * constant and deliberately not rewired here — that is a change to every
-   * date window in the app, and it gets its own ticket.
+   * Set in the Super Admin onboarding wizard and by the owner at
+   * `PATCH /agency/profile` (PAC-141). Read by: the worker's end-of-day Away
+   * sweep; `PermissionsService`, which copies it onto `AccessContext.timeZone`
+   * once per request, from where every dashboard window ("today", MTD,
+   * business-day aging, the leaderboard's month) is cut; and the sold, quote
+   * and lead write paths, which anchor a day-only date on this calendar
+   * (`businessDateInstant`, PAC-159).
    *
-   * Nothing lets an operator set it yet (no wizard step, no settings field);
-   * the validator is for the day something does, so a typo cannot be stored
-   * and later throw inside the cron.
+   * ## A change is retroactive for everything but goals
+   *
+   * Sales, quotes and leads are stored as instants and bucketed on this
+   * calendar at read time, so changing the zone re-files the agency's whole
+   * history on the next request — consistently, which is the point (PAC-159;
+   * before it, sales and quotes carried a stored day label and stayed put
+   * while leads moved). The one stored calendar key left is
+   * `ProducerGoal.month`, which names a month rather than an instant and does
+   * not move.
+   *
+   * The validator keeps a typo out of the row; the write paths additionally
+   * probe MongoDB (`assertMongoKnowsTimeZone`), whose zone table is not the
+   * runtime's, before accepting a name.
    */
   @Prop({
     type: String,
@@ -382,6 +415,34 @@ export class Agency {
     },
   })
   timezone: string;
+
+  /**
+   * The hour, on {@link Agency.timezone}'s clock, after which every active
+   * user of the agency is set Away (PAC-139 §6a) — a whole hour, 0–23, so
+   * `20` is 8 PM. Fixed at 8 PM until PAC-149 made it the owner's to set at
+   * `PATCH /agency/profile`; backfilled onto older rows by the
+   * `agency_end_of_day_hour_backfill` migration, and still defaulted in code by
+   * every `.lean()` reader for a database that has not migrated yet.
+   *
+   * **A whole hour on purpose.** The sweep ticks on the hour and the half
+   * hour, so an `HH:mm` value would be honest only at `:00` and `:30`;
+   * half-hours, if ever asked for, change this validator and the cron interval
+   * together.
+   *
+   * Read by the worker's `SetUsersAwayFn` and nothing else — it is not on
+   * `AccessContext`, so changing it invalidates no cached context.
+   */
+  @Prop({
+    type: Number,
+    default: DEFAULT_AGENCY_END_OF_DAY_HOUR,
+    min: 0,
+    max: 23,
+    validate: {
+      validator: Number.isInteger,
+      message: 'endOfDayHour must be a whole hour, 0–23',
+    },
+  })
+  endOfDayHour: number;
 
   /** Where the end-of-day Away sweep is up to. See {@link AgencyAvailabilitySweep}. */
   @Prop({ type: AgencyAvailabilitySweepSchema, default: () => ({}) })

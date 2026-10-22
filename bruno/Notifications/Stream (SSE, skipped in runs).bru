@@ -1,0 +1,78 @@
+meta {
+  name: Stream (SSE, skipped in runs)
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/notifications/stream
+  body: none
+  auth: bearer
+}
+
+headers {
+  Accept: text/event-stream
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+script:pre-request {
+  // A Server-Sent Events response is held open until the token's `exp` — up
+  // to fifteen minutes. The CLI runner would sit on it for all of that time,
+  // so during a collection run this request documents the endpoint and skips
+  // itself. Sending it by hand from the Bruno app still works (`skipRequest`
+  // is a no-op outside a run): the frames appear as they arrive, and Cancel
+  // ends it. To watch it from a shell instead:
+  //   curl -N -H "Authorization: Bearer $TOKEN" -H "Accept: text/event-stream" \
+  //     http://localhost:4000/api/v1/notifications/stream
+  bru.runner.skipRequest();
+}
+
+docs {
+  # GET /notifications/stream — the live feed (PAC-154 PR2)
+
+  One Server-Sent Events connection per tab. Authenticated with the same
+  Bearer header as everything else (the web client uses a `fetch`-based
+  EventSource for that; a token in the URL would land in every proxy log).
+  **No permission**, `@SkipTenant() @SkipBranch() @SkipModule()` — a
+  notification is addressed to you. **Every throttler is skipped** (a
+  reconnect wave after a deploy must not 429 the badge), so the only limit is
+  **8 open streams per user per API node**: the ninth is a `429` the client
+  backs off from.
+
+  ## Frames
+
+  | event | when | data |
+  | --- | --- | --- |
+  | `ready` | at once, with `retry: 3000` | empty — the client refetches the count + list on every open |
+  | `ping` | every 25 s | empty — keeps the balancer / proxy idle timeouts from closing the socket |
+  | `notification` | when the worker writes a row for the caller | the stored `NotificationRecord` (`id:` is the row id) |
+
+  The stream **ends by itself one second before the token's `exp`** (≤ 15
+  min; a token with no `exp` gets 15 min flat) so a stream never outlives its
+  token; the client refreshes the token *before* reconnecting when it is
+  within 30 s of expiry, and reconnects at once after a clean close. A node
+  shutting down ends every stream it holds.
+
+  The row is re-read **once per recipient per nudge** and handed to every tab
+  of that user; a nudge for a row that is not the caller's is dropped. A read
+  that fails drops that one frame — never the stream, and never the driver's
+  error text.
+
+  ## Responses
+
+  - `200 text/event-stream` with `Cache-Control: no-cache, no-transform`,
+    `X-Accel-Buffering: no`, `Connection: keep-alive`.
+  - `401` — no / expired token (reconnect after a refresh).
+  - `429` — this user already holds 8 streams on this node.
+
+  ## Not run by the CLI
+
+  `bru.runner.skipRequest()` in the pre-request script: the runner cannot
+  consume an event stream and would hang on it. Covered end to end by
+  `packages/api/test/notifications-stream.e2e-spec.ts` (ready frame + headers,
+  nudge → frame, one read per nudge across tabs, foreign nudge dropped, the
+  cap, close at `exp`).
+}

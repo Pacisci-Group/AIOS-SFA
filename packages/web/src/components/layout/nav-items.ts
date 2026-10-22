@@ -1,5 +1,8 @@
 import {
   BarChart3,
+  Bell,
+  ChartColumn,
+  FileDown,
   Home,
   LayoutDashboard,
   SlidersHorizontal,
@@ -10,6 +13,7 @@ import {
 } from "lucide-react";
 import { ModuleKey } from "@sfa/shared";
 import { SETTINGS_PERMISSIONS } from "@/features/settings/settings-sections";
+import { NOTIFICATIONS_PATH } from "@/lib/notifications-api";
 
 export type NavItem = {
   to: string;
@@ -86,6 +90,14 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: BarChart3,
         module: ModuleKey.Management,
       },
+      {
+        // PAC-152, part 2. Its own module, so it shows for anyone granted
+        // `analytics:read` — not only holders of `management:read`.
+        to: "/analytics",
+        label: "Analytics",
+        icon: ChartColumn,
+        module: ModuleKey.Analytics,
+      },
     ],
   },
   {
@@ -119,6 +131,22 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     /*
+     * The Data Export page (PAC-152). Its own section rather than a
+     * Management entry: it is tooling for the data team, a different persona
+     * from the dashboards above, and gated by its own module.
+     */
+    title: "Data",
+    items: [
+      {
+        to: "/data-export",
+        label: "Data Export",
+        icon: FileDown,
+        module: ModuleKey.DataExport,
+      },
+    ],
+  },
+  {
+    /*
      * One entry, not the five this section used to hold.
      *
      * Agency Users · Roles & Permissions · Branding · Domains · Email were five
@@ -130,6 +158,13 @@ export const NAV_SECTIONS: NavSection[] = [
      */
     title: "Workspace",
     items: [
+      // No gate (PAC-154): a notification is addressed to you, whatever you
+      // may do. The row carries the unread badge — see `SidebarNavItem`.
+      {
+        to: NOTIFICATIONS_PATH,
+        label: "Notifications",
+        icon: Bell,
+      },
       {
         to: "/settings",
         label: "Workspace Settings",

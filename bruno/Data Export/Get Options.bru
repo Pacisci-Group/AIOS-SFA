@@ -1,0 +1,63 @@
+meta {
+  name: Get Options
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/data-export/options
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{dataExportToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const { branches, producers } = res.getBody();
+    if (branches.length) bru.setVar("dataExportBranchId", branches[0].id);
+    if (producers.length) bru.setVar("dataExportProducerId", producers[0].id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists branches and producers for an agency-scope caller", function () {
+    const { branches, producers } = res.getBody();
+    expect(branches.length).to.be.at.least(1);
+    expect(producers.length).to.be.at.least(1);
+    expect(producers[0]).to.have.keys(["id", "name"]);
+  });
+}
+
+docs {
+  # GET /data-export/options — what the caller may filter by
+
+  - **Module:** `data_export`
+  - **Permission:** `data_export:read`
+  - **Data scope:** agency → every branch and producer; branch → their own
+    branch and its producers; own → themselves only
+
+  The Data Team holds neither `agency:users:read` nor `agency:branches:read`,
+  so the page cannot list either through the usual endpoints. This lists them
+  behind `data_export:read` alone — every name here already appears in the
+  exported `*_name` columns, so it discloses nothing new.
+
+  Producers are holders of the `producer` role. A deactivated producer stays
+  listed with `(inactive)` appended: their historic sales still carry their
+  name.
+
+  ## Response `200`
+
+  ```json
+  {
+    "branches": [{ "id": "…", "name": "Main" }],
+    "producers": [{ "id": "…", "name": "Pat Producer" }]
+  }
+  ```
+}

@@ -85,8 +85,16 @@ export interface AgingAuditRow {
   dealId: string;
   householdId: string | null;
   clientName: string;
+  /** Who sold the deal. Attribution — never moves. */
   producerId: string | null;
   producerName: string | null;
+  /**
+   * Who is responsible for the audit now: its user assignee, or the seller
+   * when it was never assigned. Differs from the producer once a departed
+   * producer's work has been transferred (PAC-136). Null when a role owns it.
+   */
+  assigneeId: string | null;
+  assigneeName: string | null;
   /** `Not Submitted` | `Pending` | `Fail` — never `Pass`, by definition. */
   auditStatus: string;
   /** Items still failed and unresolved on this audit. */
@@ -170,6 +178,14 @@ export interface TeamActivityResponse {
   rows: TeamActivityRow[];
   /** The "Team Total" row: sums, and the ratio recomputed from the sums. */
   totals: TeamActivityStats;
+  /**
+   * Open audit items on audits assigned to a **role** rather than a person —
+   * the "Assigned to a role" line under the totals. Kept out of every producer
+   * row and out of `totals.openAuditItems`, which sums those rows: a role is a
+   * queue, not a person, but its backlog must not vanish from the table either.
+   * All time, like `openAuditItems`.
+   */
+  roleAssignedOpenAuditItems: number;
 }
 
 /**

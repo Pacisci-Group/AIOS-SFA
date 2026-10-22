@@ -16,6 +16,10 @@ import {
   getQuoteRecapContext,
 } from "@/lib/quote-recaps-api";
 import { newSubmissionToken } from "@/lib/submission-token";
+import { agencyTodayYmd } from "@/lib/dates";
+import { getStoredUser } from "@/lib/api-client";
+import { managementDashboardKey } from "@/lib/management-dashboard-api";
+import { ownerDashboardKey } from "@/lib/owner-dashboard-api";
 
 interface StartQuoteRecapStepProps {
   leadId: string;
@@ -40,6 +44,8 @@ export function StartQuoteRecapStep({
 }: StartQuoteRecapStepProps) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  // The agency's today (PAC-159): the default and the ceiling of the quote date.
+  const agencyToday = agencyTodayYmd(getStoredUser()?.timeZone);
 
   // See `NewQuoteRecapPage` — a ref, so a retry after a failed submit reuses
   // the token and is idempotent server-side rather than creating a second
@@ -55,6 +61,8 @@ export function StartQuoteRecapStep({
     mutationFn: (values: QuoteRecapFormValues) =>
       createQuoteRecapWithDocument({
         leadId,
+        // The day the quote was given, on the agency's calendar (PAC-159).
+        quoteDate: values.quoteDate,
         policies: toPolicyInputs(values.policies),
         insuranceRenewalMonth: values.insuranceRenewalMonth,
         notes: values.notes?.trim() ? values.notes.trim() : undefined,
@@ -63,6 +71,11 @@ export function StartQuoteRecapStep({
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      // Everything that reads quotes live — see `NewQuoteRecapPage` (PAC-159).
+      void queryClient.invalidateQueries({ queryKey: ["performance"] });
+      void queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+      void queryClient.invalidateQueries({ queryKey: ownerDashboardKey });
+      void queryClient.invalidateQueries({ queryKey: managementDashboardKey });
       // The lead's own cached detail, for the same reason `NewQuoteRecapPage`
       // does it: `staleTime` would otherwise serve the pre-recap view.
       void queryClient.invalidateQueries({ queryKey: leadDetailKey(leadId) });
@@ -118,7 +131,8 @@ export function StartQuoteRecapStep({
       {contextQuery.data && (
         <QuoteRecapForm
           context={contextQuery.data}
-          initialValues={emptyQuoteRecap()}
+          initialValues={emptyQuoteRecap(agencyToday)}
+          maxQuoteDate={agencyToday}
           submitting={mutation.isPending}
           errorMessage={error}
           onSubmit={(values) => {

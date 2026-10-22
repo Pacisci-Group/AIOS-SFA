@@ -7,16 +7,23 @@ import {
 } from '../common/decorators/access.decorators';
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
-import { ownerDashboardQuerySchema } from './dto/owner-dashboard-query.dto';
-import type { OwnerDashboardQueryDto } from './dto/owner-dashboard-query.dto';
+import {
+  ownerDashboardQuerySchema,
+  ownerOpenQuotesQuerySchema,
+} from './dto/owner-dashboard-query.dto';
+import type {
+  OwnerDashboardQueryDto,
+  OwnerOpenQuotesQueryDto,
+} from './dto/owner-dashboard-query.dto';
 import { OwnerDashboardService } from './owner-dashboard.service';
 
 /**
  * The Owner View dashboard — "Strategy Hub" (PAC-135).
  *
- * Three reads, one query schema: the page promises that its KPI row, its
- * leaderboard and its lead-source table agree, and sharing the schema is what
- * stops them being asked different questions.
+ * Five reads, one query schema: the page promises that its KPI row, its
+ * leaderboard, its lead-source table and its quotes-by-producer table agree,
+ * and sharing the schema is what stops them being asked different questions.
+ * The open-quotes drawer takes the same filter plus a producer and a page.
  *
  * ## Why this is not `leaderboard:read`
  *
@@ -65,5 +72,27 @@ export class OwnerDashboardController {
     query: OwnerDashboardQueryDto,
   ) {
     return this.service.leadSourceMatrix(access, branchId, query);
+  }
+
+  /** Quotes written per producer: sold, open, lost, open premium. */
+  @Get('producer-quotes')
+  producerQuotes(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Query(new ZodValidationPipe(ownerDashboardQuerySchema))
+    query: OwnerDashboardQueryDto,
+  ) {
+    return this.service.producerQuotes(access, branchId, query);
+  }
+
+  /** One producer's open quotes for the window, paged — the card's drawer. */
+  @Get('open-quotes')
+  openQuotes(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Query(new ZodValidationPipe(ownerOpenQuotesQuerySchema))
+    query: OwnerOpenQuotesQueryDto,
+  ) {
+    return this.service.openQuotes(access, branchId, query);
   }
 }

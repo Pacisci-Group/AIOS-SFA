@@ -2,6 +2,7 @@ import {
   AGENCY_SLUG_MAX_LENGTH,
   AGENCY_SLUG_MIN_LENGTH,
   AGENCY_SLUG_PATTERN,
+  DEFAULT_AGENCY_TIME_ZONE,
   DEFAULT_BRANCH_NAME,
   ModuleKey,
   ONBOARDING_DEFAULT_MODULES,
@@ -56,6 +57,12 @@ export const onboardFormSchema = z.object({
       }),
     ),
     npn: z.string().trim().max(20, "NPNs are at most 20 characters"),
+    /**
+     * IANA zone (PAC-141). Always sent: the picker opens on US Central, so a
+     * blank here means the operator cleared it, not that they skipped it.
+     * Whether the name is a real zone is the server's call (runtime + Mongo).
+     */
+    timezone: z.string().trim().min(1, "Choose the agency's time zone"),
   }),
   branch: z.object({
     name: z.string().trim().min(1, "Give the branch a name").max(80),
@@ -90,6 +97,7 @@ export const EMPTY_ONBOARD: OnboardFormValues = {
     // empty state and a button.
     carrierAppointments: [{ carrierId: "", carrierAgencyCode: "" }],
     npn: "",
+    timezone: DEFAULT_AGENCY_TIME_ZONE,
   },
   branch: {
     name: DEFAULT_BRANCH_NAME,
@@ -129,6 +137,7 @@ export function toOnboardInput(values: OnboardFormValues): OnboardAgencyInput {
           active: row.active,
         })),
       npn: trimmed(values.agency.npn),
+      timezone: values.agency.timezone.trim(),
     },
     branch: {
       name: values.branch.name.trim(),

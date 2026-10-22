@@ -6,6 +6,7 @@ import {
 import type { LeadTemperature } from '@sfa/shared';
 import { z } from 'zod';
 import { leadSourceIdField } from './create-lead.dto';
+import { ymd } from '../../common/dto/business-date.dto';
 
 /**
  * `PATCH /leads/:id` — the Lead Detail inline edits (PAC-38).
@@ -15,6 +16,12 @@ import { leadSourceIdField } from './create-lead.dto';
  */
 export const updateLeadSchema = z
   .object({
+    /**
+     * Re-date the lead (PAC-159): the day it came in, which every lead count
+     * and aging figure reads. Moved only when the day differs; bounded in the
+     * service — not in the future, not after the lead's first quote or sale.
+     */
+    createdDate: ymd.optional(),
     /** A canonical label. Raw SmartSuite codes are rejected on write even though
      *  `normalizeLeadStatus` still accepts them on read — that is how the
      *  migrated mix converges instead of growing. */

@@ -1,0 +1,42 @@
+meta {
+  name: Unread Count
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/notifications/unread-count
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts at least the row just produced", function () {
+    expect(res.getBody().unread).to.be.a("number");
+    expect(res.getBody().unread).to.be.at.least(1);
+  });
+}
+
+docs {
+  # GET /notifications/unread-count — the sidebar badge
+
+  Same guard story as `List Notifications`: authenticated, no permission,
+  scoped to the caller. A covered count on `{ recipientId, readAt: null }`.
+
+  The client treats this as **the truth and the SSE stream as a signal**: on a
+  live event it re-fetches this rather than incrementing locally, because
+  multi-tab, mark-read elsewhere and reconnect gaps all drift.
+
+  ## Response `200`
+  ```json
+  { "unread": 3 }
+  ```
+}

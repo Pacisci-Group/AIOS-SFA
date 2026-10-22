@@ -1,0 +1,62 @@
+meta {
+  name: Remove Push Subscription
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}/notifications/push-subscriptions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{notifAdminAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "endpoint": "{{pushEndpoint}}"
+  }
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /notifications/push-subscriptions — withdraw this browser's subscription (PAC-154 PR4)
+
+  Authenticated, **no permission**, scoped to the caller. Run **Register Push
+  Subscription** first — it captures `pushEndpoint`.
+
+  ⚠ **The endpoint travels in the request body, not the path.** A push
+  endpoint is a long URL with `/` and `%` in it, and nginx's `proxy_pass` with
+  a URI part re-normalises encoded slashes — `DELETE …/push-subscriptions/:endpoint`
+  would arrive mangled behind the production proxy. The ticket's table wrote
+  the path form; this is the deliberate deviation.
+
+  A **soft delete**: the row gets `deletedAt` and stays (PAC-155 — nothing is
+  hard-deleted). The worker does the same on a `404`/`410` from the push
+  service. Somebody else's endpoint — and one already withdrawn — is a `404`,
+  not a `403`, so an endpoint cannot be probed for whose it is.
+
+  ## Body
+  ```json
+  { "endpoint": "https://fcm.googleapis.com/fcm/send/…" }
+  ```
+
+  ## Response `204`
+  Empty.
+
+  ## Errors
+  - `400` — body without a valid `https` endpoint.
+  - `401` — no session.
+  - `404` — not the caller's live subscription.
+}

@@ -27,9 +27,10 @@ tests {
 docs {
   # GET /management-dashboard/alerts — a range it does not offer
 
-  `today` and `week` are the **producer** dashboard's chips. The Manager view
-  takes the Owner view's filter, whose periods are `mtd` · `lastMonth` ·
-  `last3Months` · `ytd` · `lastYear` · `custom`. Also `400`: `custom` without
+  `week` is the **producer** dashboard's chip. The Manager view takes the
+  Owner view's filter, whose periods are `today` · `yesterday` · `mtd` ·
+  `lastMonth` · `last3Months` · `ytd` · `lastYear` · `custom`, plus the
+  Analytics page's `last12Months`. Also `400`: `custom` without
   both bounds, reversed, an impossible date (`2026-02-31`), or more than 366
   days.
 }

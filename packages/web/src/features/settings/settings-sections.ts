@@ -2,6 +2,7 @@ import { AgencyPermission } from "@sfa/shared";
 import {
   AtSign,
   BadgeCheck,
+  Clock,
   Globe,
   KeyRound,
   Palette,
@@ -54,6 +55,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "What each role can see and do, page by page.",
     icon: KeyRound,
     permission: AgencyPermission.RolesRead,
+  },
+  {
+    to: "/settings/agency",
+    label: "Agency",
+    description:
+      "Your time zone, and the hour your team is set Away each evening.",
+    icon: Clock,
+    permission: AgencyPermission.SettingsRead,
   },
   {
     to: "/settings/branding",

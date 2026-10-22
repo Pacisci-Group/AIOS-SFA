@@ -63,6 +63,7 @@ tests {
     expect(totals.householdsQuoted).to.equal(sum("householdsQuoted"));
     expect(totals.householdsSold).to.equal(sum("householdsSold"));
     expect(totals.openAuditItems).to.equal(sum("openAuditItems"));
+    expect(Number.isInteger(res.getBody().roleAssignedOpenAuditItems)).to.equal(true);
   });
 }
 
@@ -94,7 +95,12 @@ docs {
   | householdsQuoted | distinct households with a quote recap | period |
   | householdsSold | distinct households with a new-business sale | period |
   | householdCloseRatio | `householdsSold ÷ householdsQuoted`, %; `null` over no quotes | period |
-  | openAuditItems | every audit item still outstanding on the producer's deals — an **all-time backlog**, the one figure the period chips do not move | all time |
+  | openAuditItems | every audit item still outstanding on audits this person is **responsible for** — the user assignee, or the seller when the audit was never assigned; role-owned audits count for nobody. An **all-time backlog**, the one figure the period chips do not move. Follows a work transfer to the successor (PAC-136) | all time |
+
+  **`roleAssignedOpenAuditItems`** — open audit items on audits assigned to a
+  *role* rather than a person: the "Assigned to a role" line under the totals.
+  Not in any row and not in `totals.openAuditItems`; shown by the web only when
+  above zero (product owner, 2026-10-05).
 
   Distinct household is the same identity the Owner view and the producer
   scorecard use (`HOUSEHOLD_KEY_EXPR`), so the three agree on what a household is.
@@ -107,7 +113,8 @@ docs {
       { "producerId": "66f0…11", "name": "Pat Producer", "initials": "PP", "availability": "available",
         "householdsQuoted": 12, "householdsSold": 7, "householdCloseRatio": 58.3, "openAuditItems": 2 }
     ],
-    "totals": { "householdsQuoted": 31, "householdsSold": 19, "householdCloseRatio": 61.3, "openAuditItems": 5 }
+    "totals": { "householdsQuoted": 31, "householdsSold": 19, "householdCloseRatio": 61.3, "openAuditItems": 5 },
+    "roleAssignedOpenAuditItems": 1
   }
   ```
 

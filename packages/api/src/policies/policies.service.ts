@@ -310,7 +310,9 @@ export class PoliciesService {
     leadId?: Types.ObjectId | null,
   ): Promise<PolicyDocument> {
     // Before the assignment block below overwrites the stored values.
-    const before = snapshot(POLICY_CHANGE_FIELDS, policy);
+    const before = snapshot(POLICY_CHANGE_FIELDS, policy, {
+      timeZone: access.timeZone,
+    });
 
     if (dto.policyNumber) {
       // Against the *effective* carrier: the patched value if this request is
@@ -471,7 +473,7 @@ export class PoliciesService {
     const changes = diffSnapshots(
       POLICY_CHANGE_FIELDS,
       before,
-      snapshot(POLICY_CHANGE_FIELDS, policy),
+      snapshot(POLICY_CHANGE_FIELDS, policy, { timeZone: access.timeZone }),
     );
     if (!changes.length) return;
 

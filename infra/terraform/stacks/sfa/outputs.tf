@@ -87,6 +87,16 @@ output "mongodb_host" {
   value = module.mongo.host
 }
 
+output "redis_uri" {
+  description = "REDIS_URL — the Valkey connection string over the VPC (PAC-154). TLS; the droplets reach it by tag/id through the cluster firewall."
+  value       = module.redis.connection_uri
+  sensitive   = true
+}
+
+output "redis_host" {
+  value = module.redis.private_host
+}
+
 output "spaces_bucket" {
   description = "Object storage bucket name (STORAGE_BUCKET)"
   value       = var.enable_spaces ? module.spaces[0].name : null

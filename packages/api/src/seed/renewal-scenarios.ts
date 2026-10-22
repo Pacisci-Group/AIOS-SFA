@@ -341,6 +341,7 @@ async function run() {
     permissions: ['crm_service:read', 'crm_service:write'],
     // Agency-scoped, so no owner clamp is applied and roles are never consulted.
     roleIds: [],
+    timeZone: agency.timezone,
   };
   await ticketsService.materializeRenewalCycles(access);
 

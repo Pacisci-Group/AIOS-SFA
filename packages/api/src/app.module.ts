@@ -24,6 +24,7 @@ import {
   DEFAULT_SHORT_LIMIT,
   HOUR_MS,
   MINUTE_MS,
+  THROTTLER_NAMES,
 } from './config/rate-limit.config';
 import { ActivitiesModule } from './activities/activities.module';
 import { AddressModule } from './address/address.module';
@@ -33,6 +34,7 @@ import { AgencyEmailModule } from './agency-email/agency-email.module';
 import { AuditTemplatesModule } from './audit-templates/audit-templates.module';
 import { BranchesModule } from './branches/branches.module';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { CarriersModule } from './carriers/carriers.module';
 import { LeadSourcesModule } from './lead-sources/lead-sources.module';
 import { ClientsModule } from './clients/clients.module';
@@ -45,6 +47,8 @@ import { LeadsModule } from './leads/leads.module';
 import { PerformanceModule } from './performance/performance.module';
 import { OwnerDashboardModule } from './owner-dashboard/owner-dashboard.module';
 import { ManagementDashboardModule } from './management-dashboard/management-dashboard.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { DataExportModule } from './data-export/data-export.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -57,6 +61,7 @@ import { ShareLinksModule } from './share-links/share-links.module';
 import { SoldDealsModule } from './sold-deals/sold-deals.module';
 import { StorageModule } from './storage/storage.module';
 import { AgencySetupModule } from './agency-setup/agency-setup.module';
+import { AgencyProfileModule } from './agency-profile/agency-profile.module';
 import { AgencyCarrierAppointmentsModule } from './agency-carrier-appointments/agency-carrier-appointments.module';
 import { TenantBrandingModule } from './tenant-branding/tenant-branding.module';
 import { UsersModule } from './users/users.module';
@@ -115,10 +120,16 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // a NoopPermissionCache fallback), so a Redis-backed throttler would
     // silently degrade to *unlimited* whenever Redis was down — strictly worse
     // than per-instance limits.
+    // Named throttlers: a bare `@SkipThrottle()` targets `default` and skips
+    // neither of these. Use `SkipAllThrottlers()` — see THROTTLER_NAMES.
     ThrottlerModule.forRoot({
       throttlers: [
-        { name: 'short', ttl: MINUTE_MS, limit: DEFAULT_SHORT_LIMIT },
-        { name: 'long', ttl: HOUR_MS, limit: DEFAULT_LONG_LIMIT },
+        {
+          name: THROTTLER_NAMES[0],
+          ttl: MINUTE_MS,
+          limit: DEFAULT_SHORT_LIMIT,
+        },
+        { name: THROTTLER_NAMES[1], ttl: HOUR_MS, limit: DEFAULT_LONG_LIMIT },
       ],
     }),
     MongoModule,
@@ -142,6 +153,10 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // modules because that is the wizard it gates, and routes under its own
     // `agency/setup` prefix.
     AgencySetupModule,
+    // The agency's own profile — its working day: time zone and end-of-day
+    // hour (PAC-141, PAC-149). Same shape, own `agency/profile` prefix, gated
+    // on its own `agency:settings:*` pair.
+    AgencyProfileModule,
     // The agency's carrier appointments (PAC-93). Same shape as the modules
     // above — its own `agency/carrier-appointments` prefix, its own
     // `agency:carrier_appointments:*` gate, no module entitlement.
@@ -201,6 +216,8 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // so it never collided with the `management` stub it replaces; the stub is
     // gone anyway, since nothing served `GET /management` but a placeholder.
     ManagementDashboardModule,
+    DataExportModule,
+    AnalyticsModule,
     LeaderboardModule,
     ActivitiesModule,
     // Mailers and mailer campaigns (PAC-73, PAC-71). Registers the `mailers`,
@@ -214,6 +231,10 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // a prefix of anything above, so its position here carries no ordering
     // constraint — unlike PoliciesModule and ShareLinksModule.
     BugReportsModule,
+    // The caller's own notifications (PAC-154): list, unread count, mark
+    // read. Routes on `notifications`, a prefix of nothing above. The rows
+    // are written by the worker, never here.
+    NotificationsModule,
     // Registers the `auditTemplates` model so its indexes build and the core
     // seed / audit generation can inject it (PAC-40).
     AuditTemplatesModule,

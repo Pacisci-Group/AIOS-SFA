@@ -135,6 +135,48 @@ export const AgencyPermission = {
    */
   CarrierAppointmentsRead: 'agency:carrier_appointments:read',
   CarrierAppointmentsWrite: 'agency:carrier_appointments:write',
+  /**
+   * Hand a person's open work — tickets, clients, leads, audits, rotation
+   * slots, share links — to a named colleague (PAC-136). The departing-
+   * employee case: what is still to be done moves, what was done stays
+   * credited to whoever did it.
+   *
+   * Its own permission rather than `agency:users:write`: the product owner
+   * wants it delegable on its own, and reassigning a whole book of clients is
+   * a different blast radius from inviting someone. It is still granted per
+   * role, but only an **agency-wide** role can use it — a branch- or own-scoped
+   * holder is refused by the service (product owner, 2026-10-05) — and work
+   * never crosses from one branch to another.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, and
+   * the same ⚠: it reaches existing owners only through the role-template
+   * migration that shipped with it.
+   */
+  WorkTransfer: 'agency:work_transfer:write',
+  /**
+   * Agency settings — how the agency's working day runs: its time zone and the
+   * hour everyone is set Away (`/settings/agency`, PAC-149).
+   *
+   * PAC-141 put the time zone behind the branding pair, which was defensible
+   * for one rarely-touched field. With the end-of-day hour beside it, the page
+   * now does something to every user every night, and an owner delegating
+   * "branding" on the role matrix would unknowingly hand over the clock that
+   * puts the office Away. Its blast radius is its own — the rule the four
+   * pairs above follow. PAC-148's working-days calendar and agency holidays
+   * belong here too.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, for
+   * the same three reasons written up there.
+   *
+   * ⚠ Existing owners received this pair from the
+   * `agency_settings_permission_grant` migration, not from
+   * `DEFAULT_ROLE_TEMPLATES` — the template only reaches an agency when it is
+   * created. Without that migration every owner would have lost the page the
+   * moment it shipped (the PAC-133 lock-out), and onboarding a new agency
+   * would have failed on a key with no catalog row.
+   */
+  SettingsRead: 'agency:settings:read',
+  SettingsWrite: 'agency:settings:write',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

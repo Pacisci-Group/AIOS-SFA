@@ -1,7 +1,14 @@
-import { LEAD_SOURCE_NONE, policyTypeQueryValues } from '@sfa/shared';
+import {
+  carrierQueryValues,
+  LEAD_SOURCE_NONE,
+  policyTypeQueryValues,
+} from '@sfa/shared';
 import { PipelineStage, Types } from 'mongoose';
-import { AGENCY_TIME_ZONE } from '../../performance/performance.range';
-import type { YmdRange } from '../../performance/performance.range';
+import { requireTimeZone } from '../dates/time-zones';
+import {
+  instantWindow,
+  type YmdRange,
+} from '../../performance/performance.range';
 
 /**
  * The shared front half of every Owner dashboard aggregation (PAC-135).
@@ -57,6 +64,36 @@ export interface OwnerFilterClauses {
   policyTypes?: readonly string[];
   /** `leadSources` ids and/or `LEAD_SOURCE_NONE`, or none for "every source". */
   leadSourceIds?: readonly string[];
+}
+
+/**
+ * Opt-in extras for {@link linesPrefix} (PAC-152, part 2 — the Analytics page).
+ *
+ * The Owner and Manager dashboards pass none, and their stages are then
+ * byte-for-byte what they were before this existed.
+ */
+export interface LinesOptions {
+  /**
+   * Carry each policy's `carrier` on its line, so a pipeline can group or
+   * split by carrier. Only a looked-up source has one: quote recaps record no
+   * carrier, so their lines carry `null`.
+   */
+  carrier?: boolean;
+  /**
+   * Keep only lines whose carrier is one of these display names (every alias
+   * code included — see `carrierQueryValues`). Implies `carrier`. A record
+   * left with no line drops out, and a lineless record never matches: it has
+   * no carrier to match on.
+   */
+  carriers?: readonly string[];
+}
+
+/** Every stored spelling of the selected carriers; `null` for "no filter". */
+export function carrierValues(
+  carriers: readonly string[] | undefined,
+): string[] | null {
+  if (!carriers?.length) return null;
+  return [...new Set(carriers.flatMap(carrierQueryValues))];
 }
 
 /**
@@ -149,8 +186,11 @@ export function linesPrefix(
   source: LinesSource,
   filter: OwnerFilterClauses,
   withSource: boolean,
+  options: LinesOptions = {},
 ): PipelineStage[] {
   const stages: PipelineStage[] = [{ $match: match }];
+  const carrierFilter = carrierValues(options.carriers);
+  const withCarrier = Boolean(options.carrier || carrierFilter);
 
   const needsSource = withSource || Boolean(filter.leadSourceIds?.length);
   if (needsSource) {
@@ -166,7 +206,15 @@ export function linesPrefix(
         foreignField: source.lines.foreignField,
         pipeline: [
           { $match: { isTestRecord: { $ne: true } } },
-          { $project: { _id: 0, policyType: 1, premium: 1, items: 1 } },
+          {
+            $project: {
+              _id: 0,
+              policyType: 1,
+              premium: 1,
+              items: 1,
+              ...(withCarrier ? { carrier: 1 } : {}),
+            },
+          },
         ],
         as: '_rows',
       },
@@ -192,6 +240,9 @@ export function linesPrefix(
                 premium: { $ifNull: ['$$row.premium', 0] },
                 items: { $ifNull: [rowItems, 0] },
                 typed: true,
+                ...(withCarrier
+                  ? { carrier: { $ifNull: ['$$row.carrier', null] } }
+                  : {}),
               },
             },
           },
@@ -201,6 +252,7 @@ export function linesPrefix(
               premium: { $ifNull: ['$premium', 0] },
               items: { $ifNull: [`$${source.itemsField}`, 0] },
               typed: false,
+              ...(withCarrier ? { carrier: null } : {}),
             },
           ],
         ],
@@ -243,6 +295,23 @@ export function linesPrefix(
     );
   }
 
+  if (carrierFilter) {
+    stages.push(
+      {
+        $addFields: {
+          lines: {
+            $filter: {
+              input: '$lines',
+              as: 'line',
+              cond: { $in: ['$$line.carrier', carrierFilter] },
+            },
+          },
+        },
+      },
+      { $match: { 'lines.0': { $exists: true } } },
+    );
+  }
+
   stages.push({
     $addFields: {
       linePremium: { $sum: '$lines.premium' },
@@ -257,38 +326,50 @@ export function linesPrefix(
  * A lead's creation day as a `YYYYMMDD` integer, comparable with the windows
  * {@link YmdRange} describes.
  *
- * Leads carry an instant, not a calendar day, and the instant has two
- * provenances: the app writes a real one, while the migration wrote SmartSuite's
- * **date-only** value as UTC midnight. Reading a UTC-midnight value in Chicago
- * lands it on the previous day — the same trap `quoteDateYmd` documents in
- * `quote.normalize.ts`, solved the same way: exactly-midnight-UTC is read as a
- * UTC date, anything else as a Chicago one.
+ * `createdDate` is the business "lead received on" instant (the migration's
+ * SmartSuite date, or the New Lead form's date), with the Mongoose `createdAt`
+ * as the fallback for a migrated lead that never had one. Both are real
+ * instants — a day-only value sits at agency-local midnight (PAC-159) — so the
+ * day is simply read on the agency's calendar. Computed at **read** time, like
+ * every sales window, so a change to the agency's zone re-buckets lead history
+ * on the next request. Documented on `Agency.timezone`.
+ *
+ * Not a `$match`-able expression: leads are counted, never range-scanned, by
+ * creation day, and the `$ifNull` fallback has no index to ride anyway.
+ *
+ * The zone is also validated on write (`assertMongoKnowsTimeZone`): a name
+ * Node accepts but Mongo's zone table does not would make this stage throw,
+ * and that is a 500 on every Owner and Manager page.
  */
-export const LEAD_CREATED_YMD_EXPR = {
-  $let: {
-    vars: { created: { $ifNull: ['$createdDate', '$createdAt'] } },
-    in: {
-      $toInt: {
-        $dateToString: {
-          date: '$$created',
-          format: '%Y%m%d',
-          timezone: {
-            $cond: [
-              { $eq: [{ $mod: [{ $toLong: '$$created' }, 86_400_000] }, 0] },
-              'UTC',
-              AGENCY_TIME_ZONE,
-            ],
-          },
-        },
+export function leadCreatedYmdExpr(timeZone: string) {
+  return {
+    $toInt: {
+      $dateToString: {
+        date: { $ifNull: ['$createdDate', '$createdAt'] },
+        format: '%Y%m%d',
+        timezone: requireTimeZone(timeZone),
       },
     },
-  },
-} as const;
+  } as const;
+}
 
-/** The half-open Ymd window as a `$match` clause on `field`. */
+/** The half-open Ymd window as a `$match` clause on a computed `YYYYMMDD` `field`. */
 export function ymdWindow(
   field: string,
   range: YmdRange,
 ): Record<string, unknown> {
   return { [field]: { $gte: range.startYmd, $lt: range.endYmd } };
+}
+
+/**
+ * The same calendar window as a `$match` clause on a stored **instant**
+ * (`soldDate`, `quoteDate`), cut on the agency's clock (PAC-159). The bounds
+ * are computed once here, so the clause stays a plain indexed range.
+ */
+export function dateWindow(
+  field: string,
+  range: YmdRange,
+  timeZone: string,
+): Record<string, unknown> {
+  return { [field]: instantWindow(range, timeZone) };
 }

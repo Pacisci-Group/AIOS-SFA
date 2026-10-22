@@ -1,0 +1,71 @@
+meta {
+  name: Get Agency Profile
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/agency/profile
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("reports the agency name, an IANA time zone and a whole end-of-day hour", function () {
+    const body = res.getBody();
+    expect(body.agencyName).to.be.a("string").and.not.be.empty;
+    expect(body.timezone).to.match(/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)*$/);
+    expect(Number.isInteger(body.endOfDayHour)).to.equal(true);
+    expect(body.endOfDayHour).to.be.within(0, 23);
+  });
+}
+
+docs {
+  # GET /agency/profile — the agency's working day (PAC-141, PAC-149)
+
+  The owner-editable facts about the agency itself: the IANA zone it keeps its
+  working day in, and the hour on that clock after which everyone is set Away.
+
+  - **Module:** none (`@SkipModule()`) — the agency's identity is not a
+    product module that can be switched off.
+  - **Permission:** `agency:settings:read` — its own pair since PAC-149.
+    PAC-141 reused `agency:branding:read` for the zone alone; with the
+    end-of-day hour beside it the page sets the whole office Away each night,
+    and an owner delegating "branding" must not hand that over unknowingly.
+    By default only the Agency Owner holds it; existing owners received it
+    from the `agency_settings_permission_grant` migration.
+  - **Data scope:** none — the caller's own agency, from the token.
+
+  ## What the zone drives
+  - Every dashboard date window — `today`, `week`, `mtd`, the Owner view's
+    presets, the Manager view's business-day aging, the leaderboard's default
+    month — is cut on this calendar (`AccessContext.timeZone`, resolved once per
+    request).
+  - The clock the end-of-day Away sweep reads (`Set My Availability`).
+  - The calendar day an app-written quote recap is filed on.
+
+  ## What the hour drives
+  - The end-of-day Away sweep and nothing else: from `endOfDayHour:00` on the
+    agency's clock, every active user of the agency is set `away`, once per
+    local date. A whole hour, `0`–`23` (`20` = 8 PM), because the sweep ticks
+    every thirty minutes.
+
+  ## Response `200`
+  ```json
+  { "agencyName": "Smith Family Agency", "timezone": "America/Chicago", "endOfDayHour": 20 }
+  ```
+
+  Defaults to `America/Chicago` (US Central) and `20` (8 PM) for every agency
+  that has never set them; the Super Admin onboarding wizard pre-selects the
+  same zone.
+
+  ## Errors
+  - `403` — caller lacks `agency:settings:read`.
+}
