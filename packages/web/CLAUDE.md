@@ -5,6 +5,13 @@ component **source copied into the repo** (we own & edit it). This is the base f
 the whole app; do **not** introduce a second component library (MUI, Radix Themes,
 Chakra, etc.).
 
+**One exception, decided in PAC-148: the HR calendar page (PAC-169) uses
+FullCalendar v7 React with its shadcn theme — free standard plugins only (day
+grid, time grid, list, interaction), never the premium scheduler.** It renders
+inside our tokens and must stay light + dark clean. Do not remove it as a stray
+dependency, and do not reach for it anywhere else — the HR settings year grid
+(`features/hr/settings/calendar/YearGrid.tsx`) is hand-rolled on purpose.
+
 - **Primitives live in `src/components/ui/`** and are managed by the shadcn CLI —
   add new ones with `npx shadcn@latest add <component>` (from `packages/web`),
   don't hand-write them. Config is `packages/web/components.json`.

@@ -1,0 +1,78 @@
+meta {
+  name: Add Calendar Days
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/hr/calendar/days
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "source": "manual",
+    "days": [
+      {
+        "date": "2026-11-03",
+        "kind": "closure",
+        "label": "Office closed — flooding",
+        "reason": "Burst pipe overnight; office unusable."
+      }
+    ]
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrCalendarDayId", res.getBody().days[0].id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("echoes the row with its author", function () {
+    const day = res.getBody().days[0];
+    expect(day.date).to.equal("2026-11-03");
+    expect(day.kind).to.equal("closure");
+    expect(day.source).to.equal("manual");
+    expect(day.reason).to.be.a("string");
+    expect(day.createdBy).to.have.property("name");
+  });
+}
+
+docs {
+  # POST /hr/calendar/days — add holidays, closures, special working days (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  ## Body
+  ```json
+  { "source": "import" | "manual" | "onboarding",
+    "days": [{ "date": "YYYY-MM-DD", "kind": "holiday" | "closure" | "special_working_day",
+               "label": "…", "reason": "…" }] }
+  ```
+  A `manual` batch needs a `reason` on every row (the audit trail for a hand
+  change); `import` / `onboarding` rows carry none. 1–400 rows.
+
+  ## Semantics
+  - One **active** row per date. A date already on the calendar is a `409`
+    naming every clashing date, and **nothing from the batch is written**.
+  - Duplicate dates inside one batch are a `400`.
+  - A `special_working_day` opens the office on a weekend or holiday; a
+    `holiday` / `closure` closes it whatever the workweek says.
+  - `createdBy` is stamped from the request (the authorship plugin).
+
+  ## Response `201` — `{ "days": [AgencyCalendarDayView…] }`, sorted by date.
+
+  ## Errors
+  - `400` — validation. `409` — date already active. `403` — not an HR admin.
+}

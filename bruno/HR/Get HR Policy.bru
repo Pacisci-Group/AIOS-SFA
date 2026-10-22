@@ -1,0 +1,49 @@
+meta {
+  name: Get HR Policy
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/hr/policy
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("has the three slots", function () {
+    const body = res.getBody();
+    expect(["configured", "skipped", "none"]).to.include(body.leaveAndAttendance.status);
+    expect(body.leaveAndAttendance.activePolicyCount).to.be.a("number");
+    expect(body.compensation.status).to.equal("reserved");
+    expect(body.employeeHandbook.status).to.equal("reserved");
+  });
+}
+
+docs {
+  # GET /hr/policy — the HR Policy, assembled (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  **A view, not a record** (Asad, 2026-10-22). Reads the active leave-policy
+  count and `Agency.setup.hrPolicySkipped`; nothing stores it. The two
+  reserved slots are PAC-123's.
+
+  - `leaveAndAttendance.status` — `configured` (at least one active policy),
+    `skipped` (the owner skipped the onboarding phase and none has been added
+    since), `none` (no policy and the phase was never offered).
+
+  ## Response `200`
+  ```json
+  { "leaveAndAttendance": { "status": "configured", "activePolicyCount": 1 },
+    "compensation": { "status": "reserved" }, "employeeHandbook": { "status": "reserved" } }
+  ```
+}

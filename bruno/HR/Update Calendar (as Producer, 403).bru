@@ -1,0 +1,31 @@
+meta {
+  name: Update Calendar (as Producer, 403)
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/hr/calendar
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "workweek": [1]
+  }
+}
+
+tests {
+  test("a producer may read the calendar but never change it", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # PATCH /hr/calendar as a producer — 403
+
+  `hr:read` reads; `hr:write` is the reviewer capability over other people's
+  records; only `agency:hr:admin` touches the calendar. The collection's
+  default bearer is the producer, so this pins the gate.
+}

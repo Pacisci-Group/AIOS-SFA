@@ -1,0 +1,62 @@
+meta {
+  name: Get Holiday Suggestions
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar/holiday-suggestions?country=US&region=IL&year=2026
+  body: none
+  auth: bearer
+}
+
+params:query {
+  country: US
+  region: IL
+  year: 2026
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("pre-checks public holidays only", function () {
+    const s = res.getBody().suggestions;
+    const thanksgiving = s.find((h) => h.date === "2026-11-26");
+    expect(thanksgiving.type).to.equal("public");
+    expect(thanksgiving.preChecked).to.equal(true);
+    const valentines = s.find((h) => h.date === "2026-02-14");
+    expect(valentines.preChecked).to.equal(false);
+  });
+}
+
+docs {
+  # GET /hr/calendar/holiday-suggestions — `date-holidays` on the API (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Query: `country` (required), `region` (optional), `year` (2000–2100).
+
+  Runs the `date-holidays` package server-side — never in the browser — and
+  returns every holiday it knows for the year as the calendar would store it.
+  `public` holidays come `preChecked: true`; `bank` / `school` / `optional` /
+  `observance` unchecked. `substitute: true` marks the Friday or Monday the
+  office actually closes for a weekend holiday. `alreadyInCalendar` flags a
+  date an active row already holds, so the dialog can disable it.
+
+  **Nothing is written.** Saving is `POST /hr/calendar/days` with
+  `source: "import"` and the ticked rows.
+
+  ## Response `200`
+  ```json
+  { "country": "US", "region": "IL", "year": 2026,
+    "suggestions": [{ "date": "2026-07-03", "name": "Independence Day (substitute day)", "type": "public",
+                      "substitute": true, "preChecked": true, "alreadyInCalendar": false }, …] }
+  ```
+  ## Errors
+  - `400` — unknown country or region, or a year out of range.
+}

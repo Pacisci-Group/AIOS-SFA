@@ -26,6 +26,18 @@ export enum ModuleKey {
    * `analytics_module` migration copies the resulting 140/141.
    */
   Analytics = 'analytics',
+  /**
+   * HR (PAC-148, foundation in PAC-161): the agency calendar, leave policies
+   * and — in the sub-stories that follow — time off, attendance and the
+   * employee calendar page. Appended last for the same reason as
+   * `DataExport` — the `hr_module` migration copies the resulting 150/151.
+   *
+   * `hr:read` is every employee's gate (own records, the calendar); `hr:write`
+   * is the *reviewer* capability over others' records in the caller's scope.
+   * Administration (policies, calendar, onboarding) is `agency:hr:admin`, an
+   * admin capability rather than a third action — see `AgencyPermission`.
+   */
+  Hr = 'hr',
 }
 
 export const ALL_MODULE_KEYS = Object.values(ModuleKey);

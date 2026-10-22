@@ -1743,3 +1743,35 @@ load-bearing.
   close ratio should follow it; whether a year is the right backlog bound.
 - A requoted lead's earlier recap reads as *open* once the later recap takes the sale — visible by
   its Sold badge in the drawer; ~6 leads a year.
+
+## 25. PAC-161 — HR foundation (handoff, 2026-10-22)
+
+Branch `asad/pac-161-hr-foundation` off `dev`, one PR. Plan: `docs/plans/pac-161-hr-foundation-implementation-plan.md` (decisions 1–10 are the ones to read; 9 and 10 are Asad's and are also recorded as comments on the ticket).
+
+### Decisions — do not re-litigate
+- Permissions: `hr:read` / `hr:write` (module pair) + `agency:hr:admin` / `agency:hr:export` (admin pair). The page model tolerates no third action. `hr:read` authorises *own* writes later; `hr:write` is the reviewer capability; `/settings/hr` is behind `agency:hr:admin`.
+- Every template holds `hr:read`; Branch Manager holds all four (the Office Manager). The `hr_module` migration grants the same to existing roles and enables the module.
+- **No `hrPolicies` collection, no default policy, nothing seeded but the calendar document.** Zero leave policies is a valid state (the agency does not use leave). `LeavePolicyService.hasActivePolicy` is the gate PAC-162/165 ask.
+- A calendar day is a `YYYY-MM-DD` fact, not an instant. No holiday row is ever written without a person ticking it (onboarding step, import dialog, Q4 proposal confirm).
+
+### What exists now
+- `@sfa/shared`: `ModuleKey.Hr`, the two `AgencyPermission` keys, `domain/hr-calendar.ts`, `domain/hr-leave-policy.ts` (`LeavePolicyRules`, `DEFAULT_LEAVE_POLICY_RULES`), `domain/hr-policy.ts`, notification type `hr.holidays_proposed`.
+- API: collections `agencyCalendars`, `agencyCalendarDays` (partial unique on active date), `leavePolicies`; `common/working-days/` (pure maths + `WorkingDaysService` + the `date-holidays` wrapper), `common/hr/` (merge, validate, `LeavePolicyService`, `ensureAgencyCalendar`), `common/access/PermissionHoldersService`; `hr/` controllers for `/hr/calendar*`, `/hr/leave-policies*`, `/hr/policy`; `Agency.setup.calendarSkipped` / `hrPolicySkipped`; both provisioning paths and the demo seed create the calendar; worker `propose-next-year-holidays` (daily, Q4 on the agency clock, claim-then-notify); migration `20261022120000-hr_module.js`.
+- Web: `/settings/hr` (Calendar · Leave policies · HR policy tabs), onboarding phases 4 and 5 (`CalendarStep`, `HrPolicyStep`), `SKIP_FLAG_BY_STEP`, FullCalendar exception line in `packages/web/CLAUDE.md`.
+- Tests: 35 unit cases (`working-days`, `holiday-suggestions`, `leave-policy.merge`, `leave-policy.validate`), e2e `hr-settings`, `agency-onboarding` (calendar + rollback), `worker/propose-next-year-holidays`; Bruno `HR/` folder (17 requests, all green against the local API). `seedTestData` now has a Branch Manager (`test-manager@sfa.local`).
+
+### Verified
+- Migration applied by `api:dev` boot on the local dev DB: 4 catalog rows, 6 agencies enabled, 60 grants, 6 calendars.
+- Browser: Branch Manager imports 2026 holidays, adds a closure with a reason, creates a policy from the editor; HR policy tab reads Configured; the owner's wizard shows 6 steps and skipping both HR phases records both flags.
+
+### Gotchas
+- `date-holidays` region codes are **upper-case** (`OK`, `IL`); invalid codes do not throw — `isKnownCountry` / `isKnownRegion` guard them. Never `new Date(holiday.date)`; slice the string.
+- `strictBindCallApply` is off, so `Object.prototype.hasOwnProperty.call` returns `any` and the lint boundary refuses to return it — use `Object.keys(...).includes`.
+- Jest's vm realm: `structuredClone` output fails `getPrototypeOf(x) === Object.prototype`; the merge checks plain objects by tag.
+- A watch-mode restart mid-migration leaves a stale `migrations_lock` for `STALE_LOCK_MS` (5 min); the next instance reaps it. Don't save API files while a long migration runs locally.
+- `bruno/Auth/Forgot Password (Public)` returns 500 locally (pre-existing, unrelated).
+
+### Not in this ticket (seams left)
+- `LeavePoliciesService.employeesOn` returns 0 until PAC-162; `effectiveRules(asOf)` ignores `asOf` until PAC-162's assignment history.
+- `AgencyCalendarService.addDays` is where PAC-165 flags approved leave on a new closure; `inngest/events/hr.events.ts` is not created until its consumer exists.
+- Manager-view audit aging still uses the hard-coded US federal holidays in `common/dates/business-days.ts`.

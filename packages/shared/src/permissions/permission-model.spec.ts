@@ -202,6 +202,60 @@ describe('page-level permission model', () => {
     });
   });
 
+  /**
+   * PAC-161. Four capabilities over two strings each: the page pair for
+   * employees and reviewers, the `agency:` pair for administration — because
+   * the page model tolerates no third action, and this spec is what enforces
+   * that. Who holds what by default is asserted, not trusted.
+   */
+  describe('hr permissions', () => {
+    const holder = (slug: string) =>
+      DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === slug)!;
+
+    it.each(['producer', 'csr', 'crm', 'data_team'])(
+      'is read-only on %s',
+      (slug) => {
+        const resolved = resolvePermissionSet({
+          rolePermissions: holder(slug).permissions,
+        });
+        expect(resolved).toContain('hr:read');
+        expect(resolved).not.toContain('hr:write');
+        expect(resolved).not.toContain('agency:hr:admin');
+        expect(resolved).not.toContain('agency:hr:export');
+      },
+    );
+
+    it('gives the Branch Manager all four — the Office Manager', () => {
+      const permissions = holder('branch_manager').permissions;
+      expect(permissions).toEqual(
+        expect.arrayContaining([
+          'hr:read',
+          'hr:write',
+          'agency:hr:admin',
+          'agency:hr:export',
+        ]),
+      );
+    });
+
+    it('reaches the Agency Owner through enabled modules and the admin spread', () => {
+      const owner = holder('agency_owner');
+      expect(owner.permissions).not.toContain('hr:read');
+      expect(owner.permissions).toContain('agency:hr:admin');
+      expect(owner.permissions).toContain('agency:hr:export');
+      expect(owner.grantsAllEnabledModules).toBe(true);
+    });
+
+    it('names no third action on the module', () => {
+      for (const template of DEFAULT_ROLE_TEMPLATES) {
+        for (const permission of template.permissions) {
+          if (permission.startsWith('hr:')) {
+            expect(['hr:read', 'hr:write']).toContain(permission);
+          }
+        }
+      }
+    });
+  });
+
   describe('CSR role template', () => {
     const csr = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'csr');
 
@@ -234,6 +288,8 @@ describe('page-level permission model', () => {
         [ModuleKey.Leaderboard]: 'none',
         [ModuleKey.DataExport]: 'none',
         [ModuleKey.Analytics]: 'none',
+        // PAC-161: own time off and the calendar, never the reviewer side.
+        [ModuleKey.Hr]: 'read',
       };
 
       for (const moduleKey of ALL_MODULE_KEYS) {

@@ -24,6 +24,8 @@ import {
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { seedAuditTemplates } from '../seed/audit-templates.seed';
+import { ensureAgencyCalendar } from '../common/hr/ensure-agency-calendar';
+import { AgencyCalendar } from '../hr/schemas/agency-calendar.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
 import {
@@ -84,6 +86,8 @@ export class AgencyProvisioningService {
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(AuditTemplate.name)
     private auditTemplateModel: Model<AuditTemplate>,
+    @InjectModel(AgencyCalendar.name)
+    private agencyCalendarModel: Model<AgencyCalendar>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectConnection() private connection: Connection,
     private roleAssignments: RoleAssignmentsService,
@@ -246,6 +250,19 @@ export class AgencyProvisioningService {
         // ObjectId. An ObjectId filter here would match nothing and delete
         // nothing, silently.
         this.auditTemplateModel.deleteMany({ agencyId: agencyId.toString() }),
+      );
+
+      /*
+       * The HR calendar (PAC-161): the Mon–Fri workweek and the country, with
+       * the region read off the branch address the operator typed. No holiday
+       * rows and no leave policy — the owner's onboarding phases add those,
+       * or skip them. Same string-`agencyId` ⚠ as the templates above.
+       */
+      await ensureAgencyCalendar(this.agencyCalendarModel, agencyId, {
+        regionHint: input.branch.address.state ?? null,
+      });
+      undo.push(() =>
+        this.agencyCalendarModel.deleteOne({ agencyId: agencyId.toString() }),
       );
 
       const ownerRole = await this.roleModel.findOne({

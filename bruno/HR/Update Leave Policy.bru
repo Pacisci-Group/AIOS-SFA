@@ -1,0 +1,53 @@
+meta {
+  name: Update Leave Policy
+  type: http
+  seq: 15
+}
+
+patch {
+  url: {{baseUrl}}/hr/leave-policies/{{hrLeavePolicyId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "rules": {
+      "points": { "ladders": { "tardy": [2, 4] } },
+      "requests": { "coverageNote": "required" }
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("bumps the version and replaces the array whole", function () {
+    const body = res.getBody();
+    expect(body.version).to.equal(2);
+    expect(body.rules.points.ladders.tardy).to.eql([2, 4]);
+    expect(body.rules.points.ladders.absence).to.eql([2, 3, 4]);
+    expect(body.rules.requests.coverageNote).to.equal("required");
+    expect(body.rules.pto.annualAllocationHours).to.equal(120);
+  });
+}
+
+docs {
+  # PATCH /hr/leave-policies/:id — edit (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Body: `{ "name"?, "rules"?: partial }` — at least one. Same merge and
+    validation as Create, over the stored rules. `version` is bumped on
+    every successful edit; a record posted under the policy snapshots the
+    version it was judged under (PAC-165).
+
+  ## Errors
+  - `400` — malformed, or the merged result is inconsistent (every problem listed).
+  - `409` — the policy is archived, or the new name clashes with an active one.
+}

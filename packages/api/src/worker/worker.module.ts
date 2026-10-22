@@ -11,6 +11,9 @@ import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
+import { ProposeNextYearHolidaysFn } from './functions/propose-next-year-holidays.fn';
+import { PermissionHoldersModule } from '../common/access/permission-holders.module';
+import { WorkingDaysModule } from '../common/working-days/working-days.module';
 import { DataExportExpireFn } from './functions/data-export-expire.fn';
 import { DataExportGenerateFn } from './functions/data-export-generate.fn';
 import { DeliverNotificationFn } from './functions/deliver-notification.fn';
@@ -224,6 +227,11 @@ import {
     // above: not global, so the standalone worker must name it. The worker
     // only publishes on it; subscribing is the API tier's job.
     RedisModule,
+    // HR (PAC-161). The calendar schemas and the working-day service, and
+    // the "who holds permission X" resolver the Q4 holiday job notifies
+    // through. Both live in `common/` for exactly this import.
+    WorkingDaysModule,
+    PermissionHoldersModule,
   ],
   providers: [
     WorkerIndexesService,
@@ -273,6 +281,9 @@ import {
     // End-of-day Away sweep (PAC-139 §6a). Reads `Agency` and `User`, both
     // registered above.
     SetUsersAwayFn,
+    // Q4 holiday proposals (PAC-161). Reads `Agency` and the calendar
+    // (`WorkingDaysModule` above), notifies through `PermissionHoldersModule`.
+    ProposeNextYearHolidaysFn,
     // The one writer of `notifications` rows (PAC-154). Every channel is a
     // later step of the same function.
     DeliverNotificationFn,

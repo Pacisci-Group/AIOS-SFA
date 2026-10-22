@@ -2,6 +2,7 @@ import { AgencyPermission } from "@sfa/shared";
 import {
   AtSign,
   BadgeCheck,
+  CalendarDays,
   Clock,
   Globe,
   KeyRound,
@@ -91,6 +92,16 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "The agency code each carrier that appointed you issued.",
     icon: BadgeCheck,
     permission: AgencyPermission.CarrierAppointmentsRead,
+  },
+  {
+    // PAC-161. An admin capability rather than a module pair: the Branch
+    // Manager (the Office Manager) and the owner hold it by default.
+    to: "/settings/hr",
+    label: "HR",
+    description:
+      "Your working week, holidays and closures, and the leave policies your team is on.",
+    icon: CalendarDays,
+    permission: AgencyPermission.HrAdmin,
   },
 ];
 

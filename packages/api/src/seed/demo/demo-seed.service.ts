@@ -31,6 +31,8 @@ import { Policy } from '../../policies/schemas/policy.schema';
 import { DealAuditItem } from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
+import { ensureAgencyCalendar } from '../../common/hr/ensure-agency-calendar';
+import { AgencyCalendar } from '../../hr/schemas/agency-calendar.schema';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
@@ -248,6 +250,8 @@ export class DemoSeedService {
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    @InjectModel(AgencyCalendar.name)
+    private readonly agencyCalendarModel: Model<AgencyCalendar>,
     @InjectModel(InterestedParty.name)
     private readonly interestedPartyModel: Model<InterestedParty>,
     @InjectModel(PriorInsurance.name)
@@ -1230,6 +1234,12 @@ export class DemoSeedService {
       ctx.defaultBranchId,
     );
     for (let i = 0; i < created + refreshed; i++) this.inc('auditTemplates');
+
+    // The HR calendar (PAC-161): workweek and country only, like every
+    // provisioning path. Illinois, to match the demo seed's addresses.
+    await ensureAgencyCalendar(this.agencyCalendarModel, ctx.agencyId, {
+      regionHint: 'IL',
+    });
   }
 
   /**

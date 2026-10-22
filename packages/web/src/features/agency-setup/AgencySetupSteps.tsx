@@ -1,7 +1,9 @@
 import { CheckCircle2 } from "lucide-react";
 import { BrandStep } from "./BrandStep";
+import { CalendarStep } from "./CalendarStep";
 import { CarrierAppointmentsStep } from "./CarrierAppointmentsStep";
 import { EmailIdentityStep } from "./EmailIdentityStep";
+import { HrPolicyStep } from "./HrPolicyStep";
 
 /**
  * Phase 2 of onboarding: making the app look and sound like the agency (PAC-69).
@@ -17,7 +19,25 @@ import { EmailIdentityStep } from "./EmailIdentityStep";
  * indefinitely.
  */
 
-export type AgencySetupStepId = "brand" | "email" | "carriers" | "finish";
+export type AgencySetupStepId =
+  | "brand"
+  | "email"
+  | "carriers"
+  | "calendar"
+  | "hr-policy"
+  | "finish";
+
+/**
+ * Which `AgencySetupView` flag a skipped step records (PAC-69, PAC-161).
+ * Steps not listed are skippable without a flag — nothing later keys off them.
+ */
+export const SKIP_FLAG_BY_STEP: Partial<
+  Record<AgencySetupStepId, "skipped" | "calendarSkipped" | "hrPolicySkipped">
+> = {
+  brand: "skipped",
+  calendar: "calendarSkipped",
+  "hr-policy": "hrPolicySkipped",
+};
 
 export interface AgencySetupStep {
   id: AgencySetupStepId;
@@ -49,6 +69,24 @@ export const AGENCY_SETUP_STEPS: readonly AgencySetupStep[] = [
     skippable: true,
   },
   {
+    // PAC-161. Real saves, like the branding step: the workweek, where the
+    // agency is, and the holidays the owner ticks.
+    id: "calendar",
+    title: "Your calendar",
+    description:
+      "The days your office is open and closed, so time off and attendance are counted on real working days.",
+    skippable: true,
+  },
+  {
+    // PAC-161. Starts empty; skipping leaves the agency with no policy, which
+    // is a working state — HR is a calendar and nothing more until one exists.
+    id: "hr-policy",
+    title: "Your leave policies",
+    description:
+      "One policy for everyone, or one per role. You can skip this and add one later under Settings.",
+    skippable: true,
+  },
+  {
     id: "finish",
     title: "All set",
     description: "That is everything we need.",
@@ -66,6 +104,8 @@ export function AgencySetupStepContent({
   if (id === "brand") return <BrandStep />;
   if (id === "email") return <EmailIdentityStep />;
   if (id === "carriers") return <CarrierAppointmentsStep />;
+  if (id === "calendar") return <CalendarStep />;
+  if (id === "hr-policy") return <HrPolicyStep />;
   // ⚠ `finish` must stay last: both wizards branch on it to call `complete`.
   return <FinishStep agencyName={agencyName} />;
 }

@@ -48,6 +48,25 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
       href: '/admin/bugs',
     };
   },
+  'hr.holidays_proposed': (data) => {
+    const year = typeof data.year === 'number' ? data.year : null;
+    const count = typeof data.count === 'number' ? data.count : null;
+    const country = text(data.countryName);
+    const region = text(data.regionName);
+    const where = country ? (region ? `${country}, ${region}` : country) : null;
+    const yearLabel = year ? String(year) : 'next year';
+    const body =
+      count !== null && where
+        ? `${count} suggested holiday${count === 1 ? '' : 's'} for ${yearLabel} from ${where}. Review and confirm them in HR settings.`
+        : `Suggested holidays for ${yearLabel} are ready. Review and confirm them in HR settings.`;
+    return {
+      title: `${yearLabel}'s holidays are ready to confirm`,
+      body,
+      href: year
+        ? `/settings/hr?tab=calendar&proposal=${year}`
+        : '/settings/hr?tab=calendar',
+    };
+  },
 };
 
 /**
