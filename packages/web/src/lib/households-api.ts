@@ -1,4 +1,5 @@
 import type {
+  AddHouseholdAddressInput,
   ContactSummary,
   HouseholdListResponse,
   HouseholdMemberRole,
@@ -69,6 +70,50 @@ export function setPrimaryContact(
   return apiFetch<HouseholdView>(
     `${BASE}/${encodeURIComponent(householdId)}/primary-contact`,
     { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+/*
+ * ── The address book ────────────────────────────────────────────────────────
+ *
+ * The household's primary address stays `propertyAddress`; the book is every
+ * other address it holds (`household-address-book.ts`). All three writes take
+ * `clients:write` **or** `crm_service:write` — the Cancel button prompts a CSR to
+ * update the address, so the CSR must be able to — and return the whole
+ * `HouseholdView`, because promoting an address moves several fields at once.
+ */
+
+/**
+ * `POST /households/:id/addresses` — add an address, or with `makePrimary`
+ * move the household to it (the old primary is kept as a previous address).
+ * 409 when the address is already on the household, or the book is full.
+ */
+export function addHouseholdAddress(
+  householdId: string,
+  input: AddHouseholdAddressInput,
+) {
+  return apiFetch<HouseholdView>(
+    `${BASE}/${encodeURIComponent(householdId)}/addresses`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+/** `POST /households/:id/addresses/:addressId/primary` — swap it with the primary. */
+export function setPrimaryHouseholdAddress(
+  householdId: string,
+  addressId: string,
+) {
+  return apiFetch<HouseholdView>(
+    `${BASE}/${encodeURIComponent(householdId)}/addresses/${encodeURIComponent(addressId)}/primary`,
+    { method: 'POST' },
+  );
+}
+
+/** `DELETE /households/:id/addresses/:addressId` — remove a non-primary address. */
+export function removeHouseholdAddress(householdId: string, addressId: string) {
+  return apiFetch<HouseholdView>(
+    `${BASE}/${encodeURIComponent(householdId)}/addresses/${encodeURIComponent(addressId)}`,
+    { method: 'DELETE' },
   );
 }
 

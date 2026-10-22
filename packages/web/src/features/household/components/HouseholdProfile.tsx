@@ -1,4 +1,5 @@
-import { Phone, Mail, MapPin, Star, Shield, Car, UserCog } from "lucide-react";
+import { useState } from "react";
+import { Phone, Mail, Star, Shield, Car, UserCog, ChevronRight } from "lucide-react";
 import type { ContactSummary, HouseholdView } from "@sfa/shared";
 import {
   isActiveHouseholdStatus,
@@ -11,11 +12,21 @@ import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { formatPhone } from "@/lib/leads-api";
 import { NOT_AVAILABLE } from "@/lib/not-available";
+import {
+  ContactDetailsSheet,
+  ageInYears,
+  formatCalendarDate,
+} from "./ContactDetailsSheet";
+import { HouseholdAddressBook } from "./HouseholdAddressBook";
 
 interface Member {
   id: string;
+  /** The roster row it came from — what the details sheet opens on. */
+  contact: ContactSummary;
   name: string;
   role: string;
+  /** "Mar 4, 1980 · 45", or null when the date of birth is not on file. */
+  born: string | null;
   initials: string;
   tone: string;
   tint: string;
@@ -66,10 +77,17 @@ function toMembers(household: HouseholdView): Member[] {
   return household.contacts.map((contact, i) => {
     const name = fullName(contact) ?? "Unnamed";
     const role = contact.roleInHousehold ?? "Household Member";
+    // The age is omitted for a deceased member rather than counted to today —
+    // the sheet shows the age they died at, beside the date.
+    const age = contact.deceasedAt ? null : ageInYears(contact.dateOfBirth);
     return {
       id: contact.id,
+      contact,
       name,
       role,
+      born: contact.dateOfBirth
+        ? `${formatCalendarDate(contact.dateOfBirth)}${age !== null ? ` · ${age}` : ""}`
+        : null,
       initials: initialsOf(name),
       ...MEMBER_ACCENTS[i % MEMBER_ACCENTS.length],
       isPrimary: contact.isPrimary,
@@ -148,13 +166,21 @@ interface HouseholdProfileProps {
    * household, which is not a real record to write against.
    */
   onChangePrimaryContact?: () => void;
+  /**
+   * Opens the page's "add address" dialog. Omitted — and the address block's
+   * write controls with it — when the caller cannot write, or on the demo
+   * household.
+   */
+  onAddAddress?: () => void;
 }
 
 export function HouseholdProfile({
   household,
   isDemo = false,
   onChangePrimaryContact,
+  onAddAddress,
 }: HouseholdProfileProps) {
+  const [openContact, setOpenContact] = useState<ContactSummary | null>(null);
   const primaryContact = household.contacts.find((c) => c.isPrimary);
   /*
    * The primary contact has died (PAC-91 §7).
@@ -183,16 +209,6 @@ export function HouseholdProfile({
   const phone = household.primaryPhone;
   const email = household.primaryEmail;
   const members = toMembers(household);
-  /*
-   * Already coerced server-side. This block used to read `line1`/`postalCode`
-   * off the raw `propertyAddress`, and `postalCode` is a key no writer produces
-   * while `line1` only matches the demo seed — so every migrated household
-   * showed two em dashes here.
-   */
-  const address = household.address;
-  const cityLine = address
-    ? [address.city, address.state, address.zip].filter(Boolean).join(", ")
-    : "";
 
   return (
     // Same as the portfolio column: a scrolling block rather than a flex
@@ -317,20 +333,15 @@ export function HouseholdProfile({
             }
             href={email && !primaryDeceased ? `mailto:${email}` : undefined}
           />
-          <div className="flex items-start gap-2.5 rounded-md bg-muted px-3 py-2">
-            <MapPin
-              aria-hidden
-              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-medium text-foreground">
-                {address?.street || NOT_AVAILABLE}
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                {cityLine || NOT_AVAILABLE}
-              </span>
-            </span>
-          </div>
+          {/* The primary address, and — once the household holds more than
+              one — a dropdown over all of them. It used to read
+              `household.address` (property, falling back to mailing); the
+              book lists both, primary first, so nothing that showed before
+              stops showing. */}
+          <HouseholdAddressBook
+            household={household}
+            onAddAddress={onAddAddress}
+          />
         </div>
       </div>
 
@@ -342,11 +353,20 @@ export function HouseholdProfile({
             <p className="text-sm text-muted-foreground">No contacts on file.</p>
           )}
           {members.map((m) => (
-            <div
+            <Button
               // Keyed by id, not name: two members of one household can share a
               // name (a junior), and a duplicate React key drops one of them.
               key={m.id}
-              className="flex items-center gap-3 rounded-md border border-border bg-muted px-3 py-2.5"
+              type="button"
+              variant="ghost"
+              onClick={() => setOpenContact(m.contact)}
+              // A whole row, so the button's own sizing is undone: auto height,
+              // full width, wrapping text, and the roster's own surface. No
+              // `aria-label`: the row's own text — name, role, date of birth —
+              // is the accessible name, and a label would replace all of it.
+              // Everything inside is a `span`, because a `<button>` may only
+              // hold phrasing content.
+              className="h-auto w-full justify-start gap-3 whitespace-normal rounded-md border border-border bg-muted px-3 py-2.5 text-left font-normal hover:bg-accent"
             >
               <span
                 aria-hidden
@@ -358,14 +378,17 @@ export function HouseholdProfile({
               >
                 {m.initials}
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">
+              <span className="block min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-foreground">
                   {m.name}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
                   {m.isDeceased ? `${m.role} · Deceased` : m.role}
-                </p>
-              </div>
+                </span>
+                <span className="block truncate text-xs tabular-nums text-muted-foreground">
+                  {m.born ? `Born ${m.born}` : `Date of birth ${NOT_AVAILABLE}`}
+                </span>
+              </span>
               {m.isPrimary && (
                 <Shield
                   aria-label="Primary insured"
@@ -378,10 +401,19 @@ export function HouseholdProfile({
                   className="size-4 shrink-0 text-amber-600 dark:text-amber-500"
                 />
               )}
-            </div>
+              <ChevronRight
+                aria-hidden
+                className="size-4 shrink-0 text-muted-foreground"
+              />
+            </Button>
           ))}
         </div>
       </div>
+
+      <ContactDetailsSheet
+        contact={openContact}
+        onOpenChange={(open) => !open && setOpenContact(null)}
+      />
 
       {/* Retention Score — decorative, nothing computes it. Demo only: it reads
           as a risk metric an agent could act on, so a live record must not

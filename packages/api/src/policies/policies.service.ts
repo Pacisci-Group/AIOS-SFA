@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,15 +10,19 @@ import {
   DataScope,
   carrierPolicyNumberMatches,
   carrierSlug,
+  isActivePolicyStatus,
   isFlowOnlyPolicyStatus,
+  isTerminalPolicyStatus,
   nextRenewalDate,
   normalizeCarrier,
   normalizePolicyStatus,
   normalizePolicyType,
   policyActiveForStatus,
+  policyCancellationSummary,
   policyTypeQueryValues,
   resolveItemCount,
 } from '@sfa/shared';
+import type { PolicyCancellationReason } from '@sfa/shared';
 import type {
   AccessContext,
   PolicyCheckMatch,
@@ -47,6 +52,7 @@ import {
   HouseholdDocument,
 } from '../households/schemas/household.schema';
 import { derivePersistedDealAggregates } from '../sold-deals/intake/sold.normalize';
+import { CancelPolicyDto } from './dto/cancel-policy.dto';
 import { CheckPolicyDto } from './dto/check-policy.dto';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { normalizePolicyNumber, policyNumberKey } from './policy-number';
@@ -138,7 +144,46 @@ const POLICY_CHANGE_FIELDS: ChangeFieldSpec<PolicyDocument>[] = [
     // absent status still reads as absent.
     read: (policy) => changeText(normalizePolicyStatus(policy.policyStatus)),
   },
+  {
+    // Logged beside the status rather than folded into it, so the timeline row
+    // for a cancellation reads "Status: Active → Cancelled" and "Cancellation
+    // reason: Sold" — and a reinstatement shows the reason going away.
+    field: 'cancellationReason',
+    label: 'Cancellation reason',
+    kind: 'text',
+    read: (policy) =>
+      policy.cancellation?.reason
+        ? changeText(
+            policyCancellationSummary({
+              reason: policy.cancellation.reason as PolicyCancellationReason,
+              note: policy.cancellation.note ?? null,
+            }),
+          )
+        : null,
+  },
 ];
+
+/** What `PATCH` says when asked for a status only a flow may write. */
+function flowOnlyStatusMessage(status: string): string {
+  return status === 'Cancelled'
+    ? '"Cancelled" is set with the Cancel button, which records why the policy was cancelled.'
+    : `"${status}" is set by cancelling and rewriting the policy, not by editing its status.`;
+}
+
+/**
+ * Can the Cancel button act on this policy? Not when it has already left the
+ * books — by status, or by being retired into a replacement — and otherwise
+ * only when it is live or pending. See `PoliciesService.cancel`.
+ */
+function isCancellable(policy: PolicyDocument): boolean {
+  if (isTerminalPolicyStatus(policy.policyStatus)) return false;
+  if (policy.transferredToPolicyId) return false;
+  return (
+    policy.active ||
+    isActivePolicyStatus(policy.policyStatus) ||
+    normalizePolicyStatus(policy.policyStatus) === 'Pending'
+  );
+}
 
 @Injectable()
 export class PoliciesService {
@@ -400,19 +445,44 @@ export class PoliciesService {
      *    (`Quoted`, `Pending`, any uncatalogued migrated code), which is why
      *    this is a null check and not a boolean.
      */
+    const wasActive = policy.active;
     if (dto.status !== undefined) {
-      if (isFlowOnlyPolicyStatus(dto.status)) {
+      /*
+       * 3. **Only a move *to* a flow-only status is refused.** Re-sending the
+       *    status a policy already holds is not a change, so a cancelled
+       *    policy whose carrier is being corrected may arrive carrying
+       *    `'Cancelled'` — refusing that would make every policy that ever left
+       *    the books uneditable, and `'Cancelled'` became flow-only with
+       *    thousands of migrated rows already holding it. It still runs through
+       *    the assignment below, so the `active` flag is re-synced exactly as
+       *    before.
+       */
+      const changing =
+        normalizePolicyStatus(dto.status) !==
+        normalizePolicyStatus(policy.policyStatus);
+      if (changing && isFlowOnlyPolicyStatus(dto.status)) {
         throw new BadRequestException(
-          `"${normalizePolicyStatus(dto.status)}" is set by cancelling and rewriting the policy, not by editing its status.`,
+          flowOnlyStatusMessage(normalizePolicyStatus(dto.status)),
         );
       }
       policy.policyStatus = dto.status ?? undefined;
 
       const active = policyActiveForStatus(dto.status);
       if (active !== null) policy.active = active;
+      /*
+       * Reinstated: the reason it left no longer describes it. Not cleared on
+       * any other change, because Cancelled → Lapsed is a correction of *how*
+       * it left, and the reason still stands.
+       */
+      if (changing && isActivePolicyStatus(dto.status)) {
+        policy.cancellation = undefined;
+      }
     }
 
     await policy.save();
+    if (policy.active !== wasActive) {
+      await this.recountHouseholdPolicies(policy);
+    }
     await this.recomputeDealTotals(policy);
     await this.recordFieldChanges(
       access,
@@ -421,6 +491,103 @@ export class PoliciesService {
       before,
     );
     return policy;
+  }
+
+  /**
+   * Cancel a policy outright — the household page's Cancel button.
+   *
+   * One write, unlike the two replacements: there is no new policy to book, so
+   * nothing here goes near the Sold pipeline, a lead or a chargeback. What it
+   * does is the part the Edit dialog's status select never could — **record
+   * why** — plus the bookkeeping a status change owes and `PATCH` used to skip:
+   *
+   *   - `active` goes false with the status, so the policy stops counting
+   *     towards the household and stops being scheduled for renewal calls;
+   *   - the household's stored `totalActivePolicies` is recounted, because the
+   *     Clients list sorts on it;
+   *   - the edit log gets a "Policy cancelled" row carrying the old and new
+   *     status and the reason.
+   *
+   * Refused (409) for a policy that is already off the books — cancelled,
+   * lapsed, or retired into a replacement. Cancelling it again would overwrite
+   * the reason it actually left with a second one.
+   *
+   * Pending policies may be cancelled: a client backing out before coverage
+   * starts is a real cancellation. Anything else that is inactive is not
+   * something this can say anything true about.
+   *
+   * ⚠ Mutates and saves `policy` in place, like {@link applyUpdate}.
+   */
+  async cancel(
+    access: AccessContext,
+    policy: PolicyDocument,
+    dto: CancelPolicyDto,
+  ): Promise<PolicyDocument> {
+    if (!isCancellable(policy)) {
+      throw new ConflictException(
+        'This policy is already off the books, so there is nothing to cancel.',
+      );
+    }
+
+    const before = snapshot(POLICY_CHANGE_FIELDS, policy, {
+      timeZone: access.timeZone,
+    });
+
+    policy.policyStatus = 'Cancelled';
+    policy.active = false;
+    policy.cancellation = {
+      reason: dto.reason,
+      note: dto.note ?? undefined,
+      cancelledAt: new Date(),
+      cancelledBy: Types.ObjectId.isValid(access.userId)
+        ? new Types.ObjectId(access.userId)
+        : undefined,
+    };
+
+    await policy.save();
+    await this.recountHouseholdPolicies(policy);
+    await this.recordFieldChanges(
+      access,
+      policy,
+      await this.leadIdForPolicy(policy),
+      before,
+      'Policy cancelled',
+    );
+    return policy;
+  }
+
+  /**
+   * Bring the household's stored `totalActivePolicies` back in line after a
+   * policy's `active` flag moved.
+   *
+   * The same recount `SoldDealIntakeService` runs after a booking, for the same
+   * reason: the Clients list sorts on the stored figure, and until now a policy
+   * cancelled or reinstated from the household page left it where it was.
+   * Recounted rather than incremented so a retry is still right, and
+   * best-effort, because the policy itself is already saved.
+   */
+  private async recountHouseholdPolicies(
+    policy: PolicyDocument,
+  ): Promise<void> {
+    if (!policy.householdId) return;
+    try {
+      const active = await this.policyModel.countDocuments({
+        agencyId: policy.agencyId,
+        householdId: policy.householdId,
+        active: true,
+        isTestRecord: { $ne: true },
+      });
+      await this.householdModel.updateOne(
+        { _id: policy.householdId, agencyId: policy.agencyId },
+        { $set: { totalActivePolicies: active } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Household policy recount failed for policy ${policy._id.toString()}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
@@ -469,6 +636,7 @@ export class PoliciesService {
     policy: PolicyDocument,
     leadId: Types.ObjectId | null,
     before: ChangeSnapshot,
+    summary = 'Policy edited',
   ): Promise<void> {
     const changes = diffSnapshots(
       POLICY_CHANGE_FIELDS,
@@ -496,7 +664,7 @@ export class PoliciesService {
         userId: new Types.ObjectId(access.userId),
         occurredAt: new Date(),
         // Value-free on purpose — see the `summary` docblock on the schema.
-        summary: 'Policy edited',
+        summary,
         // Explicit: the schema default is 'migration', which `toActivityOrigin`
         // renders as the "Imported" chip.
         source: 'internal',

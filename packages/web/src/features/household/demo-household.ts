@@ -72,6 +72,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-03-15T00:00:00.000Z",
     expirationDate: "2025-03-15T00:00:00.000Z",
     renewalDate: "2025-03-15T00:00:00.000Z",
+    cancellation: null,
   },
   {
     id: `${DEMO_ID}-p2`,
@@ -85,6 +86,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-06-01T00:00:00.000Z",
     expirationDate: "2025-06-01T00:00:00.000Z",
     renewalDate: "2025-06-01T00:00:00.000Z",
+    cancellation: null,
   },
   {
     id: `${DEMO_ID}-p3`,
@@ -98,6 +100,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-06-01T00:00:00.000Z",
     expirationDate: "2025-06-01T00:00:00.000Z",
     renewalDate: "2025-06-01T00:00:00.000Z",
+    cancellation: null,
   },
   {
     id: `${DEMO_ID}-p4`,
@@ -111,6 +114,30 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-01-10T00:00:00.000Z",
     expirationDate: "2025-01-10T00:00:00.000Z",
     renewalDate: "2025-01-10T00:00:00.000Z",
+    cancellation: null,
+  },
+  /*
+   * The home they sold, so the demo shows the collapsed "Cancelled & lapsed"
+   * section and a cancellation that says why — the same move the previous
+   * address below records.
+   */
+  {
+    id: `${DEMO_ID}-p5`,
+    policyNumber: "HOM-180-206-71",
+    policyType: "Home",
+    carrier: "Allstate",
+    active: false,
+    policyStatus: "Cancelled",
+    premium: 2904,
+    items: 1,
+    effectiveDate: "2019-04-20T00:00:00.000Z",
+    expirationDate: "2024-04-20T00:00:00.000Z",
+    renewalDate: null,
+    cancellation: {
+      reason: "sold",
+      note: null,
+      cancelledAt: "2024-05-30T15:00:00.000Z",
+    },
   },
 ];
 
@@ -146,6 +173,19 @@ export const DEMO_HOUSEHOLD: HouseholdView = {
     zip: "30022",
   },
   mailingAddress: null,
+  otherAddresses: [
+    {
+      id: `${DEMO_ID}-a1`,
+      label: "Previous address",
+      address: {
+        street: "88 Wills Creek Rd",
+        city: "Roswell",
+        state: "GA",
+        zip: "30075",
+      },
+      addedAt: "2024-05-30T15:00:00.000Z",
+    },
+  ],
   primaryEmail: "jessica.cobb@email.com",
   primaryPhone: "(404) 555-0182",
   assignedCrmId: null,

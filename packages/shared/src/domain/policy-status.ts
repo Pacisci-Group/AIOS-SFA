@@ -56,8 +56,17 @@ export type PolicyStatus = (typeof POLICY_STATUSES)[number];
  *
  * `'Company Transfer'` is the same shape with the other reason — same chain,
  * same transaction, no chargeback.
+ *
+ * `'Cancelled'` joined them when the household page gained a **Cancel** button
+ * (`policy-cancellation.ts`). It needs no replacement, but it does need a
+ * *reason*, and a status select has nowhere to ask for one — a cancellation set
+ * from the Edit dialog was exactly the "cancelled, nobody knows why" record the
+ * button exists to stop producing. The cancel endpoint is now its only writer
+ * on the edit paths. (The migration and the transfer retirement still write it
+ * directly; neither goes through `PATCH`.)
  */
 export const FLOW_ONLY_POLICY_STATUSES: readonly PolicyStatus[] = [
+  'Cancelled',
   'Cancel Rewrite',
   'Company Transfer',
 ];

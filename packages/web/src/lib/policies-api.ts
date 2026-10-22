@@ -1,4 +1,5 @@
 import type {
+  CancelPolicyInput,
   PolicyReplacementChain,
   PolicySearchResult,
   PolicySummary,
@@ -83,6 +84,26 @@ export function updateHouseholdPolicy(
   return apiFetch<PolicySummary>(
     `/households/${encodeURIComponent(householdId)}/policies/${encodeURIComponent(policyId)}`,
     { method: 'PATCH', body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * `POST /households/:id/policies/:policyId/cancel` — the Cancel button.
+ *
+ * `clients:write` **or** `crm_service:write`, like the edit above. The reason is
+ * required, and `note` only counts with `'other'` — the server drops it for the
+ * named reasons. 409 when the policy is already off the books.
+ *
+ * Returns the saved `PolicySummary`, `cancellation` included.
+ */
+export function cancelHouseholdPolicy(
+  householdId: string,
+  policyId: string,
+  input: CancelPolicyInput,
+) {
+  return apiFetch<PolicySummary>(
+    `/households/${encodeURIComponent(householdId)}/policies/${encodeURIComponent(policyId)}/cancel`,
+    { method: 'POST', body: JSON.stringify(input) },
   );
 }
 
