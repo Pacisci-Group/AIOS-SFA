@@ -232,6 +232,16 @@ jobs:
           DEPLOY_CONFIG_SECRET_ACCESS_KEY: ${{ secrets.DEPLOY_CONFIG_SECRET_ACCESS_KEY }}
           ACME_DIRECTORY_URL: ${{ secrets.ACME_DIRECTORY_URL }}
           CERT_ENCRYPTION_KEY: ${{ secrets.CERT_ENCRYPTION_KEY }}
+          # Weekly MongoDB snapshot (PAC-172). Unset, the worker logs a warning
+          # at boot and every Sunday's run fails — loudly, by mail, but only to
+          # an address that is itself one of these secrets.
+          DB_BACKUP_ENABLED: ${{ vars.DB_BACKUP_ENABLED }}
+          DB_BACKUP_STORAGE_ENDPOINT: ${{ secrets.DB_BACKUP_STORAGE_ENDPOINT }}
+          DB_BACKUP_STORAGE_REGION: ${{ secrets.DB_BACKUP_STORAGE_REGION }}
+          DB_BACKUP_STORAGE_BUCKET: ${{ secrets.DB_BACKUP_STORAGE_BUCKET }}
+          DB_BACKUP_STORAGE_ACCESS_KEY_ID: ${{ secrets.DB_BACKUP_STORAGE_ACCESS_KEY_ID }}
+          DB_BACKUP_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.DB_BACKUP_STORAGE_SECRET_ACCESS_KEY }}
+          DB_BACKUP_ALERT_EMAIL: ${{ secrets.DB_BACKUP_ALERT_EMAIL }}
         run: |
           set -uo pipefail
 
@@ -263,6 +273,21 @@ jobs:
           # CA it means.
           if [ "${ACME_ENABLED}" = "true" ]; then
             required="${required} ACME_DIRECTORY_URL CERT_ENCRYPTION_KEY"
+          fi
+
+          # Weekly MongoDB snapshots (PAC-172). Same shape: required only where
+          # switched on. They run as an Inngest function in the worker, so
+          # backups "on" with Inngest off would pass every check here and never
+          # take a single snapshot — refuse that combination outright.
+          if [ "${DB_BACKUP_ENABLED}" = "true" ]; then
+            if [ "${INNGEST_ENABLED}" != "true" ]; then
+              echo "::error::DB_BACKUP_ENABLED is true but INNGEST_ENABLED is not — snapshots run in the worker and would never fire."
+              exit 1
+            fi
+            required="${required}
+                      DB_BACKUP_STORAGE_ENDPOINT DB_BACKUP_STORAGE_REGION
+                      DB_BACKUP_STORAGE_BUCKET DB_BACKUP_STORAGE_ACCESS_KEY_ID
+                      DB_BACKUP_STORAGE_SECRET_ACCESS_KEY DB_BACKUP_ALERT_EMAIL"
           fi
 
           # An autoscale environment is deployed to by publishing, so SSH_HOST
@@ -423,6 +448,12 @@ jobs:
           # Must be "0". Left unset the SDK infers dev mode from NODE_ENV and
           # stops verifying request signatures.
           INNGEST_DEV=0
+          # Keep long step requests alive through the internal load balancer
+          # in front of the pool's workers (PAC-172): the SDK answers 201 at
+          # once and writes a heartbeat every 3s until the step's result. On
+          # by default; the INNGEST_STREAMING variable is the off switch, for
+          # every function at once - see packages/api/src/inngest/inngest-serve.ts.
+          INNGEST_STREAMING=${{ vars.INNGEST_STREAMING || 'true' }}
 
           # Outbound email. RESEND_API_KEY unset means the worker silently
           # falls back to a logging transport — see the preflight note.
@@ -457,6 +488,26 @@ jobs:
           ACME_DIRECTORY_URL=${{ secrets.ACME_DIRECTORY_URL }}
           ACME_CONTACT_EMAIL=${{ secrets.ACME_CONTACT_EMAIL }}
           CERT_ENCRYPTION_KEY=${{ secrets.CERT_ENCRYPTION_KEY }}
+
+          # Weekly MongoDB snapshot to a dedicated Spaces bucket (PAC-172).
+          # Read by the worker container; the api container ignores it. Off
+          # unless the Environment variable is literally "true". Values come
+          # from the environment's terraform outputs:
+          #   db_backup_github_secrets / db_backup_secret_access_key
+          # Never the STORAGE_* pair - the worker has no fallback to it.
+          DB_BACKUP_ENABLED=${{ vars.DB_BACKUP_ENABLED || 'false' }}
+          DB_BACKUP_STORAGE_ENDPOINT=${{ secrets.DB_BACKUP_STORAGE_ENDPOINT }}
+          DB_BACKUP_STORAGE_REGION=${{ secrets.DB_BACKUP_STORAGE_REGION }}
+          DB_BACKUP_STORAGE_BUCKET=${{ secrets.DB_BACKUP_STORAGE_BUCKET }}
+          DB_BACKUP_STORAGE_ACCESS_KEY_ID=${{ secrets.DB_BACKUP_STORAGE_ACCESS_KEY_ID }}
+          DB_BACKUP_STORAGE_SECRET_ACCESS_KEY=${{ secrets.DB_BACKUP_STORAGE_SECRET_ACCESS_KEY }}
+          DB_BACKUP_STORAGE_FORCE_PATH_STYLE=false
+          DB_BACKUP_ALERT_EMAIL=${{ secrets.DB_BACKUP_ALERT_EMAIL }}
+          # Optional tuning; empty resolves to the defaults in
+          # packages/api/src/config/db-backup.config.ts.
+          DB_BACKUP_KEEP=${{ vars.DB_BACKUP_KEEP }}
+          DB_BACKUP_DUMP_TIMEOUT_MINUTES=${{ vars.DB_BACKUP_DUMP_TIMEOUT_MINUTES }}
+          DB_BACKUP_DUMP_PARALLEL=${{ vars.DB_BACKUP_DUMP_PARALLEL }}
 
           # The edge. Only started when the 'edge' compose profile is active.
           #
