@@ -474,10 +474,14 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
  *
  * Two events can carry a request: `db-backup/snapshot.requested.v1`, and the
  * dashboard's **Invoke**, which arrives as `inngest/function.invoked` with the
- * same data (Inngest validates it against the same schema). Keying off the name
- * would file an invoked manual snapshot under `weekly/`, where rotation would
- * count it. The cron's timer event never carries a `reason`, and neither does an
- * Invoke with empty data — both are the scheduled snapshot, rotation included.
+ * same data. Keying off the name would file an invoked manual snapshot under
+ * `weekly/`, where rotation would count it.
+ *
+ * Only the cron produces a scheduled snapshot: its timer event carries no
+ * `reason`, while Inngest validates every other event — an Invoke included —
+ * against the request schema before this handler runs, so a request without a
+ * `reason` fails there instead of arriving here as a rotated weekly run. That
+ * is deliberate: nobody can push the real weekly archives out by hand.
  */
 function requestFrom(event: DbBackupEvent): SnapshotRequest {
   const data = (event.data ?? {}) as Partial<DbBackupSnapshotRequestedData>;

@@ -413,19 +413,6 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     );
   });
 
-  it('treats an Invoke with no data as the weekly snapshot', async () => {
-    const { ran, step } = inlineStep();
-
-    const result = await fn.handle(
-      { name: 'inngest/function.invoked', data: {} },
-      step,
-      RUN,
-    );
-
-    expect(ran).toContain('rotate');
-    expect((result as { key: string }).key).toMatch(SCHEDULED_KEY);
-  });
-
   it('names a pre-deploy snapshot after its commit', async () => {
     const { step } = inlineStep();
 

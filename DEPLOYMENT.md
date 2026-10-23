@@ -719,8 +719,9 @@ curl -sS -X POST "http://localhost:8288/e/$KEY" \
 Then watch http://localhost:8288 → Functions → **Snapshot MongoDB to object
 storage**, and wait for the "Manual DB snapshot OK" mail before starting the
 risky work. The dashboard's **Invoke** button does the same thing given
-`{"reason":"manual","label":"…"}` as data; invoked with **no** data it runs the
-weekly snapshot instead, rotation included.
+`{"reason":"manual","label":"…"}` as data. Invoked with **no** data it fails
+validation and mails a failure: only the Sunday cron takes a rotated weekly
+snapshot, so nobody can push the real weekly archives out by hand.
 
 ### Listing and downloading archives
 
