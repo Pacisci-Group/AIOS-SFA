@@ -566,7 +566,7 @@ combination otherwise. See "Database backups" below for what runs.
 | Variable | Default | |
 |---|---|---|
 | `DB_BACKUP_ENABLED` | `false` | Literally `true` to take snapshots |
-| `DB_BACKUP_KEEP` | `4` | Weekly archives kept (1–52) |
+| `DB_BACKUP_KEEP` | `4` | Weeks of weekly archives kept, one per week (1–52) |
 | `DB_BACKUP_DUMP_TIMEOUT_MINUTES` | `45` | mongodump is killed after this (5–110) |
 | `DB_BACKUP_DUMP_PARALLEL` | `2` | Collections dumped at once (1–8) |
 | `INNGEST_STREAMING` | `true` | Keeps long step requests alive; the off switch, for every function at once |
@@ -649,15 +649,18 @@ weeks ago" or "DigitalOcean is the problem", restore an archive (path B).
 `DbBackupSnapshotFn` (`packages/api/src/worker/functions/db-backup-snapshot.fn.ts`)
 runs in the worker, once per environment however many pool members there are.
 It dumps the database named in `MONGODB_URI`, uploads the archive in one PUT,
-then keeps the newest `DB_BACKUP_KEEP` (default 4: this week and the three
-before) and deletes the rest. Older archives are only deleted after the new one
-is stored, so a failed run never costs an existing archive.
+then keeps one archive per week for the newest `DB_BACKUP_KEEP` weeks (default
+4: this week and the three before) and deletes the rest. Older archives are only
+deleted after the new one is stored, so a failed run never costs an existing
+archive. A week that runs twice — a dashboard **Rerun** of a weekly run, which
+starts again from the cron's own event — replaces that week's archive instead
+of pushing out the oldest week.
 
 Bucket layout:
 
 | Prefix | Written by | Kept |
 |---|---|---|
-| `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz` | the Sunday cron | newest `DB_BACKUP_KEEP`; the worker deletes the rest |
+| `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz` | the Sunday cron | one per week for the newest `DB_BACKUP_KEEP` weeks; the worker deletes the rest |
 | `manual/<ts>-<label>.archive.gz` | an operator (below) | 90 days, by the bucket's lifecycle rule |
 | `pre-deploy/<ts>-<sha>.archive.gz` | reserved for a deploy step (not built yet) | 90 days, by the bucket's lifecycle rule |
 
@@ -674,10 +677,16 @@ Things to know:
   another. At 03:00 on a Sunday that is a small window, and DigitalOcean's fork
   (path A) is the tool when an exact instant matters.
 - **Not encrypted client-side** — a decision, not an oversight (PAC-172). The
-  bucket is private, has no CORS, and its key is scoped to it and held only in
-  the worker's environment, the same posture as the uploads bucket that already
-  holds client documents. Encrypting would add a key that, lost, loses every
-  backup.
+  bucket is private and has no CORS, and its key is scoped to it, the same
+  posture as the uploads bucket that already holds client documents. Encrypting
+  would add a key that, lost, loses every backup.
+- **The key can delete the archives, and is not the worker's alone.** Like
+  `MONGODB_URI`, it is in the shared runtime env — the api, worker and edge
+  containers, and the deploy-config object — so a compromised container could
+  delete every archive, and with versioning off a deletion is final. Scoping it
+  to the worker needs its own env file through the pool's converge; until then
+  this copy protects against losing the cluster, not against a compromise of
+  the app.
 - Size and dump time are in every report mail. Watch them grow:
   `DB_BACKUP_DUMP_TIMEOUT_MINUTES` must stay comfortably above the dump time,
   and one upload is a single PUT, which tops out at 5 GiB (the job refuses
@@ -719,9 +728,11 @@ curl -sS -X POST "http://localhost:8288/e/$KEY" \
 Then watch http://localhost:8288 → Functions → **Snapshot MongoDB to object
 storage**, and wait for the "Manual DB snapshot OK" mail before starting the
 risky work. The dashboard's **Invoke** button does the same thing given
-`{"reason":"manual","label":"…"}` as data. Invoked with **no** data it fails
-validation and mails a failure: only the Sunday cron takes a rotated weekly
-snapshot, so nobody can push the real weekly archives out by hand.
+`{"reason":"manual","label":"…"}` as data. Invoked with **no** data it is
+rejected before it runs, and the alert address gets a "request REJECTED" mail.
+**Rerun** on a weekly run takes a fresh weekly snapshot, which replaces that
+week's archive (see above) — fine after a failed Sunday, but a manual snapshot
+is the better tool before risky work.
 
 ### Listing and downloading archives
 
@@ -757,11 +768,13 @@ doctl databases firewalls append <new-id> --rule tag:sfa-production-pool
 3. Point the app at it: set the `MONGODB_URI` secret to the fork, in the shape
    `terraform output -raw mongodb_uri` produces but with the fork's host (a fork
    carries the cluster's users — confirm in the console), and deploy.
-4. Terraform still describes the **old** cluster. Either import the fork
-   (`terraform import module.sfa.module.mongo.digitalocean_database_cluster.this <new-id>`,
-   then reconcile the name) or plan to move back to a Terraform-managed
-   cluster. Do not destroy the old cluster until you have decided — its backups
-   go with it.
+4. **Do not `terraform import` the fork.** The stack hard-codes the cluster's
+   name, which DigitalOcean cannot change in place, so a later apply would plan
+   to *replace* — destroy — the cluster production now runs on. Leave Terraform
+   describing the old cluster, read every `make plan` on this environment
+   closely until you have moved back onto a Terraform-managed cluster (path B
+   into a cluster `make apply` created, in a maintenance window), and do not
+   destroy the old cluster before then: its backups go with it.
 
 ### Restore, path B: an archive (cluster gone, or older than 7 days)
 
@@ -771,19 +784,34 @@ doctl databases firewalls append <new-id> --rule tag:sfa-production-pool
 2. **Download** the archive (above).
 3. **Restore**, from a machine the target's firewall admits (your IP in
    `mongo_allowed_ip_addresses` for the duration, or a pool member, whose image
-   ships `mongorestore`), using the admin connection string from
-   `doctl databases connection <id> --format URI`:
+   ships `mongorestore`), as `doadmin`. Two things about the connection string
+   matter more than they look:
+
+   - **No database in its path.** `doctl databases connection <id>` prints the
+     admin URI as `…/admin?…`, and a database in the URI acts as `--db`:
+     mongorestore then skips every `sfa.*` collection in the archive and reports
+     "0 document(s) restored successfully" — a silent no-op (verified). Use
+     `…/?…`, and pass `--nsInclude 'sfa.*'` too, which keeps the command right
+     even if the path slips back in.
+   - **No password in it.** A password in `--uri` sits in the process table and
+     your shell history for the whole restore. Leave it out and mongorestore
+     asks for it ("Enter password for mongo user:"). doctl masks the password
+     unless given `--show`; the console shows it too.
 
    ```bash
-   mongorestore --uri "<admin-uri>" --archive=20261025T080012Z.archive.gz --gzip --drop
-   # Into a different database name instead:
-   #   --nsFrom 'sfa.*' --nsTo 'sfa_restored.*'
+   mongorestore --uri "mongodb+srv://doadmin@<host>/?tls=true&authSource=admin" \
+     --archive=20261025T080012Z.archive.gz --gzip --nsInclude 'sfa.*' --drop
+   # Into a different database name instead (to check beside a live one):
+   #   --nsInclude 'sfa.*' --nsFrom 'sfa.*' --nsTo 'sfa_restored.*'
    ```
 
-4. **Check** before cutting over: per-collection counts against the report mail
-   or the source, `db.migrations_changelog.find().sort({appliedAt:-1}).limit(1)`
-   (the API applies any migration newer than the archive at boot, as on any
-   deploy), and that you can log in.
+4. **Check** before cutting over: mongorestore's last line reports a non-zero
+   "N document(s) restored successfully, 0 document(s) failed";
+   `db.getSiblingDB('sfa').getCollectionNames()` lists the collections you
+   expect; with the source still reachable, per-collection `countDocuments()`
+   match it; `db.migrations_changelog.find().sort({appliedAt:-1}).limit(1)` is
+   there (the API applies any migration newer than the archive at boot, as on
+   any deploy); and you can log in.
 5. **Cut over**: `MONGODB_URI` secret → the target, deploy. Anything written to
    the old database after the archive was taken is not in it.
 
@@ -796,9 +824,13 @@ Once after the first production snapshot, then quarterly — a backup nobody has
 restored is a hope, not a backup:
 
 1. Download the latest weekly archive (above).
-2. `docker compose up -d mongo`, then time the restore into a scratch database:
-   `time mongorestore --uri "mongodb://localhost:27017/?directConnection=true" --archive=<file> --gzip --nsFrom 'sfa.*' --nsTo 'sfa_restore.*'`
-3. Compare `db.getSiblingDB('sfa_restore').getCollectionNames()` and per-collection
+2. Start Mongo with its replica-set init — `docker compose up -d mongo
+   mongo-init`, and wait for `mongo-init` to exit; on a fresh volume, Mongo
+   alone is an uninitiated replica set that refuses every write. Then time the
+   restore into a scratch database, with the same `--nsInclude` as path B:
+   `time mongorestore --uri "mongodb://localhost:27017/?directConnection=true" --archive=<file> --gzip --nsInclude 'sfa.*' --nsFrom 'sfa.*' --nsTo 'sfa_restore.*'`
+3. Check the "N document(s) restored" line is non-zero, then compare
+   `db.getSiblingDB('sfa_restore').getCollectionNames()` and per-collection
    `countDocuments()` with production.
 4. Record the date, archive key, size and restore time in
    `docs/plans/pac-172-db-backups-implementation-plan.md` → "Rehearsals", drop

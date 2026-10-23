@@ -233,8 +233,9 @@ temperature/aging that aren't first-class in legacy payloads. See
   --gzip` Sundays 13:00 Pakistan time and on the
   `db-backup/snapshot.requested.v1` event, into a dedicated
   `sfa-<env>-db-backups` bucket reached through `BackupStore` — never the
-  uploads bucket, no fallback to `STORAGE_*`. `weekly/` keeps the newest
-  `DB_BACKUP_KEEP` (4), rotated by the worker only after a successful upload;
+  uploads bucket, no fallback to `STORAGE_*`. `weekly/` keeps one archive per
+  week for the newest `DB_BACKUP_KEEP` (4) weeks, rotated by the worker only
+  after a successful upload;
   `manual/` and `pre-deploy/` expire by the bucket's lifecycle rule. Every run
   mails `DB_BACKUP_ALERT_EMAIL`; the Sunday "OK" is the heartbeat. Off unless
   `DB_BACKUP_ENABLED=true`. The restore runbook is `DEPLOYMENT.md` → "Database

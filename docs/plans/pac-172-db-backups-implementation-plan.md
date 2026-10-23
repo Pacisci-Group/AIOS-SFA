@@ -35,8 +35,10 @@ This change adds the copy that outlives the cluster: a weekly `mongodump` stored
 
 1. **plan** — refuse (non-retriable) when the bucket settings are missing or mongodump is not installed; mint the key. Memoised, so a retried upload overwrites the same key instead of leaving two archives for one week.
 2. **snapshot** — temp dir → `mongodump --config=<0600 yaml with uri> --archive=<file> --gzip --numParallelCollections=2` → one PUT. Dump and upload share a step because in a pool a later step can land on another worker container.
-3. **rotate** (scheduled only) — list `weekly/`, keep the newest `DB_BACKUP_KEEP` counting the archive just written, delete the rest. Only exact archive names; never the current archive; nothing at all if the listing does not show the current archive yet.
-4. **notify** — report mail (send + record), which **throws** on failure so a lost heartbeat fails the run rather than vanishing. `onFailure` sends the failure mail.
+3. **rotate** (scheduled only) — list `weekly/`, keep one archive per week (archives within 6 days of a kept one are the same week) for the newest `DB_BACKUP_KEEP` weeks, counting the archive just written, and delete the rest. Only exact archive names; never the current archive; nothing at all if the listing does not show the current archive yet. In the normal case this is exactly "newest four, oldest deleted"; a re-run week replaces its own earlier archive.
+4. **notify** — report mail (send + record), which **throws** on failure so a lost heartbeat fails the run rather than vanishing. Every rendered value comes from memoised steps, so a retried send carries the same payload under the same provider idempotency key. `onFailure` sends the failure mail, worded by the step that failed (each step's error is prefixed with its name) and, for a request Inngest rejected, as a rejected request.
+
+A retry of the `snapshot` step that lands on the worker still running that run's dump **joins** it (an in-process map by archive key) rather than dumping again or failing.
 
 Key layout: `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz`, `manual/<ts>-<label>.archive.gz`, `pre-deploy/<ts>-<sha>.archive.gz`. Compact UTC sorts chronologically as a string, so rotation is a sort, never a date parse.
 
@@ -50,6 +52,20 @@ Key layout: `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz`, `manual/<ts>-<label>.archi
 - **`--config` with `uri:` works with a percent-encoded password, and a URI naming `/sfa` dumps only that database** — checked against Mongo 7 with a second database present.
 - **Streaming is a serve-level switch.** With it on, every step response of every function becomes a 201 with a heartbeat body, and the SDK lets a code value override `INNGEST_STREAMING`. So it is **not** set in `inngest-serve.ts` (the original plan); the deploy writes `INNGEST_STREAMING=${{ vars.INNGEST_STREAMING || 'true' }}`, which leaves an off switch that needs no release.
 - The worker import boundary covers `test/**` too (only `test/worker/` is exempt), so the fake backup store lives in the spec file, not `test/helpers/`.
+
+### Found by the adversarial branch review (23 Oct 2026) and fixed
+
+A four-lens review (data safety, security/process, infra/delivery, tests/docs), each lens's findings verified by a separate skeptic, plus a completeness critic. 17 findings, all confirmed; every one is fixed or documented:
+
+- **Critical — the worker would not boot without backup secrets.** The deploy renders an unset secret as `KEY=`, `ConfigService.get(key, default)` returns `''`, and `new S3Client({ region: '' })` throws synchronously in `BackupStore`'s constructor. Every environment not yet configured for backups — production included — would have lost every Inngest function behind a green deploy. Fixed: an empty region is unset, and `BackupStore` builds its client on first use.
+- **The documented path-B restore restored nothing**: doctl's admin URI ends `/admin`, which mongorestore treats as `--db admin` and so skips every `sfa.*` collection, reporting success (verified locally: "0 document(s) restored successfully"). Fixed in the runbook (no database path, plus `--nsInclude 'sfa.*'`; no password on the command line).
+- The in-process one-dump guard spent every retry after a lost response; replaced by joining the in-flight dump.
+- A dashboard Rerun/Replay of a weekly run counted as a new week and rotated out a real one; fixed by one-per-week rotation.
+- The report's timestamp was taken at send time, so a retried send would have reused the idempotency key with a different body (Resend 409); now from memoised step results. The failure mail's time comes from the failure event.
+- Failure mails claimed the dump failed when rotation or the report had; a rejected request was reported as a failed weekly run. Both fixed.
+- The preflight gate was case-sensitive while the app is not; normalised.
+- Runbook: path A's `terraform import` advice would have led to the fork being destroyed by a later apply; replaced. Path B's check pointed at counts the report mail does not contain; replaced with checks that exist. The rehearsal started Mongo without its replica-set init.
+- The backup key is in the shared runtime env (api, worker, edge, deploy-config object), not the worker's alone, and can delete every archive: documented, with scoping it to the worker listed under "Later".
 
 ## Rollout
 
@@ -77,10 +93,11 @@ Key layout: `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz`, `manual/<ts>-<label>.archi
 | Archive outgrows one PUT (5 GiB) | Refused past 4.5 GiB with a message naming multipart; size is in every mail |
 | Rotation deletes the wrong thing | Prefix-scoped listing, exact-name match, protected current key, skip when the listing lags, versioning off — each tested |
 | Torn reads across collections (no `--oplog`) | Documented; DigitalOcean's fork is the exact-instant tool |
-| The backup key in `app.env` / the deploy-config object | Same exposure class as `MONGODB_URI`, already there |
+| The backup key in `app.env` / the deploy-config object can delete every archive (versioning off) | Same exposure class as `MONGODB_URI`; documented. Scoping it to the worker is a follow-up |
 
 ## Later (out of scope)
 
 - **Pre-deploy snapshot** in `deploy.reusable.yml`: when migrations will run, post `{"reason":"pre-deploy","label":"<sha>"}` from the Inngest droplet and wait for the run before publishing; fail the deploy if it fails. The function, key prefix and bucket rule already exist.
 - `make db-snapshot ENV=<env> LABEL=<label>` wrapping the tunnel + curl.
+- Scope the backup key to the worker: a separate env file for the worker service, published and fetched by the pool's converge alongside `app.env`, so a compromise of the api or edge container cannot delete the archives.
 - Client-side encryption (age), multipart upload, per-collection counts in the report mail (a baseline for rehearsals).
