@@ -71,6 +71,10 @@ import {
   AuditTemplate,
   AuditTemplateSchema,
 } from '../audit-templates/schemas/audit-template.schema';
+import {
+  AgencyCalendar,
+  AgencyCalendarSchema,
+} from '../hr/schemas/agency-calendar.schema';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
 import {
@@ -132,6 +136,8 @@ import { MigrationService } from './migration.service';
       { name: CrmRotation.name, schema: CrmRotationSchema },
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
       { name: AuditTemplate.name, schema: AuditTemplateSchema },
+      // The HR calendar `provisionTenant` creates for the agency (PAC-161).
+      { name: AgencyCalendar.name, schema: AgencyCalendarSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },
     ]),
   ],

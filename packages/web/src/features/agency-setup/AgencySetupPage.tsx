@@ -9,10 +9,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/auth-context";
 import { getBranding } from "@/lib/agency-branding-api";
 import { ApiError } from "@/lib/api-client";
-import { completeAgencySetup, getAgencySetup } from "@/lib/agency-setup-api";
+import {
+  completeAgencySetup,
+  getAgencySetup,
+  type CompleteAgencySetupInput,
+} from "@/lib/agency-setup-api";
 import {
   AGENCY_SETUP_STEPS,
   AgencySetupStepContent,
+  SKIP_FLAG_BY_STEP,
 } from "./AgencySetupSteps";
 
 /**
@@ -35,7 +40,8 @@ export default function AgencySetupPage() {
   const [stepIndex, setStepIndex] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [skippedBranding, setSkippedBranding] = useState(false);
+  // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
+  const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
 
   const setupQuery = useQuery({
     queryKey: ["agency-setup"],
@@ -68,11 +74,11 @@ export default function AgencySetupPage() {
     window.scrollTo({ top: 0 });
   };
 
-  async function finish(skipped: boolean) {
+  async function finish(input: CompleteAgencySetupInput) {
     setFinishing(true);
     setError(null);
     try {
-      await completeAgencySetup({ skipped });
+      await completeAgencySetup(input);
       // Re-read the session before navigating, so `RoleLanding` stops sending
       // them back here. See the same call in `InviteWizard` for why this is
       // `refreshUser` and not a query invalidation.
@@ -104,8 +110,8 @@ export default function AgencySetupPage() {
           {agencyName} is already set up
         </h1>
         <p className="text-sm text-muted-foreground">
-          Your branding and email settings live under Settings, and can be
-          changed whenever you like.
+          Your branding, email, calendar and leave policies live under
+          Settings, and can be changed whenever you like.
         </p>
         <Button variant="brand" onClick={() => navigate("/", { replace: true })}>
           Go to my dashboard
@@ -147,7 +153,8 @@ export default function AgencySetupPage() {
               variant="ghost"
               disabled={finishing}
               onClick={() => {
-                if (step.id === "brand") setSkippedBranding(true);
+                const flag = SKIP_FLAG_BY_STEP[step.id];
+                if (flag) setSkips((current) => ({ ...current, [flag]: true }));
                 goToStep(stepIndex + 1);
               }}
             >
@@ -163,7 +170,7 @@ export default function AgencySetupPage() {
           className="active:scale-95"
           onClick={() => {
             if (step.id === "finish") {
-              void finish(skippedBranding);
+              void finish(skips);
             } else {
               goToStep(stepIndex + 1);
             }

@@ -10,12 +10,16 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
 import { useTenant } from "@/contexts/tenant-context";
 import { useAppForm } from "@/hooks/form";
-import { completeAgencySetup } from "@/lib/agency-setup-api";
+import {
+  completeAgencySetup,
+  type CompleteAgencySetupInput,
+} from "@/lib/agency-setup-api";
 import { ApiError } from "@/lib/api-client";
 import { acceptInvite } from "@/lib/invite-api";
 import {
   AGENCY_SETUP_STEPS,
   AgencySetupStepContent,
+  SKIP_FLAG_BY_STEP,
 } from "./AgencySetupSteps";
 
 /** Phase 1: what the invitee tells us about themselves before they have a session. */
@@ -60,7 +64,8 @@ export function InviteWizard({
   const [stepIndex, setStepIndex] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
-  const [skippedBranding, setSkippedBranding] = useState(false);
+  // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
+  const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
 
   const personalSteps = [
     {
@@ -125,11 +130,11 @@ export function InviteWizard({
   }
 
   /** Mark setup done and land in the app. */
-  async function finish(skipped: boolean) {
+  async function finish(input: CompleteAgencySetupInput) {
     setFinishing(true);
     setSubmitError(null);
     try {
-      await completeAgencySetup({ skipped });
+      await completeAgencySetup(input);
       /*
        * Re-read the session **before** navigating, so `RoleLanding` sees
        * `agencySetupPending: false` and does not bounce them straight back here.
@@ -272,7 +277,10 @@ export function InviteWizard({
                   variant="ghost"
                   disabled={finishing}
                   onClick={() => {
-                    if (setupStep.id === "brand") setSkippedBranding(true);
+                    const flag = SKIP_FLAG_BY_STEP[setupStep.id];
+                    if (flag) {
+                      setSkips((current) => ({ ...current, [flag]: true }));
+                    }
                     goToStep(stepIndex + 1);
                   }}
                 >
@@ -288,7 +296,7 @@ export function InviteWizard({
               className="active:scale-95"
               onClick={() => {
                 if (setupStep.id === "finish") {
-                  void finish(skippedBranding);
+                  void finish(skips);
                 } else {
                   goToStep(stepIndex + 1);
                 }

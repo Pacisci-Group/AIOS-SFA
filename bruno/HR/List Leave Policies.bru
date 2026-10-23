@@ -1,0 +1,40 @@
+meta {
+  name: List Leave Policies
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/hr/leave-policies
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().policies).to.be.an("array");
+  });
+}
+
+docs {
+  # GET /hr/leave-policies — the agency's policies (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  Active first, then archived; **an empty list is normal** — nothing is
+  seeded and there is no default (Asad, 2026-10-22). An agency with no
+  policy simply does not use leave: no time-off requests, no employee
+  onboarding records (PAC-162 / PAC-165 enforce that).
+
+  ## Response `200`
+  ```json
+  { "policies": [{ "id": "…", "name": "Company policy", "status": "active", "version": 3,
+                   "employeeCount": 0, "createdAt": "…", "updatedAt": "…", "archivedAt": null }] }
+  ```
+  `employeeCount` is `0` until PAC-162 attaches profiles.
+}

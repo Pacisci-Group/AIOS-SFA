@@ -1,0 +1,38 @@
+meta {
+  name: Update Leave Policy (Invalid, 400)
+  type: http
+  seq: 16
+}
+
+patch {
+  url: {{baseUrl}}/hr/leave-policies/{{hrLeavePolicyId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "rules": {
+      "pto": { "resetBasis": "fiscal_year" }
+    }
+  }
+}
+
+tests {
+  test("an inconsistent merged result is a 400 that says why", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.include("fiscal-year start");
+  });
+}
+
+docs {
+  # PATCH /hr/leave-policies/:id with a fiscal-year reset and no start — 400
+
+  The patch is well-formed on its own; it is wrong against the stored policy,
+  whose `fiscalYearStart` is null. The cross-field rules run on the merged
+  whole, and nothing is written.
+}

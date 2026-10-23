@@ -45,6 +45,7 @@ import { ProducerAssignment } from '../producer-assignments/schemas/producer-ass
 import { CrmRotation } from '../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../time-off-requests/schemas/time-off-request.schema';
 import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
+import { AgencyCalendar } from '../hr/schemas/agency-calendar.schema';
 import {
   SmartSuiteClient,
   loadSmartSuiteConfig,
@@ -364,6 +365,8 @@ export class MigrationService {
     private readonly timeOffRequestModel: Model<TimeOffRequest>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    @InjectModel(AgencyCalendar.name)
+    private readonly agencyCalendarModel: Model<AgencyCalendar>,
     @InjectModel(AgencyRole.name)
     private readonly roleModel: Model<AgencyRole>,
     private readonly roleAssignments: RoleAssignmentsService,
@@ -772,6 +775,7 @@ export class MigrationService {
         agencyModel: this.agencyModel,
         branchModel: this.branchModel,
         auditTemplateModel: this.auditTemplateModel,
+        agencyCalendarModel: this.agencyCalendarModel,
         roleAssignments: this.roleAssignments,
       },
       {

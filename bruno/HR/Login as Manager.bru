@@ -1,0 +1,55 @@
+meta {
+  name: Login as Manager
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{managerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("hrAdminAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the Branch Manager is the HR admin (PAC-161)", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("hr:read");
+    expect(perms).to.include("hr:write");
+    expect(perms).to.include("agency:hr:admin");
+    expect(perms).to.include("agency:hr:export");
+  });
+}
+
+docs {
+  # POST /auth/login — HR folder helper
+
+  Captures `hrAdminAccessToken` for the requests below as the demo agency's
+  **Branch Manager** — the Office Manager of the HR epic (PAC-148), who holds
+  all four HR capabilities by template: `hr:read`, `hr:write` (reviewer),
+  `agency:hr:admin` and `agency:hr:export`.
+
+  An existing database gets those from the `hr_module` migration, which the
+  API applies at boot. If the permission assertions fail here, the migration
+  has not run against this database — not a code bug.
+}

@@ -1,0 +1,34 @@
+meta {
+  name: Archive Leave Policy
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{baseUrl}}/hr/leave-policies/{{hrLeavePolicyId}}/archive
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK, archived", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().status).to.equal("archived");
+    expect(res.getBody().archivedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /hr/leave-policies/:id/archive (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  Never a delete. `409` while any employee is on the policy ("Move N
+  employees to another policy first") — `0` until PAC-162 attaches profiles.
+  **Archiving the last active policy is allowed**: the agency then holds
+  none and does not use leave. Idempotent on an archived policy.
+}

@@ -1,0 +1,30 @@
+meta {
+  name: Get Leave Policy
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/hr/leave-policies/{{hrLeavePolicyId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK with the rules", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().id).to.equal(bru.getVar("hrLeavePolicyId"));
+    expect(res.getBody().rules).to.have.all.keys("leaveTypes", "reasons", "requests", "pto", "reminders", "attendance", "points", "routing");
+  });
+}
+
+docs {
+  # GET /hr/leave-policies/:id (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - `404` for a policy of another agency or an unknown id.
+}

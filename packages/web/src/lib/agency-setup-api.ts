@@ -12,17 +12,27 @@ export function getAgencySetup(): Promise<AgencySetupView> {
   return apiFetch<AgencySetupView>('/agency/setup');
 }
 
+/** Which steps the owner pressed "Skip for now" on. All complete the setup. */
+export interface CompleteAgencySetupInput {
+  /** The white-label step. */
+  skipped?: boolean;
+  /** The two HR phases (PAC-161). */
+  calendarSkipped?: boolean;
+  hrPolicySkipped?: boolean;
+}
+
 /**
  * Mark setup finished.
  *
- * `skipped` records that the owner pressed "Skip for now" rather than filling
- * the white-label step in. Either way the wizard stops being offered — skipping
- * completes, so an owner who is not ready is not nagged on every sign-in.
+ * The flags record *how* the owner got to the end — filled a step in, or
+ * pressed "Skip for now". Either way the wizard stops being offered —
+ * skipping completes, so an owner who is not ready is not nagged on every
+ * sign-in.
  *
  * Idempotent server-side, so a double submit is safe.
  */
 export function completeAgencySetup(
-  input: { skipped?: boolean } = {},
+  input: CompleteAgencySetupInput = {},
 ): Promise<AgencySetupView> {
   return apiFetch<AgencySetupView>('/agency/setup/complete', {
     method: 'POST',

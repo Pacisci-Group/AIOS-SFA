@@ -56,6 +56,15 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.CrmService, "read"),
       modulePermission(ModuleKey.CrmService, "write"),
       modulePermission(ModuleKey.Mailers, "read"),
+      /*
+       * HR (PAC-161). The Branch Manager *is* the Office Manager: reviewer
+       * (`hr:write`) and administrator (`agency:hr:admin`, `agency:hr:export`)
+       * both. Added 2026-10-22; existing agencies get all four from the
+       * `hr_module` migration, not from this line.
+       */
+      ...permissionsForModule(ModuleKey.Hr),
+      AgencyPermission.HrAdmin,
+      AgencyPermission.HrExport,
     ],
   },
   {
@@ -72,6 +81,9 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Clients, "write"),
       modulePermission(ModuleKey.Performance, "read"),
       modulePermission(ModuleKey.Leaderboard, "read"),
+      // HR (PAC-161): every employee's own records and the calendar. Existing
+      // agencies get it from the `hr_module` migration, not from this line.
+      modulePermission(ModuleKey.Hr, "read"),
     ],
   },
   {
@@ -87,6 +99,8 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Performance, "read"),
       ...permissionsForModule(ModuleKey.CrmService),
       ...permissionsForModule(ModuleKey.QuoteRecaps),
+      // HR (PAC-161) — see the Producer template.
+      modulePermission(ModuleKey.Hr, "read"),
     ],
   },
   {
@@ -130,6 +144,8 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Onboardings, "read"),
       modulePermission(ModuleKey.Onboardings, "write"),
       modulePermission(ModuleKey.Mailers, "read"),
+      // HR (PAC-161) — see the Producer template.
+      modulePermission(ModuleKey.Hr, "read"),
     ],
   },
   {
@@ -154,6 +170,8 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
        * grants nothing on that page.
        */
       modulePermission(ModuleKey.DataExport, "read"),
+      // HR (PAC-161) — every account is an employee; see the Producer template.
+      modulePermission(ModuleKey.Hr, "read"),
     ],
   },
 ];

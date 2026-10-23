@@ -15,6 +15,13 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       reporterName: 'Pat Producer',
       agencyId: null,
     },
+    'hr.holidays_proposed': {
+      agencyId: '68f3c0ffee0000000000c22',
+      year: 2027,
+      count: 11,
+      countryName: 'United States',
+      regionName: 'Oklahoma',
+    },
   };
 
 describe('renderNotification', () => {
@@ -39,6 +46,18 @@ describe('renderNotification', () => {
     const rendered = renderNotification('bug_report.filed', {});
     expect(rendered.body).toBe('Someone filed a bug report.');
     expect(rendered.body).not.toContain('undefined');
+  });
+
+  it('deep-links a holiday proposal to its year and counts the suggestions', () => {
+    const rendered = renderNotification(
+      'hr.holidays_proposed',
+      FIXTURES['hr.holidays_proposed'],
+    );
+    expect(rendered.title).toBe("2027's holidays are ready to confirm");
+    expect(rendered.body).toBe(
+      '11 suggested holidays for 2027 from United States, Oklahoma. Review and confirm them in HR settings.',
+    );
+    expect(rendered.href).toBe('/settings/hr?tab=calendar&proposal=2027');
   });
 
   it('names the reporter and the summary when both are present', () => {

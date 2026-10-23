@@ -127,6 +127,16 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
     label: 'Manage branches',
     description: 'Create, rename and reorganise branches.',
   },
+  [AgencyPermission.HrAdmin]: {
+    label: 'Administer HR',
+    description:
+      'Edit leave policies and the agency calendar, confirm holidays, open HR onboardings and correct balances and points.',
+  },
+  [AgencyPermission.HrExport]: {
+    label: 'Export HR data',
+    description:
+      'Download HR datasets (requests, attendance, balances, points) through Data Export, with the same field restrictions as the screens.',
+  },
   [AgencyPermission.ChangeLogsRead]: {
     label: 'View change history',
     description: 'See who changed a record and what they changed.',

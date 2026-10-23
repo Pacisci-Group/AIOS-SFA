@@ -101,6 +101,12 @@ export const PAGES: PageDefinition[] = [
     description:
       'Sales and service analytics: breakdowns by producer, lead source, line, carrier, branch, ZIP and CSR, trends over time and goal pacing. View is all the page needs; Edit grants nothing further.',
   },
+  {
+    moduleKey: ModuleKey.Hr,
+    label: 'HR',
+    description:
+      'Your own time off, attendance and leave rules, and the agency calendar. Edit lets a reviewer decide requests and record or classify attendance events for their branch.',
+  },
 ];
 
 export interface PageLevelOverride {
