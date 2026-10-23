@@ -111,7 +111,7 @@ export function ChangeLog({ profile }: { profile: EmployeeProfileView }) {
                     <li key={change.field} className="text-sm">
                       <span className="text-muted-foreground">{change.label}: </span>
                       <span className="text-foreground">
-                        {changeValue(change.from)} → {changeValue(change.to)}
+                        {changeValue(change)}
                       </span>
                     </li>
                   ))}
@@ -125,8 +125,15 @@ export function ChangeLog({ profile }: { profile: EmployeeProfileView }) {
   );
 }
 
-function changeValue(value: ActivityChange["from"]): string {
-  if (value === null) return NOT_AVAILABLE;
-  if (Array.isArray(value)) return value.length ? value.join(", ") : NOT_AVAILABLE;
-  return String(value);
+/** "before → after", with the custom-rule paths read as the editor labels them. */
+function changeValue(change: ActivityChange): string {
+  const render = (value: ActivityChange["from"]): string => {
+    if (value === null) return NOT_AVAILABLE;
+    if (Array.isArray(value)) {
+      if (!value.length) return NOT_AVAILABLE;
+      return (change.field === "customRules" ? value.map(ruleLabel) : value).join(", ");
+    }
+    return String(value);
+  };
+  return `${render(change.from)} → ${render(change.to)}`;
 }
