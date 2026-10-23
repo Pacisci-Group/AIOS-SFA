@@ -41,16 +41,38 @@ export const ARCHIVE_CONTENT_TYPE = 'application/gzip';
 const SCHEDULED_ARCHIVE =
   /^weekly\/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.archive\.gz$/;
 
+const WEEK_MS = 7 * 24 * 60 * 60_000;
+
 /**
- * Scheduled archives closer together than this are the same week.
+ * Sunday 4 January 2026, 00:00 Asia/Karachi (Saturday 19:00 UTC): the start of
+ * a schedule week. Weeks run Sunday 00:00 to Sunday 00:00 Pakistan time, which
+ * puts the 13:00 cron (`DB_BACKUP_SCHEDULE`) thirteen hours into its week —
+ * far from either edge, so a late start or a skewed clock stays in its week.
+ * Pakistan has no daylight saving, so every week is exactly seven days.
  *
- * The cron fires exactly seven days apart, so two `weekly/` archives within six
- * days of each other mean the week was run twice — a dashboard Rerun or Replay
- * of a weekly run, which starts again from the cron's timer event and is
- * indistinguishable from the cron itself. Without this, each such run would
- * count as a restore point and push a real older week out of rotation.
+ * ⚠ Tied to the schedule. Move the cron off Sunday and this must move with it.
  */
-export const WEEKLY_SLOT_MS = 6 * 24 * 60 * 60_000;
+const SCHEDULE_WEEK_START = Date.UTC(2026, 0, 3, 19, 0, 0);
+
+/**
+ * Which schedule week an instant falls in.
+ *
+ * Rotation keeps one archive per *week*, not per archive: a week can be run
+ * more than once — a dashboard Rerun or Replay of a weekly run starts again from
+ * the cron's own timer event and is indistinguishable from it — and each such
+ * run must replace its own week's archive rather than count as a restore point
+ * and push a real older week out. Anchored to the calendar rather than measured
+ * between archives, because distance cannot tell "a Sunday, then its re-run on
+ * Thursday" from "a re-run on Thursday, then the next Sunday".
+ */
+export function scheduleWeekOf(at: number): number {
+  return Math.floor((at - SCHEDULE_WEEK_START) / WEEK_MS);
+}
+
+/** When the schedule week containing `at` began. */
+export function scheduleWeekStart(at: number): number {
+  return SCHEDULE_WEEK_START + scheduleWeekOf(at) * WEEK_MS;
+}
 
 /** Labels long enough to say what they guard, short enough to read in a list. */
 const LABEL_MAX_LENGTH = 40;
@@ -114,11 +136,11 @@ export function scheduledArchiveTime(key: string): number | null {
  * Which scheduled archives to delete so that one per week, for the newest
  * `keep` weeks, remains.
  *
- * Walks the archives newest first and keeps each one that is not within
- * {@link WEEKLY_SLOT_MS} of an archive already kept, until `keep` are kept. So
- * the normal case is exactly "the new archive and the three before it, oldest
- * deleted", and a re-run week costs its own earlier archive — never an older
- * week's.
+ * Walks the archives newest first and keeps each one whose schedule week
+ * ({@link scheduleWeekOf}) has no archive kept yet, until `keep` weeks are
+ * kept. So the normal case is exactly "the new archive and the three before it,
+ * oldest deleted", and a week run twice keeps only its newest archive — it
+ * never costs an older week's.
  *
  * `protect` is the archive the run just wrote. It is considered first, always
  * survives and counts toward `keep` — even if it sorts oldest, which a skewed
@@ -140,15 +162,14 @@ export function selectKeysToDelete(
       .reverse(), // newest first
   ];
 
-  const kept: number[] = [];
+  const weeks = new Set<number>();
   const doomed: string[] = [];
   for (const key of ordered) {
-    const at = scheduledArchiveTime(key) as number;
-    const sameWeek = kept.some((t) => Math.abs(t - at) < WEEKLY_SLOT_MS);
-    if (key !== protect && (kept.length >= keep || sameWeek)) {
+    const week = scheduleWeekOf(scheduledArchiveTime(key) as number);
+    if (key !== protect && (weeks.size >= keep || weeks.has(week))) {
       doomed.push(key);
     } else {
-      kept.push(at);
+      weeks.add(week);
     }
   }
   return doomed;

@@ -723,7 +723,26 @@ describe('db backup failed template', () => {
     const { text } = dbBackupFailedTemplate.render(
       dbBackupFailedData({ stage: 'notify' }),
     );
+    expect(text).toContain('stored its archive and rotated');
     expect(text).toContain('only the report could not be sent');
+  });
+
+  /** Requested snapshots are never rotated, so the mail must not say they were. */
+  it('does not claim rotation for a requested snapshot', () => {
+    const { text } = dbBackupFailedTemplate.render(
+      dbBackupFailedData({ stage: 'notify', kind: 'manual', label: 'x' }),
+    );
+    expect(text).toContain('stored its archive; only the report');
+    expect(text).not.toContain('rotated');
+  });
+
+  /** The report already arrived; the mail must not say it did not. */
+  it('says a failed delivery record is only that', () => {
+    const { text } = dbBackupFailedTemplate.render(
+      dbBackupFailedData({ stage: 'record' }),
+    );
+    expect(text).toContain('sent its report');
+    expect(text).not.toContain('could not be sent');
   });
 
   /** A rejected Invoke or curl is not a failed weekly snapshot. */
@@ -738,5 +757,6 @@ describe('db backup failed template', () => {
     const { text } = dbBackupFailedTemplate.render(data);
     expect(text).not.toContain('weekly');
     expect(text).toContain('No snapshot was attempted');
+    expect(text).toContain('names the field');
   });
 });

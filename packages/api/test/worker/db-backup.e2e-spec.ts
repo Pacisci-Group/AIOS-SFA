@@ -9,7 +9,10 @@ import { NonRetriableError } from 'inngest';
 import type { Model } from 'mongoose';
 import { ENV_FILE_PATH } from '../../src/config/env.config';
 import { InngestModule } from '../../src/inngest/inngest.module';
-import { buildArchiveKey } from '../../src/worker/backup/backup-keys';
+import {
+  buildArchiveKey,
+  scheduleWeekStart,
+} from '../../src/worker/backup/backup-keys';
 import { BackupStore } from '../../src/worker/backup/backup-store';
 import {
   MongoDumpRunner,
@@ -384,18 +387,20 @@ describe('DbBackupSnapshotFn (e2e)', () => {
    * push out the oldest week.
    */
   it("replaces this week's archive on a re-run instead of an older week", async () => {
-    const earlierToday = buildArchiveKey(
+    // The first second of this schedule week: always this week, never later
+    // than the run, whatever day the suite runs on.
+    const earlierThisWeek = buildArchiveKey(
       'scheduled',
-      new Date(Date.now() - 2 * 60 * 60_000),
+      new Date(scheduleWeekStart(Date.now())),
     );
     const older = [3, 2, 1].map(weeksAgo);
-    [...older, earlierToday].forEach((key) => store.seed(key));
+    [...older, earlierThisWeek].forEach((key) => store.seed(key));
     const { step } = inlineStep();
 
     const result = await fn.handle(CRON_EVENT, step, RUN);
 
     expect(result).toMatchObject({ status: 'ok', deleted: 1 });
-    expect(store.objects.has(earlierToday)).toBe(false);
+    expect(store.objects.has(earlierThisWeek)).toBe(false);
     for (const key of older) expect(store.objects.has(key)).toBe(true);
   });
 
@@ -422,6 +427,32 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     expect(result).toMatchObject({ status: 'ok', bytes: 1234 });
     expect(store.objects.size).toBe(1);
     expect(mail.sent).toHaveLength(1);
+  });
+
+  /**
+   * `concurrency: 1` counts executing steps, so another run can start while a
+   * lost attempt's dump is still running here. Its dump must wait, not run
+   * beside it on a one-vCPU cluster.
+   */
+  it("queues a different run's dump behind one still running", async () => {
+    let release: () => void = () => undefined;
+    dumper.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const weeklyRun = fn.handle(CRON_EVENT, inlineStep().step, RUN);
+    await until(() => dumper.calls.length === 1);
+    const manualRun = fn.handle(MANUAL_EVENT, inlineStep().step, {
+      ...RUN,
+      runId: 'run-2',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(dumper.calls).toHaveLength(1);
+
+    release();
+    await Promise.all([weeklyRun, manualRun]);
+    expect(dumper.calls).toHaveLength(2);
+    expect(store.objects.size).toBe(2);
   });
 
   /**
@@ -593,7 +624,10 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     );
   });
 
-  /** Inngest rejects a request without a reason before the handler runs. */
+  /**
+   * Inngest rejects a request without a reason before the handler runs, with
+   * an EventValidationError — whose name survives the trip to onFailure.
+   */
   it('reports a rejected request as rejected, not as a failed weekly run', async () => {
     await fn.fail({
       event: {
@@ -602,14 +636,33 @@ describe('DbBackupSnapshotFn (e2e)', () => {
           event: { name: 'inngest/function.invoked', data: {} },
         },
       },
-      error: new Error(
-        'reason: Invalid option: expected one of "manual"|"pre-deploy"',
+      error: Object.assign(
+        new Error(
+          'reason: Invalid option: expected one of "manual"|"pre-deploy"',
+        ),
+        { name: 'EventValidationError' },
       ),
     });
 
     const { message } = mail.sent[0];
     expect(message.subject).toMatch(/^DB snapshot request REJECTED/);
     expect(message.text).not.toContain('weekly');
+  });
+
+  /**
+   * A valid request whose worker died mid-dump fails without a step prefix. It
+   * was attempted, so it is a failure, not a rejection.
+   */
+  it('reports an unprefixed failure of a valid request as a failure', async () => {
+    await fn.fail({
+      event: { data: { run_id: 'run-12', event: MANUAL_EVENT } },
+      error: new Error('connection reset by peer'),
+    });
+
+    const { message } = mail.sent[0];
+    expect(message.subject).toMatch(/^DB backup FAILED/);
+    expect(message.text).toContain('manual database snapshot');
+    expect(message.text).toContain('does not say which step failed');
   });
 
   it('refuses to dump, without retrying, when the bucket is not configured', async () => {

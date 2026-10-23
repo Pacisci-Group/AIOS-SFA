@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { NonRetriableError, cron, internalEvents } from 'inngest';
+import { NonRetriableError, cron } from 'inngest';
 import {
   DB_BACKUP_SCHEDULE,
   dbBackupAlertEmail,
@@ -58,12 +58,9 @@ const RETRIES = 2;
  */
 const SINGLE_PUT_LIMIT_BYTES = 4.5 * 1024 ** 3;
 
-/** The name of the event a cron trigger delivers. */
-const CRON_EVENT: string = internalEvents.ScheduledTimer;
-
 /** The steps a failure can be attributed to; see {@link inStage}. */
 type Stage = Exclude<DbBackupFailureStage, 'request' | 'unknown'>;
-const STAGE_PREFIX = /^(plan|snapshot|rotate|notify): /;
+const STAGE_PREFIX = /^(plan|snapshot|rotate|notify|record): /;
 
 /** The run this handler is executing, from Inngest's handler context. */
 export interface DbBackupRun {
@@ -146,8 +143,9 @@ interface RotationResult {
  *    the internal load balancer (see `inngest-serve.ts`). If the response is
  *    lost anyway, the retry that lands on the same worker **joins** the dump
  *    still running there instead of starting a second one or failing.
- * 3. **rotate** — scheduled runs only: keep one archive per week for the newest
- *    `DB_BACKUP_KEEP` weeks under `weekly/`, delete the rest (`backup-keys.ts`).
+ * 3. **rotate** — scheduled runs only: keep one archive per schedule week
+ *    (Sunday to Sunday, Pakistan time) for the newest `DB_BACKUP_KEEP` weeks
+ *    under `weekly/`, delete the rest (`backup-keys.ts`).
  *    Runs only after the upload succeeded, by step order; never touches another
  *    prefix, a key that is not an archive, or the archive just written. A
  *    re-run of a week replaces that week's earlier archive rather than pushing
@@ -166,7 +164,10 @@ interface RotationResult {
  * ## Why one function and not one per node
  * A cron fires once per schedule however many worker containers serve it, and
  * `concurrency: 1` keeps a requested snapshot from overlapping the weekly one:
- * two dumps at once would double the load on a one-vCPU cluster.
+ * two dumps at once would double the load on a one-vCPU cluster. That limit
+ * counts executing steps, not runs, so a run waiting out a retry backoff frees
+ * its slot; a dump still running here from that run's lost attempt is what
+ * {@link DbBackupSnapshotFn.inFlight} queues the next one behind.
  *
  * ## Disabled is not a failure
  * The function is registered everywhere; `DB_BACKUP_ENABLED` decides whether a
@@ -195,6 +196,10 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
    * the dump does, with the same key, and the run carries on to rotate and
    * report. A retry on a *different* worker dumps again; the per-run key makes
    * the second PUT an atomic overwrite with an equally valid archive.
+   *
+   * A dump for a *different* key — another run that got the concurrency slot
+   * while this one waited out a retry backoff — queues behind whatever is in
+   * flight here rather than running beside it.
    */
   private readonly inFlight = new Map<string, Promise<SnapshotResult>>();
 
@@ -266,7 +271,7 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
     )) as SentEmail | null;
     if (sent) {
       await step.run('notify-record', () =>
-        inStage('notify', () =>
+        inStage('record', () =>
           this.mail.record(
             {
               eventId: event.id ?? '',
@@ -293,10 +298,12 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
    * The run died or ran out of retries — `onFailure`.
    *
    * Says which step failed, so the reader knows whether this run stored an
-   * archive: the step prefix {@link inStage} put on the error. An error with no
-   * prefix on an event that is not the cron's is a request Inngest rejected
-   * before the handler ran — an Invoke or a `curl` without a valid `reason` —
-   * and is reported as that, not as a failed weekly snapshot.
+   * archive: the step prefix {@link inStage} put on the error, which survives
+   * Inngest's serialisation intact. Inngest's own `EventValidationError` — a
+   * request it rejected before the handler ran, such as an Invoke or a `curl`
+   * without a valid `reason` — is reported as a rejected request; its name
+   * survives the round trip too. Anything else without a prefix (a worker that
+   * died mid-step, a transport failure) is `unknown`: the dashboard has it.
    *
    * Not wrapped in steps, like `DataExportGenerateFn.fail`: the provider
    * idempotency key collapses a re-sent failure mail, and the payload is
@@ -310,7 +317,8 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
     const message = failure.error?.message || 'unknown error';
     const tagged = STAGE_PREFIX.exec(message)?.[1] as Stage | undefined;
     const stage: DbBackupFailureStage =
-      tagged ?? (original.name === CRON_EVENT ? 'unknown' : 'request');
+      tagged ??
+      (failure.error?.name === 'EventValidationError' ? 'request' : 'unknown');
 
     this.logger.error(
       `Snapshot run ${runId} (${request.kind}, ${stage}) failed and stopped retrying: ${message}`,
@@ -403,9 +411,17 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
       );
       return running;
     }
-    const attempt = this.dumpAndStore(plan, run).finally(() => {
-      this.inFlight.delete(plan.key);
-    });
+    const ahead = [...this.inFlight.values()];
+    if (ahead.length > 0) {
+      this.logger.warn(
+        `Snapshot ${plan.key}: waiting for ${ahead.length} dump(s) still running in this worker.`,
+      );
+    }
+    const attempt = Promise.allSettled(ahead)
+      .then(() => this.dumpAndStore(plan, run))
+      .finally(() => {
+        this.inFlight.delete(plan.key);
+      });
     this.inFlight.set(plan.key, attempt);
     return attempt;
   }

@@ -10,13 +10,16 @@ import type { Template } from './template.types';
  *   nothing, and nothing was deleted.
  * - `rotate` — after the upload: this run's archive is stored; older weekly
  *   archives may not have been pruned.
- * - `notify` — after upload and rotation: only the report could not be sent.
- * - `request` — Inngest rejected the request before the function ran (an Invoke
- *   or a `curl` without a valid `reason`): no snapshot was attempted.
- * - `unknown` — the error carried no step; the dashboard has the detail.
+ * - `notify` — after upload (and rotation, for a weekly run): only the report
+ *   could not be sent.
+ * - `record` — the report was sent; only its delivery record failed.
+ * - `request` — Inngest rejected the request before the function ran (its data
+ *   failed validation): no snapshot was attempted.
+ * - `unknown` — the error carried no step (a worker that died mid-step, a
+ *   transport failure); the dashboard has the detail.
  */
 export type DbBackupFailureStage =
-  'request' | 'plan' | 'snapshot' | 'rotate' | 'notify' | 'unknown';
+  'request' | 'plan' | 'snapshot' | 'rotate' | 'notify' | 'record' | 'unknown';
 
 /** What the "snapshot FAILED" mail renders from (PAC-172). */
 export interface DbBackupFailedData {
@@ -47,9 +50,13 @@ function consequence(data: DbBackupFailedData): string {
     case 'rotate':
       return `This run's archive was stored in ${data.bucket}, but rotation failed, so older weekly archives may not have been pruned. The next weekly run prunes again.`;
     case 'notify':
-      return 'This run stored its archive and rotated; only the report could not be sent.';
+      return data.kind === 'scheduled'
+        ? 'This run stored its archive and rotated; only the report could not be sent.'
+        : 'This run stored its archive; only the report could not be sent.';
+    case 'record':
+      return 'This run stored its archive and sent its report; only the delivery record could not be written.';
     case 'request':
-      return 'No snapshot was attempted, and the existing archives are untouched. A requested snapshot needs data with a "reason" of "manual" or "pre-deploy".';
+      return 'No snapshot was attempted, and the existing archives are untouched. The request\'s data failed validation, and the error above names the field. A request needs a "reason" of "manual" or "pre-deploy", and an optional "label" of at most 200 characters.';
     case 'unknown':
       return "The error does not say which step failed; the run's steps in the Inngest dashboard do.";
   }

@@ -4,6 +4,8 @@ import {
   compactUtc,
   isScheduledArchiveKey,
   safeLabel,
+  scheduleWeekOf,
+  scheduleWeekStart,
   scheduledArchiveTime,
   selectKeysToDelete,
 } from './backup-keys';
@@ -210,12 +212,58 @@ describe('selectKeysToDelete — one archive per week', () => {
     ).toEqual([w2]);
   });
 
-  it('keeps archives just over six days apart as separate weeks', () => {
-    const sixDaysOneMinuteLater = weekly('2026-10-31T08:01:00Z');
+  /**
+   * The case a distance rule gets wrong: a re-run late in the week is still
+   * that week's only archive when the next Sunday runs, so it must survive it.
+   */
+  it('keeps a late-week re-run when the next Sunday rotates', () => {
+    const w1 = sunday('2026-09-27');
+    // The Oct 25 cron failed; the operator re-ran it on Tuesday.
+    const tuesday = weekly('2026-10-27T10:00:00Z');
     expect(
-      selectKeysToDelete([w4, w5, sixDaysOneMinuteLater], 4, {
-        protect: sixDaysOneMinuteLater,
+      selectKeysToDelete([w1, w2, w3, w4, tuesday], 4, { protect: tuesday }),
+    ).toEqual([w1]);
+    const nov1 = sunday('2026-11-01');
+    expect(
+      selectKeysToDelete([w2, w3, w4, tuesday, nov1], 4, { protect: nov1 }),
+    ).toEqual([w2]);
+  });
+
+  it('treats a Wednesday re-run of a good Sunday as that week', () => {
+    const wednesday = weekly('2026-10-28T12:00:00Z');
+    expect(
+      selectKeysToDelete([w2, w3, w4, w5, wednesday], 4, {
+        protect: wednesday,
       }),
-    ).toEqual([]);
+    ).toEqual([w5]);
+    const nov1 = sunday('2026-11-01');
+    expect(
+      selectKeysToDelete([w2, w3, w4, wednesday, nov1], 4, { protect: nov1 }),
+    ).toEqual([w2]);
+  });
+});
+
+describe('scheduleWeekOf', () => {
+  /** Weeks run Sunday 00:00 to Sunday 00:00 Pakistan time (UTC+5). */
+  it('turns over at Saturday 19:00 UTC', () => {
+    const lastSecond = Date.parse('2026-10-31T18:59:59Z');
+    const firstSecond = Date.parse('2026-10-31T19:00:00Z');
+    expect(scheduleWeekOf(firstSecond)).toBe(scheduleWeekOf(lastSecond) + 1);
+    expect(scheduleWeekStart(lastSecond)).toBe(
+      Date.parse('2026-10-24T19:00:00Z'),
+    );
+  });
+
+  it('puts the cron well inside its week', () => {
+    const cron = Date.parse('2026-10-25T08:00:00Z');
+    expect(cron - scheduleWeekStart(cron)).toBe(13 * 60 * 60_000);
+  });
+
+  it('is exactly one week per seven days, in both directions', () => {
+    const t = Date.parse('2026-10-25T08:00:00Z');
+    const week = 7 * 24 * 60 * 60_000;
+    expect(scheduleWeekOf(t + week)).toBe(scheduleWeekOf(t) + 1);
+    expect(scheduleWeekOf(t - 52 * week)).toBe(scheduleWeekOf(t) - 52);
+    expect(scheduleWeekOf(Date.parse('2020-01-01T00:00:00Z'))).toBeLessThan(0);
   });
 });
