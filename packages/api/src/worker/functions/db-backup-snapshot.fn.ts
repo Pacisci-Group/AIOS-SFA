@@ -64,8 +64,9 @@ export interface DbBackupRun {
 }
 
 /**
- * The triggering event: the cron's `inngest/scheduled.timer`, or a snapshot
- * request. `data` is narrowed by name in {@link requestFrom}.
+ * The triggering event: the cron's `inngest/scheduled.timer`, a snapshot
+ * request, or the dashboard's `inngest/function.invoked`. `data` is narrowed in
+ * {@link requestFrom}.
  */
 export interface DbBackupEvent {
   id?: string;
@@ -469,15 +470,19 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
 }
 
 /**
- * A snapshot request from its event; anything else — the cron's timer event
- * above all — is the scheduled snapshot.
+ * What a run was asked for, read from the event's `data` rather than its name.
+ *
+ * Two events can carry a request: `db-backup/snapshot.requested.v1`, and the
+ * dashboard's **Invoke**, which arrives as `inngest/function.invoked` with the
+ * same data (Inngest validates it against the same schema). Keying off the name
+ * would file an invoked manual snapshot under `weekly/`, where rotation would
+ * count it. The cron's timer event never carries a `reason`, and neither does an
+ * Invoke with empty data — both are the scheduled snapshot, rotation included.
  */
 function requestFrom(event: DbBackupEvent): SnapshotRequest {
-  if (event.name === dbBackupSnapshotRequested.name) {
-    const data = (event.data ?? {}) as Partial<DbBackupSnapshotRequestedData>;
-    if (data.reason === 'manual' || data.reason === 'pre-deploy') {
-      return { kind: data.reason, label: data.label ?? null };
-    }
+  const data = (event.data ?? {}) as Partial<DbBackupSnapshotRequestedData>;
+  if (data.reason === 'manual' || data.reason === 'pre-deploy') {
+    return { kind: data.reason, label: data.label ?? null };
   }
   return { kind: 'scheduled', label: null };
 }

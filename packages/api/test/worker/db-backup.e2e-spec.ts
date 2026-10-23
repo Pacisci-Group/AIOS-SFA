@@ -394,6 +394,38 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     expect(mail.sent[0].message.subject).toContain('Manual DB snapshot OK');
   });
 
+  /** The dashboard's Invoke button sends this name, with the request's data. */
+  it('treats an Invoke carrying a reason as that request', async () => {
+    const { ran, step } = inlineStep();
+
+    const result = await fn.handle(
+      {
+        name: 'inngest/function.invoked',
+        data: { reason: 'manual', label: 'from-dashboard' },
+      },
+      step,
+      RUN,
+    );
+
+    expect(ran).not.toContain('rotate');
+    expect((result as { key: string }).key).toMatch(
+      /^manual\/\d{8}T\d{6}Z-from-dashboard\.archive\.gz$/,
+    );
+  });
+
+  it('treats an Invoke with no data as the weekly snapshot', async () => {
+    const { ran, step } = inlineStep();
+
+    const result = await fn.handle(
+      { name: 'inngest/function.invoked', data: {} },
+      step,
+      RUN,
+    );
+
+    expect(ran).toContain('rotate');
+    expect((result as { key: string }).key).toMatch(SCHEDULED_KEY);
+  });
+
   it('names a pre-deploy snapshot after its commit', async () => {
     const { step } = inlineStep();
 
