@@ -10,9 +10,13 @@
  * ## A separate bucket from the uploads one, on purpose
  * An archive here is every tenant's data in one file. The uploads bucket is
  * reachable with a key the app carries on every request path, and the deploy
- * config bucket holds the platform's secrets. Keeping all three apart means the
- * key that writes snapshots can read neither, and neither of theirs can read a
- * snapshot.
+ * config bucket holds the platform's secrets. Each of the three keys is granted
+ * its own bucket alone, so none can read another's.
+ *
+ * ⚠ That is about the grants, not about who holds the keys. The worker's key
+ * here travels in the shared app.env — every container that loads it, and the
+ * deploy-config object it is published as — so those can reach the archives
+ * until it is scoped to the worker (DEPLOYMENT.md, "Database backups").
  */
 resource "digitalocean_spaces_bucket" "backups" {
   name   = var.name
@@ -23,8 +27,9 @@ resource "digitalocean_spaces_bucket" "backups" {
   acl = "private"
 
   versioning {
-    # Off, deliberately. The worker keeps the newest DB_BACKUP_KEEP weekly
-    # archives and deletes the rest, and that has to mean what it says: with
+    # Off, deliberately. The worker keeps one weekly archive per schedule week
+    # for the newest DB_BACKUP_KEEP weeks and deletes the rest, and that has to
+    # mean what it says: with
     # versioning on, every delete would leave a noncurrent copy behind, doubling
     # what is stored and silently defeating the retention the report mail states.
     enabled = false

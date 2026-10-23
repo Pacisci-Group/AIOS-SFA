@@ -121,7 +121,7 @@ output "db_backup_github_secrets" {
 }
 
 output "db_backup_secret_access_key" {
-  description = "DB_BACKUP_STORAGE_SECRET_ACCESS_KEY. Worker only — never the uploads key."
+  description = "DB_BACKUP_STORAGE_SECRET_ACCESS_KEY. For the worker (today carried in the shared app.env) — never the uploads key."
   value       = module.sfa.db_backup_secret_access_key
   sensitive   = true
 }

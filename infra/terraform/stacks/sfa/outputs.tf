@@ -189,7 +189,7 @@ output "db_backup_github_secrets" {
 }
 
 output "db_backup_secret_access_key" {
-  description = "DB_BACKUP_STORAGE_SECRET_ACCESS_KEY. Worker only - never the uploads key."
+  description = "DB_BACKUP_STORAGE_SECRET_ACCESS_KEY. For the worker (today carried in the shared app.env) - never the uploads key."
   value       = var.enable_db_backups ? module.db_backup_bucket[0].secret_key : null
   sensitive   = true
 }

@@ -8,7 +8,7 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/`. The oper
 
 Production Mongo is a single-node DigitalOcean managed cluster (`db-s-1vcpu-1gb`) holding real client data. DigitalOcean backs it up daily with seven days of point-in-time recovery, but those backups belong to the cluster: **destroying the cluster destroys them**, a restore always forks a *new* cluster, and nothing older than a week exists. The docs said prod had "no backups", and Terraform's `enable_backups` flag was read by nothing, with comments claiming retention depended on the cluster tier (it does not).
 
-This change adds the copy that outlives the cluster: a weekly `mongodump` stored in a private bucket of its own, rotated to the newest four, with a report mail every run.
+This change adds the copy that outlives the cluster: a weekly `mongodump` stored in a private bucket of its own, keeping one archive per week for the newest four weeks, with a report mail every run.
 
 ## Decisions (taken with the user, 23 Oct 2026)
 
@@ -16,7 +16,7 @@ This change adds the copy that outlives the cluster: a weekly `mongodump` stored
 |---|---|
 | Where it runs | An Inngest function in the worker ("option B"), not a droplet cron (would fire once per pool member) and not GitHub Actions (the runner cannot reach the cluster through its firewall). |
 | Schedule | Weekly, **Sundays 13:00 Pakistan time** (`TZ=Asia/Karachi 0 13 * * 0`) = 08:00 UTC = 03:00 Chicago. The ticket said nightly. |
-| Retention | **Count-based in code**: keep the newest 4 (`DB_BACKUP_KEEP`); after a successful upload, delete the oldest beyond that. The ticket proposed lifecycle rules. |
+| Retention | **In code**: keep the newest 4 (`DB_BACKUP_KEEP`); after a successful upload, delete the oldest beyond that. The ticket proposed lifecycle rules. Built as one archive per schedule week for the newest 4 weeks — identical under the normal cadence, and a re-run of a week replaces that week instead of pushing out the oldest (see the review findings). |
 | Bucket | **Dedicated** `sfa-<env>-db-backups`, own bucket-scoped key, no CORS, versioning off. Not the uploads bucket. |
 | Alerting | Email on failure **and** on success — the weekly "OK" mail is the heartbeat. |
 | Enable | `DB_BACKUP_ENABLED` per GitHub Environment, default off. |
@@ -47,7 +47,7 @@ Key layout: `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz`, `manual/<ts>-<label>.archi
 ## Findings that changed the design (verified, 23 Oct 2026)
 
 - **Inngest validates incoming events against the trigger schema before running** (`inngest/components/execution/engine.js`, `validateEventSchemas`), failing non-retriably. The catalog's `eventEnvelope` makes `eventLogId` required, and an operator's `curl` carries none — so this one schema makes it optional. Consequence, intended: `InngestService.send` cannot emit it.
-- **The dashboard's Invoke sends `inngest/function.invoked`** with the same data. The request is therefore read from `data.reason`, not the event name; keying off the name filed an invoked manual snapshot under `weekly/`, where rotation counts it. An Invoke (or curl) **without** a `reason` is rejected by the schema before the handler runs — checked end to end against the dev server — so only the cron takes a rotated weekly snapshot.
+- **The dashboard's Invoke sends `inngest/function.invoked`** with the same data. The request is therefore read from `data.reason`, not the event name; keying off the name filed an invoked manual snapshot under `weekly/`, where rotation counts it. An Invoke (or curl) **without** a `reason` is rejected by the schema before the handler runs — checked end to end against the dev server — so only the cron, or a dashboard Rerun/Replay of a cron run (which replays the timer event), takes a rotated weekly snapshot; a request or an Invoke never does.
 - **mongodump echoes the full URI, password included, when a connection fails.** The runner masks the URI in every error it raises, and the URI is never on argv (it is in the `--config` file).
 - **`--config` with `uri:` works with a percent-encoded password, and a URI naming `/sfa` dumps only that database** — checked against Mongo 7 with a second database present.
 - **Streaming is a serve-level switch.** With it on, every step response of every function becomes a 201 with a heartbeat body, and the SDK lets a code value override `INNGEST_STREAMING`. So it is **not** set in `inngest-serve.ts` (the original plan); the deploy writes `INNGEST_STREAMING=${{ vars.INNGEST_STREAMING || 'true' }}`, which leaves an off switch that needs no release.
@@ -59,11 +59,12 @@ A four-lens review (data safety, security/process, infra/delivery, tests/docs), 
 
 - **Critical — the worker would not boot without backup secrets.** The deploy renders an unset secret as `KEY=`, `ConfigService.get(key, default)` returns `''`, and `new S3Client({ region: '' })` throws synchronously in `BackupStore`'s constructor. Every environment not yet configured for backups — production included — would have lost every Inngest function behind a green deploy. Fixed: an empty region is unset, and `BackupStore` builds its client on first use.
 - **The documented path-B restore restored nothing**: doctl's admin URI ends `/admin`, which mongorestore treats as `--db admin` and so skips every `sfa.*` collection, reporting success (verified locally: "0 document(s) restored successfully"). Fixed in the runbook (no database path, plus `--nsInclude 'sfa.*'`; no password on the command line).
-- The in-process one-dump guard spent every retry after a lost response; replaced by joining the in-flight dump. A different run's dump (one that took the concurrency slot during a retry backoff) queues behind it.
+- The in-process one-dump guard spent every retry after a lost response; replaced by joining the in-flight dump. A different run's dump (one that took the concurrency slot during a retry backoff) was first queued behind it, then — third pass — refused with a `RetryAfterError` instead.
 - A dashboard Rerun/Replay of a weekly run counted as a new week and rotated out a real one; fixed by one-per-week rotation. A follow-up verification pass showed the first version (a 6-day distance rule) still lost a week when a re-run came more than a day after its Sunday — the next Sunday deleted it — so weeks are now anchored to the calendar (Sunday 00:00 Pakistan time).
 - The report's timestamp was taken at send time, so a retried send would have reused the idempotency key with a different body (Resend 409); now from memoised step results. The failure mail's time comes from the failure event.
 - Failure mails claimed the dump failed when rotation or the report had; a rejected request was reported as a failed weekly run. Both fixed: each step's error carries its step name (verified to survive Inngest's serialisation to `onFailure`), the delivery record is its own stage, and only Inngest's `EventValidationError` is reported as a rejected request.
 - The preflight gate was case-sensitive while the app is not; normalised, and any value that is still not plainly true or false fails the deploy.
+- Third pass: queueing a different run's dump inside its step held the concurrency slot for up to two dumps — past Inngest's two-hour step limit with long dumps, and keeping out the lost run's own retry that would have joined its dump. Such a run is now refused with a `RetryAfterError` (dump timeout + 15 minutes), which frees the slot. The backup S3 client gained connection and idle timeouts, so a stalled upload cannot hold an in-flight entry forever. Failure mails for the `notify`/`record` stages now headline that the archive was stored, and the `snapshot` stage no longer claims nothing was stored (a lost attempt may have). A 20,000-run, two-year simulation of the anchored-week rotation (reruns, failures, late starts, skew, changing keep, listing lag) found no violations; run against the earlier distance rule, the same simulator found thousands.
 - Runbook: path A's `terraform import` advice would have led to the fork being destroyed by a later apply; replaced. Path B's check pointed at counts the report mail does not contain; replaced with checks that exist. The rehearsal started Mongo without its replica-set init.
 - The backup key is in the shared runtime env (api, worker, edge, deploy-config object), not the worker's alone, and can delete every archive: documented, with scoping it to the worker listed under "Later".
 
@@ -72,7 +73,7 @@ A four-lens review (data safety, security/process, infra/delivery, tests/docs), 
 1. `docker build -f packages/api/Dockerfile .` and confirm `mongodump --version` (the build runs it).
 2. Dev infra: in the live `environments/dev/terraform.tfvars` replace `enable_backups = false` with `enable_db_backups = true`; export `DIGITALOCEAN_TOKEN` and `SPACES_ACCESS_KEY_ID/SECRET`; `make init ENV=dev` (new module), `make plan ENV=dev` — expect **+bucket +key, nothing else** — then `make apply ENV=dev`.
 3. GitHub Environment `dev`: the four values from `terraform output db_backup_github_secrets`, `DB_BACKUP_STORAGE_SECRET_ACCESS_KEY` from `-raw db_backup_secret_access_key`, `DB_BACKUP_ALERT_EMAIL`; variable `DB_BACKUP_ENABLED=true`.
-4. Deploy dev. Check: the worker serves one more function; the dashboard shows the next run on a Sunday at 08:00 UTC (if the server rejected the `TZ=` prefix, switch to `0 8 * * 0`, which is identical); **an invite or password-reset email still arrives** — streaming changes delivery for every function.
+4. Deploy dev. Check: on the first deploy carrying PAC-172 the worker serves one more function (it is registered whether or not backups are on); the dashboard shows the next run on a Sunday at 08:00 UTC (if the server rejected the `TZ=` prefix, switch to `0 8 * * 0`, which is identical); **an invite or password-reset email still arrives** — streaming changes delivery for every function.
 5. Take a manual snapshot through the tunnel (DEPLOYMENT.md). Confirm the object, the mail, every step green, and the `snapshot` step's duration.
 6. After the first Sunday on dev, confirm rotation from the mail; restore that archive locally (the rehearsal below).
 7. Production: steps 2–5 with `ENV=production` (decide `db_backup_spaces_region` first — changing it later replaces the bucket). Run `doctl databases backups <cluster-id>` once to confirm DigitalOcean's own daily backups are listed. Watch for the first Sunday "OK" mail.
@@ -87,7 +88,7 @@ A four-lens review (data safety, security/process, infra/delivery, tests/docs), 
 
 | Risk | Mitigation |
 |---|---|
-| Internal load balancer cuts the minutes-long `snapshot` request; Inngest retries while the dump still runs | `INNGEST_STREAMING` heartbeat; a retry on the same worker joins the in-flight dump (`DbBackupSnapshotFn.inFlight`), and another run's dump queues behind it; per-run key so the last PUT wins atomically; dump timeout + SIGKILL |
+| Internal load balancer cuts the minutes-long `snapshot` request; Inngest retries while the dump still runs | `INNGEST_STREAMING` heartbeat; a retry on the same worker joins the in-flight dump (`DbBackupSnapshotFn.inFlight`), and another run is refused with a `RetryAfterError` until it finishes; per-run key so the last PUT wins atomically; dump timeout + SIGKILL |
 | Streaming upsets the self-hosted server for every function | Verified on dev first (rollout step 4); `INNGEST_STREAMING=false` variable turns it off without a release |
 | Dump load on a one-vCPU node | 2 parallel collections; 03:00 Chicago on a Sunday |
 | Archive outgrows one PUT (5 GiB) | Refused past 4.5 GiB with a message naming multipart; size is in every mail |

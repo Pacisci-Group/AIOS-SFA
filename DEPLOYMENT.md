@@ -565,7 +565,7 @@ combination otherwise. See "Database backups" below for what runs.
 
 | Variable | Default | |
 |---|---|---|
-| `DB_BACKUP_ENABLED` | `false` | Literally `true` to take snapshots |
+| `DB_BACKUP_ENABLED` | `false` | `true` (any case) takes snapshots; empty or `false` is off; anything else fails the preflight |
 | `DB_BACKUP_KEEP` | `4` | Weeks of weekly archives kept, one per week (1–52) |
 | `DB_BACKUP_DUMP_TIMEOUT_MINUTES` | `45` | mongodump is killed after this (5–110) |
 | `DB_BACKUP_DUMP_PARALLEL` | `2` | Collections dumped at once (1–8) |
@@ -704,10 +704,13 @@ Things to know:
    else.
 2. GitHub Environment: the secrets in "Database backups: the snapshot bucket"
    above, and the variable `DB_BACKUP_ENABLED=true`.
-3. Deploy. The worker's "Serving N Inngest function(s)" log line grows by one,
-   and the Inngest dashboard lists **Snapshot MongoDB to object storage** with
-   its next run on a Sunday at 08:00 UTC.
-4. Take one by hand (below) rather than waiting for Sunday, and check the mail.
+3. Deploy. The function is registered whether or not backups are on, so the
+   worker's "Serving N Inngest function(s)" count grows by one only on the
+   first deploy that carries PAC-172. Check that the Inngest dashboard lists
+   **Snapshot MongoDB to object storage** with its next run on a Sunday at
+   08:00 UTC.
+4. Take one by hand (below) rather than waiting for Sunday, and check the mail
+   — that, not the dashboard, proves the switch.
 
 ### Taking a snapshot by hand
 

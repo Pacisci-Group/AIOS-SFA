@@ -507,8 +507,8 @@ jobs:
           # Weekly MongoDB snapshot to a dedicated Spaces bucket (PAC-172).
           # Used by the worker; like every line here it also reaches the api
           # and edge containers and the deploy-config object, the same
-          # exposure as MONGODB_URI. Off unless the Environment variable is
-          # "true". Values come from the environment's terraform outputs:
+          # exposure as MONGODB_URI. On when the Environment variable is "true"
+          # (any case); the preflight above refuses anything but true/false/empty. Values come from the environment's terraform outputs:
           #   db_backup_github_secrets / db_backup_secret_access_key
           # Never the STORAGE_* pair - the worker has no fallback to it.
           DB_BACKUP_ENABLED=${{ vars.DB_BACKUP_ENABLED || 'false' }}

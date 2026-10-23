@@ -24,9 +24,11 @@ import { boundedInt } from './bounded-int';
 export const DB_BACKUP_SCHEDULE = 'TZ=Asia/Karachi 0 13 * * 0';
 
 /**
- * Whether this environment takes snapshots at all. Off unless the value is
- * literally `true` — the `acmeEnabled` shape — so an environment that never
- * set it, or was not given a bucket, does not try and fail every Sunday.
+ * Whether this environment takes snapshots at all: `true` in any case turns
+ * them on, anything else is off — the `acmeEnabled` shape — so an environment
+ * that never set it, or was not given a bucket, does not try and fail every
+ * Sunday. The deploy preflight accepts only `true`, `false` or empty, so a
+ * value the two could read differently stops the deploy instead.
  */
 export function dbBackupEnabled(raw: string | undefined): boolean {
   return raw?.trim().toLowerCase() === 'true';
