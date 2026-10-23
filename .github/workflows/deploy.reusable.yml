@@ -279,7 +279,12 @@ jobs:
           # switched on. They run as an Inngest function in the worker, so
           # backups "on" with Inngest off would pass every check here and never
           # take a single snapshot — refuse that combination outright.
-          if [ "${DB_BACKUP_ENABLED}" = "true" ]; then
+          #
+          # Normalised the way the app reads it (dbBackupEnabled: trimmed,
+          # case-insensitive), or "True" would switch backups on in the worker
+          # while skipping every check here.
+          db_backup_enabled=$(printf '%s' "${DB_BACKUP_ENABLED}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          if [ "${db_backup_enabled}" = "true" ]; then
             if [ "${INNGEST_ENABLED}" != "true" ]; then
               echo "::error::DB_BACKUP_ENABLED is true but INNGEST_ENABLED is not — snapshots run in the worker and would never fire."
               exit 1
@@ -490,9 +495,10 @@ jobs:
           CERT_ENCRYPTION_KEY=${{ secrets.CERT_ENCRYPTION_KEY }}
 
           # Weekly MongoDB snapshot to a dedicated Spaces bucket (PAC-172).
-          # Read by the worker container; the api container ignores it. Off
-          # unless the Environment variable is literally "true". Values come
-          # from the environment's terraform outputs:
+          # Used by the worker; like every line here it also reaches the api
+          # and edge containers and the deploy-config object, the same
+          # exposure as MONGODB_URI. Off unless the Environment variable is
+          # "true". Values come from the environment's terraform outputs:
           #   db_backup_github_secrets / db_backup_secret_access_key
           # Never the STORAGE_* pair - the worker has no fallback to it.
           DB_BACKUP_ENABLED=${{ vars.DB_BACKUP_ENABLED || 'false' }}
