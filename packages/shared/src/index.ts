@@ -14,6 +14,7 @@ export * from './domain/deal-audit';
 export * from './domain/google-address';
 export * from './domain/hot-lead';
 export * from './domain/hr-calendar';
+export * from './domain/hr-employee-profile';
 export * from './domain/hr-leave-policy';
 export * from './domain/hr-policy';
 export * from './domain/household-membership';
