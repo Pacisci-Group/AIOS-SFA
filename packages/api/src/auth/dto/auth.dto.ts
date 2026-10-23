@@ -1,9 +1,11 @@
 import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -58,6 +60,20 @@ export class AcceptInviteDto {
   @MaxLength(100)
   @Transform(trim)
   lastName?: string;
+
+  /**
+   * The employee's own two HR fields, asked at the setup step (PAC-162).
+   * Optional, and written to the HR profile rather than the user: a
+   * birthday is readable by the person and `agency:hr:admin` only, shown as
+   * a month and day on the calendar when `showBirthday` is on (the default).
+   */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'dateOfBirth must be YYYY-MM-DD' })
+  dateOfBirth?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  showBirthday?: boolean;
 }
 
 /**

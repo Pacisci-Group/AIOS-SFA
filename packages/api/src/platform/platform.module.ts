@@ -10,6 +10,7 @@ import {
 } from '../hr/schemas/agency-calendar.schema';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
 import { AgencyCarrierAppointmentsModule } from '../agency-carrier-appointments/agency-carrier-appointments.module';
+import { HrCommonModule } from '../common/hr/hr-common.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import {
   UserRole,
@@ -50,6 +51,9 @@ import { PlatformUsersService } from './platform-users.service';
     // dependency is one-way: that module registers the `Agency` schema itself
     // rather than importing this one back.
     AgencyCarrierAppointmentsModule,
+    // Enabling HR on an agency creates its pending employee profiles, and
+    // onboarding's undo removes the owner's (PAC-162).
+    HrCommonModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       // Read by the cross-agency user directory (PAC-70). Schemas only — the

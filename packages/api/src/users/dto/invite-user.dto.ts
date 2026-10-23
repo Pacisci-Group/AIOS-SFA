@@ -6,6 +6,7 @@ import {
   IsMongoId,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
 } from 'class-validator';
 
@@ -69,4 +70,18 @@ export class InviteUserDto {
   @MaxLength(100)
   @Transform(trim)
   lastName?: string;
+
+  /**
+   * An active leave policy to put the invitee on from day one (PAC-162).
+   * Omitted → a pending HR profile and an onboarding notification. The
+   * service checks it belongs to the agency and is active (400 otherwise).
+   */
+  @IsOptional()
+  @IsMongoId({ message: 'leavePolicyId must be a valid id' })
+  leavePolicyId?: string;
+
+  /** `YYYY-MM-DD`; the invite day when omitted. Read only with a policy. */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'hireDate must be YYYY-MM-DD' })
+  hireDate?: string;
 }

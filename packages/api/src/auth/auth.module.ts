@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
+import { HrCommonModule } from '../common/hr/hr-common.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
@@ -17,6 +18,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     // path lives on `UsersService` (PAC-79) and is not duplicated here. No
     // cycle — nothing UsersModule imports reaches back into AuthModule.
     UsersModule,
+    // The birthday asked at the setup step is written to the HR profile (PAC-162).
+    HrCommonModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       // For the agency name on the public invite preview (PAC-58).

@@ -140,6 +140,16 @@ export interface InviteUserInput {
   lastName?: string;
   invitedByUserId?: string;
   /**
+   * An active leave policy of the agency (PAC-162). With one, the invitee's
+   * HR profile is created **active** on the template's defaults; without,
+   * it is **pending** and the branch's reviewers are told.
+   */
+  leavePolicyId?: string;
+  /** `YYYY-MM-DD`; the invite day when omitted. Only read with a policy. */
+  hireDate?: string;
+  /** The caller's agency zone, for "today"; the agency's own when omitted. */
+  timeZone?: string;
+  /**
    * Whether the inviter is a platform account.
    *
    * Reaches `OwnerProtectionService.assertMayChangeOwnerRole`, which reserves
