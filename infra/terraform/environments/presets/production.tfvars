@@ -168,9 +168,9 @@ enable_spaces = true
 enable_db_backups = true
 
 # Same region as the cluster unless set. A different one puts the copy out of
-# reach of a regional outage, for a slower cross-region upload of a few hundred
-# MB a week. Changing it after the first apply REPLACES the bucket - and with
-# it every archive already stored.
+# reach of a regional outage, for a slower cross-region upload of each weekly
+# archive. Changing it after the first apply REPLACES the bucket - and with it
+# every archive already stored.
 # db_backup_spaces_region = "sfo3"
 
 # Browser origins allowed to run presigned uploads. Pinned rather than derived:

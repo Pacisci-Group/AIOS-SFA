@@ -228,6 +228,18 @@ temperature/aging that aren't first-class in legacy payloads. See
   index before duplicates have been verified. Afterwards, drop the orphaned
   `mailerImportRuns` collection by hand (`db.mailerImportRuns.drop()`): no code
   references it any more, so nothing will.
+- `docs/plans/pac-172-db-backups-implementation-plan.md` — weekly MongoDB
+  snapshots (PAC-172). `DbBackupSnapshotFn` (worker) runs `mongodump --archive
+  --gzip` Sundays 13:00 Pakistan time and on the
+  `db-backup/snapshot.requested.v1` event, into a dedicated
+  `sfa-<env>-db-backups` bucket reached through `BackupStore` — never the
+  uploads bucket, no fallback to `STORAGE_*`. `weekly/` keeps the newest
+  `DB_BACKUP_KEEP` (4), rotated by the worker only after a successful upload;
+  `manual/` and `pre-deploy/` expire by the bucket's lifecycle rule. Every run
+  mails `DB_BACKUP_ALERT_EMAIL`; the Sunday "OK" is the heartbeat. Off unless
+  `DB_BACKUP_ENABLED=true`. The restore runbook is `DEPLOYMENT.md` → "Database
+  backups". Terraform's old `enable_backups` is gone: DigitalOcean's daily
+  backups exist regardless, and `enable_db_backups` provisions the bucket.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

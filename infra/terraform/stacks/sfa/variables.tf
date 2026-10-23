@@ -173,8 +173,8 @@ variable "db_backup_spaces_region" {
   description = <<-EOT
     Region for the backup bucket. Empty uses spaces_region, which is the
     cluster's region. A different region (e.g. sfo3) puts the copy out of reach
-    of a regional outage, at the cost of a slower cross-region upload of a few
-    hundred MB a week.
+    of a regional outage, at the cost of a slower cross-region upload of each
+    weekly archive.
   EOT
   type        = string
   default     = ""
