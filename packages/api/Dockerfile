@@ -23,6 +23,20 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
+# mongodump for the weekly database snapshot the worker takes (PAC-172), and
+# mongorestore beside it so a restore can run from inside the VPC - a pool
+# member is admitted by the cluster's firewall, a laptop is not.
+#
+# The package ships eight tools at ~13 MB each, and this image is pulled by
+# every pool member on every deploy, so the six nothing here runs are removed in
+# the same layer (removing them in a later one would not shrink the image).
+# ca-certificates is explicit rather than inherited: mongodump is a Go binary
+# and verifies the managed cluster's TLS against the system bundle.
+RUN apk add --no-cache mongodb-tools ca-certificates \
+ && rm -f /usr/bin/bsondump /usr/bin/mongoexport /usr/bin/mongofiles \
+          /usr/bin/mongoimport /usr/bin/mongostat /usr/bin/mongotop \
+ && mongodump --version
+
 # Same reasoning as the build stage: the nested workspace node_modules carry
 # packages the app needs at runtime, so take the installed tree wholesale.
 COPY --from=deps /app ./
