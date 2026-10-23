@@ -12,6 +12,9 @@ import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
 import { DataExportExpireFn } from './functions/data-export-expire.fn';
+import { DbBackupSnapshotFn } from './functions/db-backup-snapshot.fn';
+import { BackupStore } from './backup/backup-store';
+import { MongoDumpRunner } from './backup/mongodump-runner';
 import { DataExportGenerateFn } from './functions/data-export-generate.fn';
 import { DeliverNotificationFn } from './functions/deliver-notification.fn';
 import { SendNotificationEmailFn } from './functions/send-notification-email.fn';
@@ -294,6 +297,15 @@ import {
     // email the requester; delete files past retention.
     DataExportGenerateFn,
     DataExportExpireFn,
+    // Weekly MongoDB snapshot to its own bucket (PAC-172). `BackupStore` is a
+    // second S3 client, built by the same factory as `StorageService` rather
+    // than a copy of it, because the snapshot bucket has its own key and the
+    // dump must never land in the uploads bucket. Both it and the runner do no
+    // I/O at construction, so the API process — which builds this module when
+    // the worker runs inline — pays nothing for them.
+    MongoDumpRunner,
+    BackupStore,
+    DbBackupSnapshotFn,
   ],
 })
 export class WorkerModule {}

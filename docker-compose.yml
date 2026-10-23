@@ -83,7 +83,8 @@ services:
       retries: 12
       start_period: 10s
 
-  # One-shot: create the uploads bucket so presigned PUTs work out of the box.
+  # One-shot: create the uploads bucket so presigned PUTs work out of the box,
+  # and the snapshot bucket the worker's weekly MongoDB dump goes to (PAC-172).
   minio-createbucket:
     image: minio/mc:latest
     container_name: sfa-minio-createbucket
@@ -94,7 +95,8 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin &&
       mc mb --ignore-existing local/sfa-uploads &&
-      echo 'Bucket sfa-uploads ready';
+      mc mb --ignore-existing local/sfa-db-backups &&
+      echo 'Buckets sfa-uploads and sfa-db-backups ready';
       "
     restart: "no"
 
@@ -291,6 +293,17 @@ services:
       STORAGE_ACCESS_KEY_ID: minioadmin
       STORAGE_SECRET_ACCESS_KEY: minioadmin
       STORAGE_FORCE_PATH_STYLE: "true"
+      # The weekly snapshot's bucket (PAC-172), rewritten for the compose
+      # network like STORAGE_* above. Whether it runs is still .env's
+      # DB_BACKUP_ENABLED, off by default. Trigger one by hand from the local
+      # Inngest dashboard (http://localhost:8288) with the
+      # db-backup/snapshot.requested.v1 event.
+      DB_BACKUP_STORAGE_ENDPOINT: http://minio:9000
+      DB_BACKUP_STORAGE_REGION: us-east-1
+      DB_BACKUP_STORAGE_BUCKET: sfa-db-backups
+      DB_BACKUP_STORAGE_ACCESS_KEY_ID: minioadmin
+      DB_BACKUP_STORAGE_SECRET_ACCESS_KEY: minioadmin
+      DB_BACKUP_STORAGE_FORCE_PATH_STYLE: "true"
     depends_on:
       mongo:
         condition: service_healthy

@@ -1,4 +1,6 @@
 import { dataExportReadyTemplate } from './data-export-ready.template';
+import { dbBackupFailedTemplate } from './db-backup-failed.template';
+import { dbBackupReportTemplate } from './db-backup-report.template';
 import { inviteTemplate } from './invite.template';
 import { mailerCampaignOutputTemplate } from './mailer-campaign-output.template';
 import { notificationTemplate } from './notification.template';
@@ -22,6 +24,8 @@ export const EMAIL_TEMPLATES = {
   mailerCampaignOutput: mailerCampaignOutputTemplate,
   notification: notificationTemplate,
   dataExportReady: dataExportReadyTemplate,
+  dbBackupReport: dbBackupReportTemplate,
+  dbBackupFailed: dbBackupFailedTemplate,
 } satisfies Record<string, Template<never>>;
 
 export type TemplateKey = keyof typeof EMAIL_TEMPLATES;

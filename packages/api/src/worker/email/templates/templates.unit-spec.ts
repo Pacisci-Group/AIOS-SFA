@@ -3,6 +3,14 @@ import {
   dataExportReadyTemplate,
   type DataExportReadyData,
 } from './data-export-ready.template';
+import {
+  dbBackupFailedTemplate,
+  type DbBackupFailedData,
+} from './db-backup-failed.template';
+import {
+  dbBackupReportTemplate,
+  type DbBackupReportData,
+} from './db-backup-report.template';
 import { inviteTemplate } from './invite.template';
 import {
   mailerCampaignOutputTemplate,
@@ -114,6 +122,50 @@ function dataExportReadyData(
   };
 }
 
+/** A weekly snapshot that rotated one archive out (PAC-172). */
+function dbBackupReportData(
+  overrides: Partial<DbBackupReportData> = {},
+): DbBackupReportData {
+  return {
+    to: 'ops@example.com',
+    host: 'app.smithfamily.agency',
+    kind: 'scheduled',
+    label: null,
+    bucket: 'sfa-production-db-backups',
+    key: 'weekly/20261025T080012Z.archive.gz',
+    bytes: 327_614_464,
+    dumpSeconds: 214,
+    toolVersion: 'mongodump version: 100.14.1',
+    kept: [
+      'weekly/20261025T080012Z.archive.gz',
+      'weekly/20261018T080009Z.archive.gz',
+      'weekly/20261011T080011Z.archive.gz',
+      'weekly/20261004T080010Z.archive.gz',
+    ],
+    deleted: ['weekly/20260927T080008Z.archive.gz'],
+    rotationSkipped: null,
+    keep: 4,
+    finishedAt: '2026-10-25T08:04:01.000Z',
+    ...overrides,
+  };
+}
+
+/** A failed run — with markup in the error, which comes from a subprocess. */
+function dbBackupFailedData(
+  overrides: Partial<DbBackupFailedData> = {},
+): DbBackupFailedData {
+  return {
+    to: 'ops@example.com',
+    host: 'app.smithfamily.agency',
+    kind: 'scheduled',
+    label: null,
+    runId: '01JB2Q8W5X3Y4Z6A7B8C9D0E1F',
+    error: 'mongodump exited with code 1: <connection refused> & retrying',
+    failedAt: '2026-10-25T08:15:00.000Z',
+    ...overrides,
+  };
+}
+
 const ALL_KEYS = Object.keys(EMAIL_TEMPLATES) as TemplateKey[];
 
 /**
@@ -132,6 +184,8 @@ describe('email template registry', () => {
     mailerCampaignOutput: mailerCampaignOutputData(),
     notification: notificationData(),
     dataExportReady: dataExportReadyData(),
+    dbBackupReport: dbBackupReportData(),
+    dbBackupFailed: dbBackupFailedData(),
   };
 
   it('has a fixture for every registered template', () => {
@@ -559,5 +613,93 @@ describe('data export ready template', () => {
     );
     expect(html).toContain('<title>Smith Family</title>');
     expect(text).toContain('automated message from Smith Family');
+  });
+});
+
+describe('db backup report template', () => {
+  it('names the environment and the size in the subject', () => {
+    expect(dbBackupReportTemplate.subject(dbBackupReportData())).toBe(
+      'Weekly DB backup OK — app.smithfamily.agency (312.4 MB)',
+    );
+    expect(
+      dbBackupReportTemplate.subject(
+        dbBackupReportData({ kind: 'manual', label: 'before-pac-180' }),
+      ),
+    ).toContain('Manual DB snapshot OK');
+  });
+
+  it('says where the archive is and what rotation did', () => {
+    const { text } = dbBackupReportTemplate.render(dbBackupReportData());
+    expect(text).toContain(
+      'sfa-production-db-backups/weekly/20261025T080012Z.archive.gz',
+    );
+    expect(text).toContain('kept (4 of 4)');
+    expect(text).toContain('Deleted: weekly/20260927T080008Z.archive.gz');
+    expect(text).toContain('3m 34s');
+  });
+
+  /** The weekly mail is the heartbeat, so it has to say what silence means. */
+  it('tells the reader that a missing weekly mail is the alarm', () => {
+    const { text } = dbBackupReportTemplate.render(dbBackupReportData());
+    expect(text).toContain('13:00 Pakistan time');
+    expect(text).toContain('did not run');
+  });
+
+  it('does not claim rotation for a requested snapshot', () => {
+    const { text } = dbBackupReportTemplate.render(
+      dbBackupReportData({
+        kind: 'manual',
+        label: 'before-pac-180',
+        kept: [],
+        deleted: [],
+      }),
+    );
+    expect(text).toContain('(before-pac-180)');
+    expect(text).toContain('not rotated');
+    expect(text).not.toContain('Weekly archives kept');
+    expect(text).not.toContain('Pakistan time');
+  });
+
+  it('explains a skipped rotation instead of listing deletions', () => {
+    const { text } = dbBackupReportTemplate.render(
+      dbBackupReportData({
+        deleted: [],
+        rotationSkipped: 'the archive just written was not in the listing',
+      }),
+    );
+    expect(text).toContain('Rotation deleted nothing this week');
+    expect(text).not.toContain('Deleted:');
+  });
+
+  /** The archive is every tenant's data: the mail locates it, never links it. */
+  it('carries no link and no agency brand', () => {
+    const { html } = dbBackupReportTemplate.render(dbBackupReportData());
+    expect(html).not.toContain('href=');
+    expect(html).not.toContain('<img');
+  });
+});
+
+describe('db backup failed template', () => {
+  it('names the environment in the subject', () => {
+    expect(dbBackupFailedTemplate.subject(dbBackupFailedData())).toBe(
+      'DB backup FAILED — app.smithfamily.agency',
+    );
+  });
+
+  it('carries the error and the run id', () => {
+    const { text } = dbBackupFailedTemplate.render(dbBackupFailedData());
+    expect(text).toContain('mongodump exited with code 1');
+    expect(text).toContain('01JB2Q8W5X3Y4Z6A7B8C9D0E1F');
+  });
+
+  it('escapes the error in the html part', () => {
+    const { html } = dbBackupFailedTemplate.render(dbBackupFailedData());
+    expect(html).toContain('&lt;connection refused&gt; &amp; retrying');
+    expect(html).not.toContain('<connection refused>');
+  });
+
+  it('never renders a missing label as "null"', () => {
+    const { text } = dbBackupFailedTemplate.render(dbBackupFailedData());
+    expect(text).not.toContain('null');
   });
 });
