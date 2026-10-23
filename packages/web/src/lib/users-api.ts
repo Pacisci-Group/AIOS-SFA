@@ -107,6 +107,14 @@ export interface InviteUserInput {
   branchId?: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * An active leave policy to put them on from day one (PAC-162). Omitted →
+   * a pending HR profile on the Onboardings list, and the branch's reviewers
+   * are told.
+   */
+  leavePolicyId?: string;
+  /** `YYYY-MM-DD`; the invite day when omitted. Read only with a policy. */
+  hireDate?: string;
 }
 
 export interface InviteResponse {

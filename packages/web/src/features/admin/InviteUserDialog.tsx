@@ -13,14 +13,18 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useAuth } from "@/contexts/auth-context";
 import { useAppForm } from "@/hooks/form";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
 import { listBranches } from "@/lib/branches-api";
+import { agencyTodayYmd } from "@/lib/dates";
+import { hrKeys, listLeavePolicies } from "@/lib/hr-api";
 import { listRoles } from "@/lib/roles-api";
 import { agencyUserOptionsKey, inviteUser } from "@/lib/users-api";
 import {
   EMPTY_INVITE,
+  NO_LEAVE_POLICY,
   inviteFormSchema,
   toInviteUserInput,
 } from "./invite-schema";
@@ -34,6 +38,7 @@ import {
  */
 export function InviteUserDialog() {
   const { can } = usePermissions();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -63,18 +68,35 @@ export function InviteUserDialog() {
     retry: false,
   });
 
+  // The leave-policy picker (PAC-162) is a secondary read like the branches:
+  // `GET /hr/leave-policies` needs `agency:hr:admin`, which the invite does
+  // not. Without it the invite still works and creates a pending profile
+  // that the HR admins are told about.
+  const policiesQuery = useQuery({
+    queryKey: hrKeys.policies,
+    queryFn: listLeavePolicies,
+    enabled: open && allowed && can("agency:hr:admin"),
+    retry: false,
+  });
+
   const mutation = useMutation({
     mutationFn: inviteUser,
-    onSuccess: (result) => {
+    onSuccess: (result, input) => {
       // The new row renders with the existing amber "Invited" badge.
       void queryClient.invalidateQueries({ queryKey: ["users"] });
       // The pickers read a different key; invalidate both or they hold a
       // roster the directory has already moved on from.
       void queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
+      // The HR lists and the policy counts changed too.
+      void queryClient.invalidateQueries({ queryKey: ["hr"] });
       toast.success("Invite sent", {
-        description: `They have until ${new Date(
-          result.expiresAt,
-        ).toLocaleDateString()} to set their password.`,
+        description: input.leavePolicyId
+          ? `They are on their leave policy from day one, and have until ${new Date(
+              result.expiresAt,
+            ).toLocaleDateString()} to set their password.`
+          : `They have until ${new Date(
+              result.expiresAt,
+            ).toLocaleDateString()} to set their password. Their leave policy is set from HR → Onboardings.`,
       });
       setOpen(false);
     },
@@ -151,6 +173,10 @@ export function InviteUserDialog() {
     label: branch.isDefault ? `${branch.name} (default)` : branch.name,
     triggerLabel: branch.name,
   }));
+
+  const policyOptions = (policiesQuery.data?.policies ?? [])
+    .filter((policy) => policy.status === "active")
+    .map((policy) => ({ value: policy.id, label: policy.name }));
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -263,6 +289,53 @@ export function InviteUserDialog() {
                   />
                 )}
               </form.AppField>
+            )}
+
+            {/*
+              The leave policy (PAC-162). Rendered only when the policies
+              answered *and* there is one to choose: with none, the invitee
+              is pending on HR → Onboardings either way, and a picker whose
+              only option is "later" says nothing. The start date appears
+              only once a policy is picked — it is the first day the rules
+              apply, and means nothing before onboarding.
+            */}
+            {policyOptions.length > 0 && (
+              <>
+                <form.AppField name="leavePolicyId">
+                  {(f) => (
+                    <f.SelectField
+                      label="Leave policy"
+                      options={[
+                        {
+                          value: NO_LEAVE_POLICY,
+                          label: "Set up later in HR → Onboardings",
+                        },
+                        ...policyOptions,
+                      ]}
+                      description="On a policy they can request time off from day one."
+                      triggerClassName="w-full bg-card border-border"
+                      contentClassName="max-w-[var(--radix-select-trigger-width)]"
+                    />
+                  )}
+                </form.AppField>
+                <form.Subscribe selector={(state) => state.values.leavePolicyId}>
+                  {(leavePolicyId) =>
+                    leavePolicyId && leavePolicyId !== NO_LEAVE_POLICY ? (
+                      <form.AppField name="hireDate">
+                        {(f) => (
+                          <f.TextField
+                            label="Start date"
+                            type="date"
+                            max={agencyTodayYmd(user?.timeZone)}
+                            description="Leave blank for today. Their rules apply from this day."
+                            inputClassName="bg-card border-border"
+                          />
+                        )}
+                      </form.AppField>
+                    ) : null
+                  }
+                </form.Subscribe>
+              </>
             )}
 
             <DialogFooter>

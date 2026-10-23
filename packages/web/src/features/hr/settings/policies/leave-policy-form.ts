@@ -262,6 +262,74 @@ export function fromForm(values: LeavePolicyFormValues): UpsertLeavePolicyInput 
   return { name: values.name.trim(), rules };
 }
 
+// ── Custom rules (PAC-162) ───────────────────────────────────────────────────
+
+/** The editor's sections, by the rules prefix each one edits. */
+export const RULE_SECTIONS: { title: string; prefix: string }[] = [
+  { title: "Leave types", prefix: "leaveTypes" },
+  { title: "Reasons", prefix: "reasons" },
+  { title: "Requests", prefix: "requests" },
+  { title: "PTO", prefix: "pto" },
+  { title: "Reminders", prefix: "reminders" },
+  { title: "Attendance", prefix: "attendance" },
+  { title: "Points", prefix: "points" },
+  { title: "Routing", prefix: "routing" },
+];
+
+/** Whether an overridden path falls under a section or field path. */
+export function isUnder(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}.`);
+}
+
+const RULE_PATH_LABELS: Record<string, string> = {
+  leaveTypes: "Leave types",
+  "reasons.timeOff": "Time-off reasons",
+  "reasons.attendance": "Attendance reasons",
+  "requests.partialDayIncrementMinutes": "Partial-day increment",
+  "requests.coverageNote": "Coverage note",
+  "requests.acknowledgmentText": "Acknowledgment text",
+  "requests.validation.overlap": "Overlapping leave check",
+  "requests.validation.closure": "Office-closed check",
+  "requests.validation.nonScheduledDay": "Non-scheduled day check",
+  "requests.validation.advanceNotice": "Advance notice check",
+  "requests.validation.blackout": "Blackout check",
+  "requests.advanceNoticeDays": "Advance notice (business days)",
+  "requests.blackoutRanges": "Blackout ranges",
+  "pto.annualAllocationHours": "Annual allocation (hours)",
+  "pto.resetBasis": "PTO resets on",
+  "pto.fiscalYearStart": "Fiscal year start",
+  "pto.proration": "New-hire proration",
+  "pto.carryover.mode": "Carryover",
+  "pto.carryover.capHours": "Carryover cap (hours)",
+  "pto.carryover.expiryDays": "Carried hours expire after (days)",
+  "pto.negativeBalance.mode": "Negative balance",
+  "pto.negativeBalance.floorHours": "Negative-balance floor (hours)",
+  "pto.reserveApprovedFutureLeave": "Reserve approved future leave",
+  "pto.employeeCancelCutoffHours": "Employee cancel cutoff (hours)",
+  "reminders.reminderBusinessDays": "Remind reviewers after",
+  "reminders.escalationBusinessDays": "Escalate to admins after",
+  "reminders.upcomingLeaveLeadBusinessDays": "Upcoming-leave reminder",
+  "attendance.tardyGraceMinutes": "Tardy grace (minutes)",
+  "attendance.eventTypes": "Event types in use",
+  "points.enabled": "Attendance points",
+  "points.earningClassifications": "Classifications that earn points",
+  "points.ladders.tardy": "Tardy ladder",
+  "points.ladders.absence": "Absence ladder",
+  "points.sequences": "Tardies and absences",
+  "points.resetBasis": "Points cycle resets on",
+  "points.thresholds": "Point thresholds",
+};
+
+/** A rule path as the editor labels it — `pto.annualAllocationHours` → "Annual allocation (hours)". */
+export function ruleLabel(path: string): string {
+  if (RULE_PATH_LABELS[path]) return RULE_PATH_LABELS[path];
+  if (path.startsWith("routing.")) {
+    const trigger = path.slice("routing.".length) as NotificationTrigger;
+    return `Routing: ${TRIGGER_LABELS[trigger] ?? trigger}`;
+  }
+  return path;
+}
+
 // ── Option lists ─────────────────────────────────────────────────────────────
 
 const titled = (value: string) =>

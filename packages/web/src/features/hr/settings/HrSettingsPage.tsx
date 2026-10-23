@@ -7,8 +7,9 @@ import { SettingsPage } from "@/features/settings/SettingsPage";
 import { CalendarTab } from "./calendar/CalendarTab";
 import { HrPolicySlots } from "./HrPolicySlots";
 import { PoliciesTab } from "./policies/PoliciesTab";
+import { SchedulesTab } from "./schedules/SchedulesTab";
 
-const TABS = ["calendar", "policies", "hr-policy"] as const;
+const TABS = ["calendar", "policies", "schedules", "hr-policy"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -42,6 +43,7 @@ export default function HrSettingsPage() {
         <TabsList>
           <TabsTrigger value="calendar">Calendar</TabsTrigger>
           <TabsTrigger value="policies">Leave policies</TabsTrigger>
+          <TabsTrigger value="schedules">Schedules</TabsTrigger>
           <TabsTrigger value="hr-policy">HR policy</TabsTrigger>
         </TabsList>
         <TabsContent value="calendar">
@@ -52,6 +54,9 @@ export default function HrSettingsPage() {
         </TabsContent>
         <TabsContent value="policies">
           <PoliciesTab canWrite={canWrite} />
+        </TabsContent>
+        <TabsContent value="schedules">
+          <SchedulesTab canWrite={canWrite} />
         </TabsContent>
         <TabsContent value="hr-policy">
           <HrPolicySlots onOpenPolicies={() => setTab("policies")} />

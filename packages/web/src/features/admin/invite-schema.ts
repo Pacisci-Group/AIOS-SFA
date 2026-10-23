@@ -24,6 +24,12 @@ import type { InviteUserInput } from "@/lib/users-api";
  * invite yet — which is why the picker defaults to a real branch rather than
  * to "none".)
  */
+/**
+ * The "no policy" choice in the leave-policy picker (PAC-162). A sentinel
+ * rather than `''` because Radix's `Select` refuses an empty-string item.
+ */
+export const NO_LEAVE_POLICY = "__none__";
+
 export const inviteFormSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required").max(100),
   lastName: z.string().trim().min(1, "Last name is required").max(100),
@@ -35,6 +41,18 @@ export const inviteFormSchema = z.object({
     .max(160),
   roleId: z.string().min(1, "Pick a role"),
   branchId: z.string().optional(),
+  /**
+   * A leave policy to put them on from day one, or {@link NO_LEAVE_POLICY}
+   * for "set up later in HR → Onboardings" (PAC-162). Optional like the
+   * branch, and for the same reason: the picker only renders when `GET
+   * /hr/leave-policies` answers, which needs `agency:hr:admin`.
+   */
+  leavePolicyId: z.string().optional(),
+  /** `YYYY-MM-DD`; read only with a policy. Empty means the invite day. */
+  hireDate: z
+    .string()
+    .regex(/^(\d{4}-\d{2}-\d{2})?$/, "Pick a date.")
+    .optional(),
 });
 
 export type InviteFormValues = z.infer<typeof inviteFormSchema>;
@@ -45,10 +63,14 @@ export const EMPTY_INVITE: InviteFormValues = {
   email: "",
   roleId: "",
   branchId: "",
+  leavePolicyId: NO_LEAVE_POLICY,
+  hireDate: "",
 };
 
 /** Form state → wire body. Lowercasing is repeated server-side; both matter. */
 export function toInviteUserInput(values: InviteFormValues): InviteUserInput {
+  const withPolicy =
+    values.leavePolicyId && values.leavePolicyId !== NO_LEAVE_POLICY;
   return {
     email: values.email.trim().toLowerCase(),
     roleIds: [values.roleId],
@@ -57,5 +79,8 @@ export function toInviteUserInput(values: InviteFormValues): InviteUserInput {
     ...(values.branchId ? { branchId: values.branchId } : {}),
     firstName: values.firstName.trim(),
     lastName: values.lastName.trim(),
+    // Same rule for the policy and the start date: absent, never empty.
+    ...(withPolicy ? { leavePolicyId: values.leavePolicyId } : {}),
+    ...(withPolicy && values.hireDate ? { hireDate: values.hireDate } : {}),
   };
 }

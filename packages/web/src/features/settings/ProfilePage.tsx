@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/auth-context';
 import { useTenant } from '@/contexts/tenant-context';
+import { HrProfileCard } from '@/features/hr/components/HrProfileCard';
 import { PushOptIn } from '@/features/notifications/PushOptIn';
 import { useAppForm } from '@/hooks/form';
 import { ApiError, type AuthUser } from '@/lib/api-client';
@@ -75,6 +76,10 @@ export default function ProfilePage() {
         />
 
         <ChangePasswordCard email={user.email} onChanged={adoptSession} />
+
+        {/* The person's HR record and the birthday they own (PAC-162).
+            Renders nothing without `hr:read`. */}
+        <HrProfileCard />
 
         <DetailCard title="Account" icon={UserRound}>
           <div className="grid gap-4 sm:grid-cols-2">
