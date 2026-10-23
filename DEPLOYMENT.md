@@ -650,11 +650,13 @@ weeks ago" or "DigitalOcean is the problem", restore an archive (path B).
 runs in the worker, once per environment however many pool members there are.
 It dumps the database named in `MONGODB_URI`, uploads the archive in one PUT,
 then keeps one archive per week for the newest `DB_BACKUP_KEEP` weeks (default
-4: this week and the three before) and deletes the rest. Older archives are only
-deleted after the new one is stored, so a failed run never costs an existing
-archive. A week that runs twice — a dashboard **Rerun** of a weekly run, which
-starts again from the cron's own event — replaces that week's archive instead
-of pushing out the oldest week.
+4: this week and the three before) and deletes the rest. Weeks run Sunday 00:00
+to Sunday 00:00 Pakistan time, so the 13:00 cron sits well inside its week.
+Older archives are only deleted after the new one is stored, so a failed run
+never costs an existing archive. A week that runs more than once — a dashboard
+**Rerun** of a weekly run, which starts again from the cron's own event, on any
+day before the next Sunday — keeps only its newest archive, instead of pushing
+out the oldest week.
 
 Bucket layout:
 
@@ -731,8 +733,8 @@ risky work. The dashboard's **Invoke** button does the same thing given
 `{"reason":"manual","label":"…"}` as data. Invoked with **no** data it is
 rejected before it runs, and the alert address gets a "request REJECTED" mail.
 **Rerun** on a weekly run takes a fresh weekly snapshot, which replaces that
-week's archive (see above) — fine after a failed Sunday, but a manual snapshot
-is the better tool before risky work.
+week's archive (see above) — the right recovery after a failed Sunday, any day
+that week; before risky work, a manual snapshot is the better tool.
 
 ### Listing and downloading archives
 

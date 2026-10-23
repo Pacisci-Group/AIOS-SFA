@@ -35,12 +35,12 @@ This change adds the copy that outlives the cluster: a weekly `mongodump` stored
 
 1. **plan** — refuse (non-retriable) when the bucket settings are missing or mongodump is not installed; mint the key. Memoised, so a retried upload overwrites the same key instead of leaving two archives for one week.
 2. **snapshot** — temp dir → `mongodump --config=<0600 yaml with uri> --archive=<file> --gzip --numParallelCollections=2` → one PUT. Dump and upload share a step because in a pool a later step can land on another worker container.
-3. **rotate** (scheduled only) — list `weekly/`, keep one archive per week (archives within 6 days of a kept one are the same week) for the newest `DB_BACKUP_KEEP` weeks, counting the archive just written, and delete the rest. Only exact archive names; never the current archive; nothing at all if the listing does not show the current archive yet. In the normal case this is exactly "newest four, oldest deleted"; a re-run week replaces its own earlier archive.
+3. **rotate** (scheduled only) — list `weekly/`, keep one archive per schedule week (Sunday 00:00 to Sunday 00:00 Pakistan time) for the newest `DB_BACKUP_KEEP` weeks, counting the archive just written, and delete the rest. Only exact archive names; never the current archive; nothing at all if the listing does not show the current archive yet. In the normal case this is exactly "newest four, oldest deleted"; a re-run week replaces its own earlier archive.
 4. **notify** — report mail (send + record), which **throws** on failure so a lost heartbeat fails the run rather than vanishing. Every rendered value comes from memoised steps, so a retried send carries the same payload under the same provider idempotency key. `onFailure` sends the failure mail, worded by the step that failed (each step's error is prefixed with its name) and, for a request Inngest rejected, as a rejected request.
 
 A retry of the `snapshot` step that lands on the worker still running that run's dump **joins** it (an in-process map by archive key) rather than dumping again or failing.
 
-Key layout: `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz`, `manual/<ts>-<label>.archive.gz`, `pre-deploy/<ts>-<sha>.archive.gz`. Compact UTC sorts chronologically as a string, so rotation is a sort, never a date parse.
+Key layout: `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz`, `manual/<ts>-<label>.archive.gz`, `pre-deploy/<ts>-<sha>.archive.gz`. Compact UTC sorts chronologically as a string, so newest-first is a string sort; rotation then reads the instant back only from keys that matched the exact archive pattern, to put each into its schedule week.
 
 **Deploy** (`.github/workflows/deploy.reusable.yml`). `DB_BACKUP_ENABLED=true` makes the five `DB_BACKUP_STORAGE_*` secrets and `DB_BACKUP_ALERT_EMAIL` required, and refuses `INNGEST_ENABLED` off. The runtime env gains `DB_BACKUP_*` and `INNGEST_STREAMING`.
 
@@ -59,11 +59,11 @@ A four-lens review (data safety, security/process, infra/delivery, tests/docs), 
 
 - **Critical — the worker would not boot without backup secrets.** The deploy renders an unset secret as `KEY=`, `ConfigService.get(key, default)` returns `''`, and `new S3Client({ region: '' })` throws synchronously in `BackupStore`'s constructor. Every environment not yet configured for backups — production included — would have lost every Inngest function behind a green deploy. Fixed: an empty region is unset, and `BackupStore` builds its client on first use.
 - **The documented path-B restore restored nothing**: doctl's admin URI ends `/admin`, which mongorestore treats as `--db admin` and so skips every `sfa.*` collection, reporting success (verified locally: "0 document(s) restored successfully"). Fixed in the runbook (no database path, plus `--nsInclude 'sfa.*'`; no password on the command line).
-- The in-process one-dump guard spent every retry after a lost response; replaced by joining the in-flight dump.
-- A dashboard Rerun/Replay of a weekly run counted as a new week and rotated out a real one; fixed by one-per-week rotation.
+- The in-process one-dump guard spent every retry after a lost response; replaced by joining the in-flight dump. A different run's dump (one that took the concurrency slot during a retry backoff) queues behind it.
+- A dashboard Rerun/Replay of a weekly run counted as a new week and rotated out a real one; fixed by one-per-week rotation. A follow-up verification pass showed the first version (a 6-day distance rule) still lost a week when a re-run came more than a day after its Sunday — the next Sunday deleted it — so weeks are now anchored to the calendar (Sunday 00:00 Pakistan time).
 - The report's timestamp was taken at send time, so a retried send would have reused the idempotency key with a different body (Resend 409); now from memoised step results. The failure mail's time comes from the failure event.
-- Failure mails claimed the dump failed when rotation or the report had; a rejected request was reported as a failed weekly run. Both fixed.
-- The preflight gate was case-sensitive while the app is not; normalised.
+- Failure mails claimed the dump failed when rotation or the report had; a rejected request was reported as a failed weekly run. Both fixed: each step's error carries its step name (verified to survive Inngest's serialisation to `onFailure`), the delivery record is its own stage, and only Inngest's `EventValidationError` is reported as a rejected request.
+- The preflight gate was case-sensitive while the app is not; normalised, and any value that is still not plainly true or false fails the deploy.
 - Runbook: path A's `terraform import` advice would have led to the fork being destroyed by a later apply; replaced. Path B's check pointed at counts the report mail does not contain; replaced with checks that exist. The rehearsal started Mongo without its replica-set init.
 - The backup key is in the shared runtime env (api, worker, edge, deploy-config object), not the worker's alone, and can delete every archive: documented, with scoping it to the worker listed under "Later".
 
@@ -87,7 +87,7 @@ A four-lens review (data safety, security/process, infra/delivery, tests/docs), 
 
 | Risk | Mitigation |
 |---|---|
-| Internal load balancer cuts the minutes-long `snapshot` request; Inngest retries while the dump still runs | `INNGEST_STREAMING` heartbeat; in-process one-dump guard; per-run key so the last PUT wins atomically; dump timeout + SIGKILL |
+| Internal load balancer cuts the minutes-long `snapshot` request; Inngest retries while the dump still runs | `INNGEST_STREAMING` heartbeat; a retry on the same worker joins the in-flight dump (`DbBackupSnapshotFn.inFlight`), and another run's dump queues behind it; per-run key so the last PUT wins atomically; dump timeout + SIGKILL |
 | Streaming upsets the self-hosted server for every function | Verified on dev first (rollout step 4); `INNGEST_STREAMING=false` variable turns it off without a release |
 | Dump load on a one-vCPU node | 2 parallel collections; 03:00 Chicago on a Sunday |
 | Archive outgrows one PUT (5 GiB) | Refused past 4.5 GiB with a message naming multipart; size is in every mail |
