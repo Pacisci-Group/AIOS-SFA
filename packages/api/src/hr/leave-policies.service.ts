@@ -14,6 +14,7 @@ import {
   type LeavePolicyView,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
 import { mergeRules } from '../common/hr/leave-policy.merge';
 import { validateLeavePolicyRules } from '../common/hr/leave-policy.validate';
 import type {
@@ -27,6 +28,7 @@ import {
 
 type PolicyLean = {
   _id: Types.ObjectId;
+  agencyId: string;
   name: string;
   status: 'active' | 'archived';
   version: number;
@@ -44,14 +46,15 @@ type PolicyLean = {
  *
  * Nothing is seeded and nothing is a default (Asad, 2026-10-22). The list may
  * be empty, the last active policy may be archived, and {@link employeesOn}
- * is the only thing that stops an archive — it returns 0 until PAC-162
- * attaches profiles, and that one method is where PAC-162 plugs in.
+ * is the only thing that stops an archive — it counts the non-terminated
+ * `employeeProfiles` on the policy (PAC-162).
  */
 @Injectable()
 export class LeavePoliciesService {
   constructor(
     @InjectModel(LeavePolicy.name)
     private readonly policies: Model<LeavePolicyDocument>,
+    private readonly profiles: EmployeeProfilesService,
   ) {}
 
   async list(agencyId: string): Promise<LeavePoliciesResponse> {
@@ -145,15 +148,9 @@ export class LeavePoliciesService {
     return this.get(agencyId, id);
   }
 
-  /**
-   * How many employees are on the policy. **PAC-162 seam**: reads
-   * `employeeProfiles` once that collection exists; until then nobody is on
-   * any policy.
-   */
+  /** How many non-terminated employees are on the policy (PAC-162). */
   employeesOn(agencyId: string, policyId: Types.ObjectId): Promise<number> {
-    void agencyId;
-    void policyId;
-    return Promise.resolve(0);
+    return this.profiles.employeesOnPolicy(agencyId, policyId);
   }
 
   private async find(agencyId: string, id: string): Promise<PolicyLean> {
@@ -190,7 +187,7 @@ export class LeavePoliciesService {
       name: row.name,
       status: row.status,
       version: row.version,
-      employeeCount: await this.employeesOn('', row._id),
+      employeeCount: await this.employeesOn(row.agencyId, row._id),
       createdAt: (row.createdAt ?? new Date(0)).toISOString(),
       updatedAt: (row.updatedAt ?? row.createdAt ?? new Date(0)).toISOString(),
       archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
