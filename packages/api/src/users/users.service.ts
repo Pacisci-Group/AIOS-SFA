@@ -399,7 +399,10 @@ export class UsersService {
     if (!user.agencyId) return;
     const agencyId = user.agencyId.toString();
     try {
-      const profile = await this.employeeProfiles.profileFor(agencyId, user._id);
+      const profile = await this.employeeProfiles.profileFor(
+        agencyId,
+        user._id,
+      );
       if (!profile || profile.status !== 'pending') return;
       if (!(await this.leavePolicies.hasActivePolicy(agencyId))) return;
 

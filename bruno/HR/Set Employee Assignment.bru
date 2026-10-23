@@ -1,0 +1,58 @@
+meta {
+  name: Set Employee Assignment
+  type: http
+  seq: 29
+}
+
+put {
+  url: {{baseUrl}}/hr/employees/{{hrPendingUserId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "leavePolicyId": "{{hrOnboardingPolicyId}}",
+    "overrides": { "attendance": { "tardyGraceMinutes": 10 } },
+    "scheduleTemplateId": "{{hrScheduleTemplateId}}",
+    "scheduleOverride": { "4": null },
+    "reason": "Switched to a three-day week"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("appends a history entry and the current fields follow it", function () {
+    const body = res.getBody();
+    expect(body.assignments.length).to.equal(2);
+    expect(body.assignments[0].reason).to.equal("Switched to a three-day week");
+    expect(body.assignments[0].overriddenPaths).to.eql(["attendance.tardyGraceMinutes"]);
+    expect(body.assignments[1].overriddenPaths).to.eql(["pto.annualAllocationHours"]);
+    expect(body.effective.overriddenPaths).to.eql(["attendance.tardyGraceMinutes"]);
+    expect(body.schedule.source).to.equal("override");
+    expect(body.events[0].kind).to.equal("assignment_changed");
+  });
+}
+
+docs {
+  # PUT /hr/employees/:userId/assignment — a new history entry (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Body: the same five rule-shaped fields as `activate`, plus
+    `effectiveFrom?` (today when omitted; never in the future, never before
+    the hire date or the previous entry — equal is allowed) and a required
+    `reason`.
+  - Every field is **replaced**, not merged with the previous entry: an
+    omitted `overrides` means no custom rules from this day on.
+  - `409` while pending ("activate first") or terminated ("rehire first").
+
+  "What rules applied on day X" is the last entry with `effectiveFrom <= X`;
+  the profile's top-level fields always equal the last entry.
+}

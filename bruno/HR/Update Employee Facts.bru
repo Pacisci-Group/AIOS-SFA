@@ -1,0 +1,52 @@
+meta {
+  name: Update Employee Facts
+  type: http
+  seq: 30
+}
+
+patch {
+  url: {{baseUrl}}/hr/employees/{{hrPendingUserId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "workAnniversary": "03-01",
+    "dateOfBirth": "1990-05-05",
+    "showBirthday": true
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("logs before and after, never the birthday itself", function () {
+    const body = res.getBody();
+    expect(body.workAnniversary).to.equal("03-01");
+    expect(body.dateOfBirth).to.equal("1990-05-05");
+    const event = body.events[0];
+    expect(event.kind).to.equal("facts_updated");
+    const dob = event.changes.find((c) => c.field === "dateOfBirth");
+    expect(dob.to).to.equal("Set");
+  });
+}
+
+docs {
+  # PATCH /hr/employees/:userId — facts only, never rules (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Body (all optional, at least one): `hireDate`, `workAnniversary`
+    (`MM-DD` or null), `dateOfBirth` (`YYYY-MM-DD` or null), `showBirthday`.
+  - A hire date may not move past the first history entry's `effectiveFrom`,
+    nor past the termination date. A birthday is in the past and within 120
+    years.
+  - Writes a `facts_updated` event; the birthday is logged as set or
+    cleared, never as the date.
+}

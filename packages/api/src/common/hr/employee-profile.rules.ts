@@ -6,7 +6,10 @@ import {
   type LeavePolicyRules,
   type WorkSchedule,
 } from '@sfa/shared';
-import { isValidIsoDate, parseIsoDate } from '../../performance/performance.range';
+import {
+  isValidIsoDate,
+  parseIsoDate,
+} from '../../performance/performance.range';
 
 /**
  * The bounds on an employee profile's facts (PAC-162), judged as **agency

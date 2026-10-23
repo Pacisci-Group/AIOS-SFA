@@ -3,7 +3,8 @@ import type { WorkSchedule, WorkScheduleTemplateStatus } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 
-export type WorkScheduleTemplateDocument = HydratedDocument<WorkScheduleTemplate>;
+export type WorkScheduleTemplateDocument =
+  HydratedDocument<WorkScheduleTemplate>;
 
 /**
  * A named weekly schedule an employee can be put on (PAC-162) — "Mon–Fri
@@ -55,8 +56,7 @@ export class WorkScheduleTemplate {
   updatedBy?: Types.ObjectId | null;
 }
 
-export const WorkScheduleTemplateSchema = SchemaFactory.createForClass(
-  WorkScheduleTemplate,
-);
+export const WorkScheduleTemplateSchema =
+  SchemaFactory.createForClass(WorkScheduleTemplate);
 
 WorkScheduleTemplateSchema.index({ agencyId: 1, status: 1, name: 1 });

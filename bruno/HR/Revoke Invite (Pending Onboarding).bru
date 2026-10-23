@@ -1,0 +1,29 @@
+meta {
+  name: Revoke Invite (Pending Onboarding)
+  type: http
+  seq: 39
+}
+
+delete {
+  url: {{baseUrl}}/users/{{hrPendingUserId}}/invite
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrOwnerAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /users/:userId/invite — cleanup (PAC-162)
+
+  Revoking a pending invite deletes the user row **and its HR profile** (with
+  its events): the invite was never a person, and the profile would point at
+  a row that is gone. The one hard delete on this surface, for the same
+  reason the user row is.
+}

@@ -1,0 +1,28 @@
+meta {
+  name: Archive Onboarding Policy
+  type: http
+  seq: 41
+}
+
+post {
+  url: {{baseUrl}}/hr/leave-policies/{{hrOnboardingPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK once nobody is on it", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().status).to.equal("archived");
+  });
+}
+
+docs {
+  # POST /hr/leave-policies/:id/archive — cleanup (PAC-162)
+
+  Both invitees were revoked, so `employeesOn` is zero and the archive
+  succeeds; a repeated run creates a fresh policy under a new name.
+}

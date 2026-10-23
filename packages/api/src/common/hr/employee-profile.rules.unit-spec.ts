@@ -45,9 +45,7 @@ describe('employee profile rules (PAC-162)', () => {
     it('accepts a past day within 120 years and refuses the rest', () => {
       expect(() => assertDateOfBirth('1990-05-05', today)).not.toThrow();
       expect(() => assertDateOfBirth(today, today)).toThrow(/in the past/);
-      expect(() => assertDateOfBirth('1900-01-01', today)).toThrow(
-        /120 years/,
-      );
+      expect(() => assertDateOfBirth('1900-01-01', today)).toThrow(/120 years/);
     });
   });
 

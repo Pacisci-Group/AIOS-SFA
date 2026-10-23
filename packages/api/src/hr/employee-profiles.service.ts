@@ -91,7 +91,8 @@ export class EmployeeProfilesService {
     query: ListEmployeesDto,
   ): Promise<EmployeeListResponse> {
     const match: Record<string, unknown> = { agencyId };
-    if (query.status?.length) match.status = { $in: [...new Set(query.status)] };
+    if (query.status?.length)
+      match.status = { $in: [...new Set(query.status)] };
     if (query.leavePolicyId) {
       match.leavePolicyId = new Types.ObjectId(query.leavePolicyId);
     }
@@ -124,7 +125,13 @@ export class EmployeeProfilesService {
         $facet: {
           total: [{ $count: 'n' }],
           items: [
-            { $sort: { 'user.lastName': 1, 'user.firstName': 1, 'user.email': 1 } },
+            {
+              $sort: {
+                'user.lastName': 1,
+                'user.firstName': 1,
+                'user.email': 1,
+              },
+            },
             { $skip: (query.page - 1) * query.pageSize },
             { $limit: query.pageSize },
             {
@@ -305,7 +312,10 @@ export class EmployeeProfilesService {
       this.core.namesFor(
         agencyId,
         [profile.leavePolicyId, ...history.map((a) => a.leavePolicyId)],
-        [profile.scheduleTemplateId, ...history.map((a) => a.scheduleTemplateId)],
+        [
+          profile.scheduleTemplateId,
+          ...history.map((a) => a.scheduleTemplateId),
+        ],
       ),
       this.effectiveOrNull(agencyId, current),
       this.core.effectiveScheduleFor(agencyId, current),
@@ -318,8 +328,10 @@ export class EmployeeProfilesService {
     if (!user) throw new NotFoundException('Employee profile not found');
 
     const actorIds = new Set<string>();
-    for (const entry of history) if (entry.actorId) actorIds.add(entry.actorId.toHexString());
-    for (const event of events) if (event.actorId) actorIds.add(event.actorId.toHexString());
+    for (const entry of history)
+      if (entry.actorId) actorIds.add(entry.actorId.toHexString());
+    for (const event of events)
+      if (event.actorId) actorIds.add(event.actorId.toHexString());
     const [actors, branchNames, roles] = await Promise.all([
       this.actors([...actorIds]),
       this.branchNames([user.branchId]),
@@ -349,7 +361,11 @@ export class EmployeeProfilesService {
       dateOfBirth: profile.dateOfBirth ?? null,
       showBirthday: profile.showBirthday ?? true,
       leavePolicy: policy
-        ? { id: policy._id.toHexString(), name: policy.name, version: policy.version }
+        ? {
+            id: policy._id.toHexString(),
+            name: policy.name,
+            version: policy.version,
+          }
         : null,
       overrides: profile.overrides ?? {},
       effective,
@@ -370,7 +386,11 @@ export class EmployeeProfilesService {
         changes: event.changes ?? [],
       })),
       createdAt: (profile.createdAt ?? new Date(0)).toISOString(),
-      updatedAt: (profile.updatedAt ?? profile.createdAt ?? new Date(0)).toISOString(),
+      updatedAt: (
+        profile.updatedAt ??
+        profile.createdAt ??
+        new Date(0)
+      ).toISOString(),
     };
   }
 

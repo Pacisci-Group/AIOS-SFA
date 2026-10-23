@@ -76,7 +76,9 @@ export class ScheduleTemplatesService {
     await this.assertNameFree(agencyId, dto.name);
     const schedule =
       dto.schedule ??
-      scheduleFromWorkweek((await this.workingDays.settings(agencyId)).workweek);
+      scheduleFromWorkweek(
+        (await this.workingDays.settings(agencyId)).workweek,
+      );
     this.assertValid(schedule);
     const created = await this.templates.create({
       agencyId,

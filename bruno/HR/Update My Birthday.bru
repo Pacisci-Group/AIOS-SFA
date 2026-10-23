@@ -1,0 +1,43 @@
+meta {
+  name: Update My Birthday
+  type: http
+  seq: 36
+}
+
+patch {
+  url: {{baseUrl}}/hr/me/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrProducerAccessToken}}
+}
+
+body:json {
+  {
+    "dateOfBirth": "1991-07-04",
+    "showBirthday": true
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().dateOfBirth).to.equal("1991-07-04");
+    expect(res.getBody().showBirthday).to.equal(true);
+  });
+}
+
+docs {
+  # PATCH /hr/me/profile — the two birthday fields, nothing else (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `hr:read`
+  - Body: `{ dateOfBirth?: "YYYY-MM-DD" | null, showBirthday?: boolean }` —
+    **strict**: any other key is a `400`. The birthday must be in the past
+    and within 120 years.
+  - The same two fields are asked at the setup step (`POST
+    /auth/accept-invite` accepts `dateOfBirth` and `showBirthday`). The
+    calendar (PAC-169) shows month and day only, for employees who opted in;
+    nothing anywhere computes an age.
+}

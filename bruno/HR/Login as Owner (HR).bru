@@ -1,0 +1,44 @@
+meta {
+  name: Login as Owner (HR)
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("hrOwnerAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  # POST /auth/login — the owner, for the HR onboarding chain (PAC-162)
+
+  The Branch Manager administers HR but cannot invite (`agency:users:write`
+  is the owner's). The onboarding requests below invite as the owner and
+  onboard as the manager, which is also how the two roles divide the work in
+  the product. Captures `hrOwnerAccessToken`; the `Users/` folder's own login
+  runs later and is untouched.
+}

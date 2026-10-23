@@ -1,0 +1,30 @@
+meta {
+  name: Archive Schedule Template
+  type: http
+  seq: 33
+}
+
+post {
+  url: {{baseUrl}}/hr/schedule-templates/{{hrScheduleTemplateId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK once nobody active is on it", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().status).to.equal("archived");
+  });
+}
+
+docs {
+  # POST /hr/schedule-templates/:id/archive (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - `409` while a non-terminated profile references the template ("Move N
+    employees to another schedule first"). The employee above was just
+    terminated, so this succeeds. Idempotent on an archived template.
+}

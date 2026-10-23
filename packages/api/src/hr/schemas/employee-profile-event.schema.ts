@@ -58,8 +58,7 @@ export class EmployeeProfileEvent {
   updatedBy?: Types.ObjectId | null;
 }
 
-export const EmployeeProfileEventSchema = SchemaFactory.createForClass(
-  EmployeeProfileEvent,
-);
+export const EmployeeProfileEventSchema =
+  SchemaFactory.createForClass(EmployeeProfileEvent);
 
 EmployeeProfileEventSchema.index({ profileId: 1, at: -1 });

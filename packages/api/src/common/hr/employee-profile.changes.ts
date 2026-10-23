@@ -69,7 +69,12 @@ export const PROFILE_CHANGE_SPEC: FieldSpec[] = [
     kind: 'text',
     read: (s) => EMPLOYEE_PROFILE_STATUS_LABELS[s.status],
   },
-  { field: 'hireDate', label: 'Hire date', kind: 'date', read: (s) => s.hireDate },
+  {
+    field: 'hireDate',
+    label: 'Hire date',
+    kind: 'date',
+    read: (s) => s.hireDate,
+  },
   {
     field: 'workAnniversary',
     label: 'Work anniversary',
@@ -148,7 +153,13 @@ export function diffProfileSnapshots(
     const from = before ? spec.read(before) : null;
     const to = spec.read(after);
     if (same(from, to)) continue;
-    changes.push({ field: spec.field, label: spec.label, kind: spec.kind, from, to });
+    changes.push({
+      field: spec.field,
+      label: spec.label,
+      kind: spec.kind,
+      from,
+      to,
+    });
   }
   return changes;
 }

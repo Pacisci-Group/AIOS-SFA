@@ -73,7 +73,8 @@ export class EmployeeProfilesController {
   @Get(':userId')
   get(
     @AgencyId() agencyId: string,
-    @Param('userId', new ZodValidationPipe(employeeUserIdSchema)) userId: string,
+    @Param('userId', new ZodValidationPipe(employeeUserIdSchema))
+    userId: string,
   ): Promise<EmployeeProfileView> {
     return this.profiles.view(agencyId, userId);
   }
@@ -84,7 +85,8 @@ export class EmployeeProfilesController {
   activate(
     @Access() access: AccessContext,
     @AgencyId() agencyId: string,
-    @Param('userId', new ZodValidationPipe(employeeUserIdSchema)) userId: string,
+    @Param('userId', new ZodValidationPipe(employeeUserIdSchema))
+    userId: string,
     @Body(new ZodValidationPipe(activateEmployeeSchema))
     body: ActivateEmployeeDto,
   ): Promise<EmployeeProfileView> {
@@ -96,7 +98,8 @@ export class EmployeeProfilesController {
   setAssignment(
     @Access() access: AccessContext,
     @AgencyId() agencyId: string,
-    @Param('userId', new ZodValidationPipe(employeeUserIdSchema)) userId: string,
+    @Param('userId', new ZodValidationPipe(employeeUserIdSchema))
+    userId: string,
     @Body(new ZodValidationPipe(setEmployeeAssignmentSchema))
     body: SetEmployeeAssignmentDto,
   ): Promise<EmployeeProfileView> {
@@ -108,7 +111,8 @@ export class EmployeeProfilesController {
   updateFacts(
     @Access() access: AccessContext,
     @AgencyId() agencyId: string,
-    @Param('userId', new ZodValidationPipe(employeeUserIdSchema)) userId: string,
+    @Param('userId', new ZodValidationPipe(employeeUserIdSchema))
+    userId: string,
     @Body(new ZodValidationPipe(updateEmployeeFactsSchema))
     body: UpdateEmployeeFactsDto,
   ): Promise<EmployeeProfileView> {
@@ -121,7 +125,8 @@ export class EmployeeProfilesController {
   terminate(
     @Access() access: AccessContext,
     @AgencyId() agencyId: string,
-    @Param('userId', new ZodValidationPipe(employeeUserIdSchema)) userId: string,
+    @Param('userId', new ZodValidationPipe(employeeUserIdSchema))
+    userId: string,
     @Body(new ZodValidationPipe(terminateEmployeeSchema))
     body: TerminateEmployeeDto,
   ): Promise<EmployeeProfileView> {

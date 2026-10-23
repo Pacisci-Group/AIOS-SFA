@@ -1,0 +1,87 @@
+meta {
+  name: Activate Employee
+  type: http
+  seq: 27
+}
+
+post {
+  url: {{baseUrl}}/hr/employees/{{hrPendingUserId}}/activate
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+script:pre-request {
+  // The hire date is judged on the agency's calendar; the demo agency is
+  // America/Chicago, so take a day safely in the past.
+  const d = new Date(Date.now() - 7 * 86400000);
+  bru.setVar("hrHireDate", d.toISOString().slice(0, 10));
+}
+
+body:json {
+  {
+    "leavePolicyId": "{{hrOnboardingPolicyId}}",
+    "hireDate": "{{hrHireDate}}",
+    "overrides": { "pto": { "annualAllocationHours": 120, "resetBasis": "calendar_year" } },
+    "scheduleTemplateId": "{{hrScheduleTemplateId}}",
+    "allocations": { "paid": 100 },
+    "reason": "Onboarded from Bruno"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is active on the policy with honest custom rules", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("active");
+    expect(body.hireDate).to.equal(bru.getVar("hrHireDate"));
+    expect(body.workAnniversary).to.equal(bru.getVar("hrHireDate").slice(5));
+    expect(body.leavePolicy.id).to.equal(bru.getVar("hrOnboardingPolicyId"));
+    // `resetBasis` equals the template, so it is stripped from the overrides.
+    expect(body.effective.overriddenPaths).to.eql(["pto.annualAllocationHours"]);
+    expect(body.effective.rules.pto.annualAllocationHours).to.equal(120);
+    expect(body.schedule.source).to.equal("template");
+    expect(body.effectiveAllocations).to.eql({ paid: 100 });
+    expect(body.assignments.length).to.equal(1);
+    expect(body.events[0].kind).to.equal("activated");
+  });
+}
+
+docs {
+  # POST /hr/employees/:userId/activate — pending → active, or a rehire (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  ## Body
+  | field | rules |
+  |---|---|
+  | `leavePolicyId` | an **active** policy of the agency |
+  | `hireDate` | `YYYY-MM-DD`, not after today on the agency's calendar |
+  | `overrides?` | the rules **patch** shape of `PATCH /hr/leave-policies/:id` — only what differs; arrays whole; an unknown path is a 400 |
+  | `scheduleTemplateId?` | an active template, or null |
+  | `scheduleOverride?` | a `WorkSchedule`, or null |
+  | `allocations?` | hours per **active, balance-bearing** leave type key |
+  | `workAnniversary?` | `MM-DD`; derived from the hire date when omitted |
+  | `effectiveFrom?` | `YYYY-MM-DD`; the hire date (first activation) or today (rehire) when omitted; never in the future, never before the hire date |
+  | `reason?` | ≤ 500 chars |
+
+  The overrides are merged onto the policy, checked as a whole
+  (`validateLeavePolicyRules`), and **stripped of every path equal to the
+  template** before storing, so `overriddenPaths` ("Custom") is honest.
+
+  Writes the first `assignments[]` entry and an `activated` (or `rehired`)
+  event with before/after. A rehire (`terminated → active`) clears the
+  termination date; history is kept.
+
+  ## Errors
+  - `400` — naming the field: an invalid policy or template, a bad date, an
+    allocation on a type that does not draw from a balance, an inconsistent
+    merged policy.
+  - `409` — already active.
+}

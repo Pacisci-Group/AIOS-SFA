@@ -59,9 +59,8 @@ export class PlatformService {
      * migration ran for the agencies that existed when HR shipped.
      */
     if (!hrWasEnabled && agency.modules[ModuleKey.Hr]?.enabled === true) {
-      const created = await this.employeeProfiles.ensureProfilesForAgency(
-        agencyId,
-      );
+      const created =
+        await this.employeeProfiles.ensureProfilesForAgency(agencyId);
       if (created > 0) {
         this.logger.log(
           `HR enabled on ${agencyId}: ${created} pending employee profile(s) created`,

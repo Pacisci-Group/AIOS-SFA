@@ -1,0 +1,42 @@
+meta {
+  name: Get My HR Profile
+  type: http
+  seq: 35
+}
+
+get {
+  url: {{baseUrl}}/hr/me/profile
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrProducerAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("shows the producer their own rules read-only", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("active");
+    expect(body.leavePolicyName).to.equal("Standard");
+    expect(body.effective.rules.requests.partialDayIncrementMinutes).to.equal(15);
+    expect(body.schedule.effective["1"]).to.eql({ start: "09:00", end: "17:00" });
+    expect(body.effectiveAllocations).to.have.property("paid");
+  });
+}
+
+docs {
+  # GET /hr/me/profile — the caller's own HR record (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `hr:read` (every employee)
+  - Response `MyHrProfileView`: `{ status, hireDate, workAnniversary,
+    terminationDate, dateOfBirth, showBirthday, leavePolicyName, effective
+    (template + overrides, null while pending), schedule (effective week +
+    source), effectiveAllocations }`. Read-only — an employee never edits a
+    policy.
+  - `404` when the caller has no profile (a platform admin, or a user who
+    predates the `employee_profiles` migration): the web says "not set up".
+}

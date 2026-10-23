@@ -1,0 +1,41 @@
+meta {
+  name: Login as Producer (HR)
+  type: http
+  seq: 34
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("hrProducerAccessToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  # POST /auth/login — the demo producer, for the own-profile requests (PAC-162)
+
+  The demo seed activates this producer on the "Standard" policy and the
+  "Mon–Fri 9–5" template, so `GET /hr/me/profile` has rules to show.
+}

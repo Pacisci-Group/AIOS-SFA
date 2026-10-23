@@ -270,10 +270,7 @@ export class EmployeeProfilesService {
   }
 
   /** The assignment in force on `asOfDay`, or the current one. */
-  assignmentFor(
-    profile: ProfileLean,
-    asOfDay?: string,
-  ): AssignmentLean | null {
+  assignmentFor(profile: ProfileLean, asOfDay?: string): AssignmentLean | null {
     const history = profile.assignments ?? [];
     if (asOfDay !== undefined) return assignmentAsOf(history, asOfDay);
     return history.length ? history[history.length - 1] : null;
@@ -493,7 +490,8 @@ export class EmployeeProfilesService {
     assertMonthDay('Work anniversary', workAnniversary);
 
     const prepared = await this.prepareAssignment(agencyId, input);
-    const effectiveFrom = input.effectiveFrom ?? (rehire ? today : input.hireDate);
+    const effectiveFrom =
+      input.effectiveFrom ?? (rehire ? today : input.hireDate);
     assertEffectiveFrom(effectiveFrom, {
       today,
       hireDate: input.hireDate,
@@ -596,7 +594,14 @@ export class EmployeeProfilesService {
       },
     );
     const after = await this.requireProfile(agencyId, userId);
-    await this.recordEvent(after, 'assignment_changed', actor, before, after, reason);
+    await this.recordEvent(
+      after,
+      'assignment_changed',
+      actor,
+      before,
+      after,
+      reason,
+    );
     return after;
   }
 
@@ -669,7 +674,14 @@ export class EmployeeProfilesService {
     const before = await this.snapshotOf(current);
     await this.profiles.updateOne({ _id: current._id }, { $set: set });
     const after = await this.requireProfile(agencyId, userId);
-    await this.recordEvent(after, 'birthday_updated', actor, before, after, null);
+    await this.recordEvent(
+      after,
+      'birthday_updated',
+      actor,
+      before,
+      after,
+      null,
+    );
     return after;
   }
 
@@ -702,7 +714,9 @@ export class EmployeeProfilesService {
     const before = await this.snapshotOf(current);
     await this.profiles.updateOne(
       { _id: current._id, status: { $ne: 'terminated' } },
-      { $set: { status: 'terminated', terminationDate: input.terminationDate } },
+      {
+        $set: { status: 'terminated', terminationDate: input.terminationDate },
+      },
     );
     const after = await this.requireProfile(agencyId, userId);
     await this.recordEvent(after, 'terminated', actor, before, after, reason);
@@ -876,12 +890,11 @@ export class EmployeeProfilesService {
 
     let scheduleTemplateId: Types.ObjectId | null = null;
     if (input.scheduleTemplateId) {
-      const template = await this.templates
-        .exists({
-          _id: new Types.ObjectId(input.scheduleTemplateId),
-          agencyId,
-          status: 'active',
-        });
+      const template = await this.templates.exists({
+        _id: new Types.ObjectId(input.scheduleTemplateId),
+        agencyId,
+        status: 'active',
+      });
       if (!template) {
         throw new BadRequestException(
           'Schedule template is invalid for this agency',
