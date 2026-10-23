@@ -50,8 +50,13 @@ pool_proxy_protocol   = true
 # upload documents through presigned URLs. Applying this needs
 # SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY exported alongside
 # DIGITALOCEAN_TOKEN — buckets are managed over the S3 API, not the DO API.
-enable_spaces  = true
-enable_backups = false
+enable_spaces = true
+
+# Weekly MongoDB snapshots (PAC-172): a private sfa-<env>-db-backups bucket and
+# the worker's key for it. Provisioning alone takes no snapshot - the worker
+# runs only where DB_BACKUP_ENABLED is true in the GitHub Environment. Applying
+# needs the SPACES_* pair exported, exactly like enable_spaces.
+enable_db_backups = true
 
 # Browser origins allowed to run presigned uploads. Pinned rather than derived:
 # the derivation keys off `enable_tls`, which is false here even though dev is

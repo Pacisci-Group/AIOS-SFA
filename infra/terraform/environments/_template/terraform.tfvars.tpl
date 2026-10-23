@@ -30,7 +30,12 @@ enable_reserved_ip  = false
 # Applying this also needs SPACES_ACCESS_KEY_ID / SPACES_SECRET_ACCESS_KEY
 # exported — Spaces buckets are managed over the S3 API, not the DO API.
 enable_spaces       = true
-enable_backups      = false
+
+# Weekly MongoDB snapshots (PAC-172): a private sfa-<env>-db-backups bucket and
+# the worker's key for it. Provisioning alone takes no snapshot - the worker
+# runs only where DB_BACKUP_ENABLED is true in the GitHub Environment. Applying
+# needs the SPACES_* pair exported, exactly like enable_spaces.
+enable_db_backups = true
 
 # Origins allowed to run presigned browser uploads. Empty derives them from
 # `domain`/`enable_tls` plus the droplet's public IP.

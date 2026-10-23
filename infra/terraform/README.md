@@ -134,9 +134,17 @@ Every environment inherits it; enable per env via tfvars.
   derived from `domain`/`enable_tls` plus the droplet IP when left empty — after
   a DNS cutover or a TLS switch, re-apply so the rule follows the new origin.
   Getting this wrong fails only in the browser; the API stays healthy.
-- `enable_backups` is a documentation flag: `modules/managed_mongo` does not
-  implement it, because DO ties MongoDB backup retention to the cluster tier.
-  Verify retention in the DO console for any environment holding real data.
+- MongoDB backups come in two layers (PAC-172). DigitalOcean backs up every
+  managed cluster daily with seven days of point-in-time recovery, whatever its
+  size — nothing to configure, but a restore forks a **new** cluster and
+  destroying the cluster destroys its backups. `enable_db_backups` adds the
+  off-cluster copy: `modules/db_backup_bucket` creates a private
+  `sfa-<env>-db-backups` bucket (no CORS, versioning off, `manual/` and
+  `pre-deploy/` expire after 90 days, `weekly/` is rotated by the worker) and a
+  key scoped to it. Copy `terraform output db_backup_github_secrets` and
+  `terraform output -raw db_backup_secret_access_key` into the GitHub
+  Environment; the worker snapshots only where `DB_BACKUP_ENABLED` is true. See
+  `DEPLOYMENT.md` → "Database backups".
 - Destroy protection: `scripts/destroy-env.sh` refuses to destroy `production`.
   The `prevent_destroy` preset flag is a documentation marker — Terraform does not
   allow a variable in a `lifecycle { prevent_destroy }` block, so to hard-lock a

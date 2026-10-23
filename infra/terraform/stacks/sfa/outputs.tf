@@ -169,6 +169,31 @@ output "deploy_config_secret_key" {
   sensitive   = true
 }
 
+# ─── Database backups (PAC-172) ───────────────────────────────────────────────
+
+output "db_backup_github_secrets" {
+  description = <<-EOT
+    The DB_BACKUP_STORAGE_* Environment secrets the worker snapshots with, minus
+    the secret key below. Null until enable_db_backups = true has been applied.
+
+    Assembled as one output because they sit beside the STORAGE_* pair and are
+    easy to cross: this is the BACKUP bucket's key, not the uploads key, and the
+    worker deliberately has no fallback from one to the other.
+  EOT
+  value = var.enable_db_backups ? {
+    DB_BACKUP_STORAGE_ENDPOINT      = module.db_backup_bucket[0].endpoint
+    DB_BACKUP_STORAGE_REGION        = module.db_backup_bucket[0].region
+    DB_BACKUP_STORAGE_BUCKET        = module.db_backup_bucket[0].bucket
+    DB_BACKUP_STORAGE_ACCESS_KEY_ID = module.db_backup_bucket[0].access_key_id
+  } : null
+}
+
+output "db_backup_secret_access_key" {
+  description = "DB_BACKUP_STORAGE_SECRET_ACCESS_KEY. Worker only - never the uploads key."
+  value       = var.enable_db_backups ? module.db_backup_bucket[0].secret_key : null
+  sensitive   = true
+}
+
 output "deploy_notes" {
   value = local.pool ? local.notes_pool : local.notes_single_droplet
 }

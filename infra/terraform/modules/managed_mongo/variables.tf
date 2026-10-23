@@ -65,12 +65,6 @@ variable "allowed_ip_addresses" {
   default = []
 }
 
-variable "enable_backups" {
-  description = "Enable automated backups"
-  type        = bool
-  default     = false
-}
-
 variable "allowed_tags" {
   description = <<-EOT
     Droplet tags allowed to reach the cluster.

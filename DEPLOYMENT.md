@@ -423,7 +423,9 @@ re-issuing every certificate the platform holds.
    console, and send one real email to prove the worker is reachable on 4001.
 
 > **Scaling the app tier does not scale what is behind it.** Production Mongo is
-> still `node_count = 1` with no backups, Redis is a single-node Valkey that
+> still `node_count = 1` (backed up — DigitalOcean's daily backups plus a weekly
+> off-cluster snapshot, see "Database backups" — but with no standby to fail
+> over to), Redis is a single-node Valkey that
 > the permission cache and the notification bus both lean on (PAC-154), Inngest
 > is one droplet with SQLite, and the rate limits are per-node once the pool
 > grows past one. None of that blocks the

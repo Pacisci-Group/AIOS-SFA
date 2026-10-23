@@ -155,10 +155,29 @@ variable "create_spaces_access_key" {
   default     = true
 }
 
-variable "enable_backups" {
-  description = "Documented flag for backup policy (Mongo tier/backups)"
+variable "enable_db_backups" {
+  description = <<-EOT
+    Provision the private bucket and bucket-scoped key the worker writes weekly
+    MongoDB snapshots to (PAC-172). The worker only uses them where
+    DB_BACKUP_ENABLED is true in the GitHub Environment.
+
+    DigitalOcean backs up the managed cluster daily with seven days of
+    point-in-time recovery whatever this says - but those backups are destroyed
+    with the cluster. This is the copy that is not.
+  EOT
   type        = bool
   default     = false
+}
+
+variable "db_backup_spaces_region" {
+  description = <<-EOT
+    Region for the backup bucket. Empty uses spaces_region, which is the
+    cluster's region. A different region (e.g. sfo3) puts the copy out of reach
+    of a regional outage, at the cost of a slower cross-region upload of a few
+    hundred MB a week.
+  EOT
+  type        = string
+  default     = ""
 }
 
 variable "prevent_destroy" {

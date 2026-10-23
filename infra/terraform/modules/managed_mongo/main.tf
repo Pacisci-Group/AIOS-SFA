@@ -65,5 +65,16 @@ resource "digitalocean_database_firewall" "this" {
   }
 }
 
-# Note: backup policy for MongoDB on DO is typically tied to cluster tier/plan.
-# enable_backups is exposed for documentation; upgrade size/tier for production backups.
+# Backups: DigitalOcean takes a daily backup of every managed MongoDB cluster and
+# keeps seven days of point-in-time recovery, whatever its size - there is no
+# setting here because there is nothing to switch on. Two properties of those
+# backups matter more than their existence:
+#
+#   - Restoring never rewinds this cluster. It forks a NEW one
+#     (`doctl databases fork ... --restore-from-cluster-id ... --restore-from-timestamp ...`),
+#     so the connection string and this firewall have to follow it.
+#   - Destroying the cluster destroys its backups.
+#
+# The second is why the stack's `enable_db_backups` ships a weekly copy to a
+# bucket this cluster's lifecycle cannot touch (PAC-172). See DEPLOYMENT.md,
+# "Database backups", for both restore paths.

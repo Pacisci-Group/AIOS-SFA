@@ -114,3 +114,14 @@ output "deploy_config_secret_key" {
   value       = module.sfa.deploy_config_secret_key
   sensitive   = true
 }
+
+output "db_backup_github_secrets" {
+  description = "DB_BACKUP_STORAGE_* Environment secrets for the weekly MongoDB snapshot, minus the secret key below (PAC-172)."
+  value       = module.sfa.db_backup_github_secrets
+}
+
+output "db_backup_secret_access_key" {
+  description = "DB_BACKUP_STORAGE_SECRET_ACCESS_KEY. Worker only — never the uploads key."
+  value       = module.sfa.db_backup_secret_access_key
+  sensitive   = true
+}
