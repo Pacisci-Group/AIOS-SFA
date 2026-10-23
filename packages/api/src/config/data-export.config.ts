@@ -1,3 +1,5 @@
+import { boundedInt } from './bounded-int';
+
 /**
  * Data Export tuning (PAC-152).
  *
@@ -17,17 +19,6 @@
 
 export const DEFAULT_DATA_EXPORT_MAX_ROWS = 100_000;
 export const DEFAULT_DATA_EXPORT_BATCH_SIZE = 500;
-
-function boundedInt(
-  raw: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const parsed = Number.parseInt(raw ?? '', 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(Math.max(parsed, min), max);
-}
 
 /** Rows a single export may hold; larger ones are refused with a 400. */
 export function dataExportMaxRows(): number {
