@@ -22,10 +22,18 @@ export type S3SettingsPrefix = 'STORAGE' | 'DB_BACKUP_STORAGE';
  * Read `<prefix>_ENDPOINT`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`
  * and `_FORCE_PATH_STYLE`.
  *
- * The defaults are `StorageService`'s, unchanged: region `us-east-1`, no
- * credentials (the AWS default chain), and path-style addressing on — MinIO
- * requires it, while Spaces and most cloud providers use virtual-host, so every
- * deployed environment sets it to `false`.
+ * The defaults are `StorageService`'s: region `us-east-1`, no credentials (the
+ * AWS default chain), and path-style addressing on — MinIO requires it, while
+ * Spaces and most cloud providers use virtual-host, so every deployed
+ * environment sets it to `false`.
+ *
+ * ## ⚠ An empty region is an unset region
+ * The deploy renders every variable it knows about, set or not, so a secret an
+ * environment never defined arrives as `KEY=` — an empty string, which
+ * `ConfigService.get(key, default)` returns as-is. `new S3Client({ region: '' })`
+ * throws "Region is missing" **synchronously**, and the clients are built in
+ * constructors, so an empty `DB_BACKUP_STORAGE_REGION` in an environment that
+ * never enabled backups would crash the worker at boot (PAC-172 review).
  */
 export function readS3Settings(
   config: ConfigService,
@@ -33,7 +41,7 @@ export function readS3Settings(
 ): S3ClientSettings {
   return {
     endpoint: config.get<string>(`${prefix}_ENDPOINT`) || undefined,
-    region: config.get<string>(`${prefix}_REGION`, 'us-east-1'),
+    region: config.get<string>(`${prefix}_REGION`) || 'us-east-1',
     accessKeyId: config.get<string>(`${prefix}_ACCESS_KEY_ID`, ''),
     secretAccessKey: config.get<string>(`${prefix}_SECRET_ACCESS_KEY`, ''),
     forcePathStyle:

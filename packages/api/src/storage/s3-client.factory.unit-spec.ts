@@ -24,6 +24,19 @@ describe('readS3Settings', () => {
     });
   });
 
+  /**
+   * The deploy renders an unset secret as `KEY=`, and `new S3Client` throws on
+   * an empty region — which, in a constructor, is a worker that cannot boot.
+   */
+  it('treats an empty region as unset', () => {
+    expect(
+      readS3Settings(
+        configOf({ DB_BACKUP_STORAGE_REGION: '' }),
+        'DB_BACKUP_STORAGE',
+      ).region,
+    ).toBe('us-east-1');
+  });
+
   it('treats an empty endpoint as unset', () => {
     expect(
       readS3Settings(configOf({ STORAGE_ENDPOINT: '' }), 'STORAGE').endpoint,

@@ -10,6 +10,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { dbBackupEnabled } from '../../config/db-backup.config';
 import {
+  type S3ClientSettings,
   createS3Client,
   readS3Settings,
 } from '../../storage/s3-client.factory';
@@ -29,16 +30,24 @@ import {
  * borrowing the uploads settings — a fallback would quietly put every tenant's
  * data, in one file, in the bucket the app hands presigned URLs out of.
  * Terraform owns the bucket, and the worker's key could not create one anyway.
+ *
+ * ## The client is built on first use, never at construction
+ * This provider is constructed in every worker — and in the API wherever it
+ * serves the functions inline — including every environment that never turned
+ * backups on. Nothing about an optional feature's settings may be able to stop
+ * that process from booting, so the constructor only reads them.
  */
 @Injectable()
 export class BackupStore {
   private readonly logger = new Logger(BackupStore.name);
-  private readonly client: S3Client;
+  private readonly settings: S3ClientSettings;
+  private client: S3Client | null = null;
   private readonly bucket: string;
   private readonly missing: string[];
 
   constructor(config: ConfigService) {
     const settings = readS3Settings(config, 'DB_BACKUP_STORAGE');
+    this.settings = settings;
     this.bucket = config.get<string>('DB_BACKUP_STORAGE_BUCKET', '');
     this.missing = [
       ...(settings.endpoint ? [] : ['DB_BACKUP_STORAGE_ENDPOINT']),
@@ -48,10 +57,6 @@ export class BackupStore {
         ? []
         : ['DB_BACKUP_STORAGE_SECRET_ACCESS_KEY']),
     ];
-    // Constructing a client does no I/O, so this is harmless in the API
-    // process too, which builds the worker module but never serves the job.
-    this.client = createS3Client(settings);
-
     if (
       this.missing.length > 0 &&
       dbBackupEnabled(config.get<string>('DB_BACKUP_ENABLED'))
@@ -61,6 +66,11 @@ export class BackupStore {
           `${this.missing.length === 1 ? 'is' : 'are'} not set — every snapshot will fail.`,
       );
     }
+  }
+
+  private s3(): S3Client {
+    this.client ??= createS3Client(this.settings);
+    return this.client;
   }
 
   get bucketName(): string {
@@ -85,7 +95,7 @@ export class BackupStore {
     contentType: string,
   ): Promise<{ key: string; size: number }> {
     const { size } = await stat(path);
-    await this.client.send(
+    await this.s3().send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
@@ -102,7 +112,7 @@ export class BackupStore {
     const keys: string[] = [];
     let token: string | undefined;
     do {
-      const page = await this.client.send(
+      const page = await this.s3().send(
         new ListObjectsV2Command({
           Bucket: this.bucket,
           Prefix: prefix,
@@ -123,7 +133,7 @@ export class BackupStore {
    * S3-compatible stores do not all agree on.
    */
   async deleteObject(key: string): Promise<void> {
-    await this.client.send(
+    await this.s3().send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
     );
   }
