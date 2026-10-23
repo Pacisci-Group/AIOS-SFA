@@ -282,8 +282,18 @@ jobs:
           #
           # Normalised the way the app reads it (dbBackupEnabled: trimmed,
           # case-insensitive), or "True" would switch backups on in the worker
-          # while skipping every check here.
+          # while skipping every check here. Anything that is still not plainly
+          # true or false fails the deploy instead: the app's trim() also strips
+          # Unicode spaces this tr does not, and a value the two read
+          # differently is exactly a switched-on backup with nothing checked.
           db_backup_enabled=$(printf '%s' "${DB_BACKUP_ENABLED}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          case "${db_backup_enabled}" in
+            true | false | "") ;;
+            *)
+              echo "::error::DB_BACKUP_ENABLED must be true or false, got '${DB_BACKUP_ENABLED}'."
+              exit 1
+              ;;
+          esac
           if [ "${db_backup_enabled}" = "true" ]; then
             if [ "${INNGEST_ENABLED}" != "true" ]; then
               echo "::error::DB_BACKUP_ENABLED is true but INNGEST_ENABLED is not — snapshots run in the worker and would never fire."
