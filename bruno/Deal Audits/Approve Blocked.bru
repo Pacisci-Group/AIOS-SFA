@@ -1,0 +1,70 @@
+meta {
+  name: Approve Blocked
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "decision": "approve",
+    "notes": "Looks fine."
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("says which items still need a pass", function () {
+    const body = res.getBody();
+    expect(body.code).to.equal("audit_items_not_passed");
+    expect(body.unmet).to.be.an("array").and.not.be.empty;
+    expect(body.unmet[0]).to.have.property("id");
+    expect(body.unmet[0]).to.have.property("itemName");
+  });
+}
+
+docs {
+  # POST /deal-audits/deals/:dealId/review — approve refused (PAC-106)
+
+  **Approve needs every item passed.** The manager rules item by item on the
+  Deal Audit page; an audit with any item unruled or failed cannot be approved.
+  The rule was settled 19 Oct 2026: an item that does not apply is passed with
+  a note, never skipped.
+
+  Runs right after the producer submits, before any verdict — so nothing has
+  been passed and the approval is refused with the list of what is left. On a
+  re-run of the collection the earlier round's passes stand (a resubmit keeps
+  them) but the failed item was cleared, so there is still something unmet.
+
+  ## Response `409`
+  ```json
+  {
+    "statusCode": 409,
+    "error": "Conflict",
+    "code": "audit_items_not_passed",
+    "message": "Every item must pass before the audit can be approved.",
+    "unmet": [{ "id": "665f...ac1", "itemName": "Good Student" }]
+  }
+  ```
+
+  The page disables Approve from the same rule (`audit.canApprove`,
+  `audit.unmet` on **Get Deal Audit Review**), so a user only meets this 409
+  through a stale tab.
+}

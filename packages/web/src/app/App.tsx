@@ -25,6 +25,12 @@ const ManagementDashboardPage = lazy(
   () => import('@/features/management/ManagementDashboardPage'),
 );
 const AnalyticsPage = lazy(() => import('@/features/analytics/AnalyticsPage'));
+const DealAuditsQueuePage = lazy(
+  () => import('@/features/deal-audits/DealAuditsQueuePage'),
+);
+const DealAuditPage = lazy(
+  () => import('@/features/deal-audits/DealAuditPage'),
+);
 const DataExportPage = lazy(
   () => import('@/features/data-export/DataExportPage'),
 );
@@ -367,6 +373,40 @@ export function App() {
                   element={
                     <LazyPage>
                       <CommandCenterPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The manager's Deal Audits queue and page (PAC-106). Both
+                  permissions, the pair every review route on the API requires:
+                  a producer holds `deal_audits:*` for their own board and must
+                  not reach the manager's. Write implies read in the resolved
+                  set, so `anyOf` is belt and braces. */}
+              <Route
+                element={
+                  <RequirePermission
+                    permission={`${ModuleKey.Management}:read`}
+                    anyOf={[
+                      `${ModuleKey.DealAudits}:read`,
+                      `${ModuleKey.DealAudits}:write`,
+                    ]}
+                  />
+                }
+              >
+                <Route
+                  path="/deal-audits"
+                  element={
+                    <LazyPage>
+                      <DealAuditsQueuePage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/deal-audits/:dealId"
+                  element={
+                    <LazyPage>
+                      <DealAuditPage />
                     </LazyPage>
                   }
                 />

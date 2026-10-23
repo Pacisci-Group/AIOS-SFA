@@ -1,8 +1,6 @@
 import {
   Upload,
   Phone,
-  ExternalLink,
-  PhoneCall,
   MessageSquare,
   CheckCircle2,
   FileText,
@@ -27,12 +25,12 @@ import { cn } from "@/lib/utils";
 import {
   ALLOWED_UPLOAD_TYPES,
   MAX_UPLOAD_BYTES,
-  getAuditAttachmentUrl,
   resolveWithOptionalUpload,
   type DealAuditDealRow,
   type DealAuditItemRow,
-  type DealAuditRowAttachment,
 } from "@/lib/deal-audits-api";
+import { EvidenceBlock } from "@/features/deal-audits/components/EvidenceBlock";
+import { SENT_BACK_TEXT } from "@/features/deal-audits/components/review-display";
 import { AuditWorkflowPanel } from "./AuditWorkflowPanel";
 
 interface ResolvePanelProps {
@@ -66,101 +64,17 @@ function formatDue(iso: string): string {
 }
 
 /**
- * What the auditor is actually working from (PAC-65 #16).
- *
- * Two presentations of one requirement, and which one shows is the whole point
- * of the rule that the audit fires whether or not a document was uploaded:
- *
- *  - **A document is attached** — surface it here so they verify it in place.
- *    Producers have uploaded these since PAC-56 #21b and nothing ever read
- *    them, so the service team was chasing files already sitting in storage.
- *  - **Nothing attached** — say so, and say what to do instead. An absent
- *    evidence block would read as "no evidence needed".
- *
- * The URL is fetched on click because presigned links expire; a panel left open
- * would otherwise hand out dead ones.
- *
- * ⚠ Load-bearing and recently shipped. It moved from the panel root to inside
- * each requirement when the drawer became deal-scoped (PAC-72); it must not be
- * lost in that rework.
- */
-function EvidenceBlock({ item }: { item: DealAuditItemRow }) {
-  const [opening, setOpening] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const open = async (file: DealAuditRowAttachment) => {
-    setOpening(file.index);
-    setError(null);
-    try {
-      const { downloadUrl } = await getAuditAttachmentUrl(item.id, file.index);
-      window.open(downloadUrl, "_blank", "noopener");
-    } catch {
-      setError("Could not open that document. Try again.");
-    } finally {
-      setOpening(null);
-    }
-  };
-
-  if (item.attachments.length === 0) {
-    return (
-      <div className="flex gap-3 rounded-xl border border-amber-500/20 bg-amber-500/8 p-3">
-        <PhoneCall size={15} className="mt-0.5 shrink-0 text-amber-500" />
-        <div>
-          <p className="text-sm font-medium text-foreground">
-            No document on file
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Call the client and obtain it, then upload it below.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <p className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
-        Evidence on file
-      </p>
-      <div className="flex flex-col gap-2">
-        {item.attachments.map((file) => (
-          <Button
-            key={file.index}
-            type="button"
-            variant="outline"
-            onClick={() => void open(file)}
-            disabled={opening === file.index}
-            className="h-auto justify-start gap-3 rounded-lg px-3 py-2.5 text-left"
-          >
-            {opening === file.index ? (
-              <Loader2 size={16} className="shrink-0 animate-spin" />
-            ) : (
-              <FileText size={16} className="shrink-0 text-muted-foreground" />
-            )}
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-foreground">
-                {file.filename}
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                {formatSize(file.size)} · uploaded at sale
-              </span>
-            </span>
-            <ExternalLink size={14} className="shrink-0 text-muted-foreground" />
-          </Button>
-        ))}
-      </div>
-      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
-    </div>
-  );
-}
-
-/**
  * One requirement, expanding in place to the resolve form.
  *
  * ⚠ **A settled requirement carries no checkmark** (PAC-72 section A item 4).
  * David rejected them explicitly; the deal's completion percentage at the top
  * of the drawer is what replaced them. Settled rows are distinguished by muted
  * type and the absence of the amber marker, nothing more.
+ *
+ * Since PAC-106 a row can also carry the **manager's** side: a failed item
+ * shows the manager's note (it is what to fix), a manager-only item that was
+ * failed says it is fixed through the sale, and a document requirement
+ * cannot be resolved without its document — the API refuses it too.
  */
 function RequirementRow({
   item,
@@ -219,6 +133,9 @@ function RequirementRow({
   };
 
   const pending = resolveMutation.isPending;
+  const failed = item.review.verdict === "fail";
+  // A document already on the item satisfies the requirement on its own.
+  const needsFile = item.requiresUpload && item.attachments.length === 0;
 
   return (
     <div
@@ -261,6 +178,16 @@ function RequirementRow({
               ? " · document on file"
               : ""}
           </span>
+          {failed && item.review.note && (
+            <span className={cn("mt-1 block text-xs", SENT_BACK_TEXT)}>
+              Manager: {item.review.note}
+            </span>
+          )}
+          {item.managerOnly && item.open && (
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Manager check — fix the sale (Fix it), then mark this resolved
+            </span>
+          )}
         </span>
         {item.open && (
           <ChevronDown
@@ -275,14 +202,25 @@ function RequirementRow({
 
       {expanded && item.open && (
         <div className="flex flex-col gap-4 border-t border-border/60 px-3 py-4">
-          <EvidenceBlock item={item} />
+          <EvidenceBlock
+            itemId={item.id}
+            attachments={item.attachments}
+            empty={
+              item.requiresUpload
+                ? {
+                    title: "No document on file",
+                    hint: "Call the client and obtain it, then upload it below.",
+                  }
+                : null
+            }
+          />
 
           {/* Upload */}
           <div>
             <p className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
               Upload document{" "}
               <span className="normal-case tracking-normal text-muted-foreground/70">
-                (optional)
+                {needsFile ? "(required)" : "(optional)"}
               </span>
             </p>
 
@@ -379,9 +317,14 @@ function RequirementRow({
             </div>
           )}
 
+          {needsFile && !file && (
+            <p className="text-xs text-muted-foreground">
+              Upload the document to mark this resolved.
+            </p>
+          )}
           <Button
             onClick={() => !pending && resolveMutation.mutate()}
-            disabled={pending}
+            disabled={pending || (needsFile && !file)}
             className="bg-gradient-to-br from-emerald-500 to-emerald-600 font-semibold text-primary-foreground shadow-[0_0_16px_rgba(16,185,129,0.25)] hover:brightness-110 active:scale-95"
           >
             {pending ? (

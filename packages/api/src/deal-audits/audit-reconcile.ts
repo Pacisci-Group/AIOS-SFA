@@ -20,6 +20,12 @@ export interface ReconcileAuditsResult {
   countersSynced: number;
   /** Roll-ups migrated off the retired `result` field. */
   statusesHealed: number;
+  /**
+   * `Not Submitted` audits with nothing for the producer to provide, handed to
+   * the reviewer (PAC-106) — the rule `AuditGenerationService` applies to a
+   * new sale.
+   */
+  autoSubmitted: number;
 }
 
 /**
@@ -81,6 +87,7 @@ export async function reconcileDealAudits<
     assigneesSet: 0,
     countersSynced: 0,
     statusesHealed: 0,
+    autoSubmitted: 0,
   };
 
   result.statusesHealed = await healRetiredResultField(
@@ -132,8 +139,39 @@ export async function reconcileDealAudits<
       }
     }
 
-    await syncAuditCounters(itemModel, dealAuditModel, agencyId, audit._id);
+    const counters = await syncAuditCounters(
+      itemModel,
+      dealAuditModel,
+      agencyId,
+      audit._id,
+    );
     result.countersSynced++;
+
+    /*
+     * Nothing for the producer to provide → with the reviewer (PAC-106). A
+     * migrated audit of only manager-only items would otherwise sit at
+     * `Not Submitted`, off the producer's board and waiting on a submit nobody
+     * will click. Guarded on the status, so a re-run is a no-op.
+     */
+    if (counters.producerItemCount === 0) {
+      const flipped = await dealAuditModel.updateOne(
+        { _id: audit._id, auditStatus: DEFAULT_DEAL_AUDIT_STATUS },
+        {
+          $set: {
+            auditStatus: 'Pending',
+            submittedAt: new Date(),
+            submittedById: null,
+          },
+        },
+      );
+      if (flipped.modifiedCount > 0) {
+        await dealModel.updateOne(
+          { _id: dealId },
+          { $set: { dealAuditStatus: 'Pending' } },
+        );
+        result.autoSubmitted++;
+      }
+    }
   }
 
   return result;

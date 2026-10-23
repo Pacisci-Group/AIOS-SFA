@@ -46,8 +46,11 @@ const OBJECT_ID = /^[a-f0-9]{24}$/i;
 
 /** Why "Add policy" is not offered, in the producer's terms. */
 const BLOCKED_REASONS: Record<SoldDealAddPoliciesBlock, string> = {
+  // Approved, or submitted by a person and with the manager (PAC-106). A
+  // sent-back audit, or one the system submitted, stays open — Fix it on the
+  // producer's board leads here.
   audit_submitted:
-    "This sale's audit has already been submitted for review, so no more policies can be added to it.",
+    "This sale's audit has been approved or is with a reviewer, so no more policies can be added to it. If something needs changing, ask your manager to send the audit back.",
   no_lead:
     "This sale isn't linked to a lead, so policies can't be added to it here.",
   no_household:

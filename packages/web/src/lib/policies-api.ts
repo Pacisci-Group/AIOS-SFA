@@ -1,4 +1,5 @@
 import type {
+  DocumentDownloadResponse,
   PolicyReplacementChain,
   PolicySearchResult,
   PolicySummary,
@@ -94,4 +95,15 @@ export function updateHouseholdPolicy(
  */
 export function getPolicyHistory(policyId: string) {
   return apiFetch<PolicyReplacementChain>(`${BASE}/${policyId}/history`);
+}
+
+/**
+ * `GET /policies/:id/new-business-application/download` — the signed
+ * application the Sold form uploaded, inline-signed for the Deal Audit page's
+ * drawer (PAC-106). Fetched when the drawer opens: the URL expires.
+ */
+export function getNbaDocumentUrl(policyId: string) {
+  return apiFetch<DocumentDownloadResponse>(
+    `${BASE}/${encodeURIComponent(policyId)}/new-business-application/download`,
+  );
 }

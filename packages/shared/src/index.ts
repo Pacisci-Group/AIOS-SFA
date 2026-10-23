@@ -11,6 +11,7 @@ export * from './domain/carrier-appointment';
 export * from './domain/chargeback';
 export * from './domain/contact';
 export * from './domain/deal-audit';
+export * from './domain/deal-audit-review';
 export * from './domain/google-address';
 export * from './domain/hot-lead';
 export * from './domain/household-membership';

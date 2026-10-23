@@ -40,7 +40,7 @@ JWT auth + native forms.
 
 | Package | State |
 |---|---|
-| `packages/web` | Auth + **permission-management pages wired to the API**; the **Producer Dashboard**, the **Owner view** (PAC-135) and the **Manager view** (PAC-139) are live — the Command Center and Service Dashboard still render **hard-coded mock data** |
+| `packages/web` | Auth + **permission-management pages wired to the API**; the **Producer Dashboard**, the **Owner view** (PAC-135), the **Manager view** (PAC-139) and the manager's **Deal Audits** queue + page (PAC-106) are live — the Command Center and Service Dashboard still render **hard-coded mock data** |
 | `packages/api` | Full **permission/multi-tenancy spine** + **Mongoose schemas for all ~22 domain collections** + a **SmartSuite→Mongo migration**; the HTTP **feature controllers are still stubs** returning `{ status: 'ready' }` (real query services/DTOs not wired yet) |
 | `packages/shared` | Source of truth for module keys & permissions |
 
@@ -192,6 +192,14 @@ temperature/aging that aren't first-class in legacy payloads. See
   dimensions (line, carrier) unwind `lines[]`, and `linesPrefix` gained an
   opt-in `carrier` line field. The web page is the first to chart anything:
   shadcn `chart` (recharts) over the validated `--chart-*` tokens.
+- `docs/plans/pac-106-deal-audit-review-implementation-plan.md` — the manager's
+  side of the deal audit (PAC-106): the Deal Audits queue (`/deal-audits`), the
+  Deal Audit page (`/deal-audits/:dealId`) with a Pass / Fail per item, Approve
+  (every item passed) and Send back (`request_changes` → `Fail`, the
+  `audit.sent_back` notification), and the producer's red sent-back card with
+  **Fix it** (B10). Templates and items carry `producerVisible` /
+  `requiresUpload`; the producer's board counts only their items, and an audit
+  with none submits itself. §9 records what changed while building it.
 - `docs/plans/pac-159-business-dates-implementation-plan.md` — business dates
   (PAC-159): `soldDateYmd` / `quoteDateYmd` are removed; every business date is a
   UTC instant, bucketed in the agency zone at read time through one
@@ -289,5 +297,14 @@ whenever you work under `packages/web`.
 - **Changes to data or indexes that already exist go in `packages/api/migrations/`** — the versioned migrate-mongo setup (`npm run db:migrate:create -- <description>`). Each file runs once per database, in filename order, recorded in `migrations_changelog`, and **the API applies pending ones at startup** before it binds a port, so a deploy migrates itself. Read `packages/api/migrations/README.md` first; the short version is that applied migrations are immutable (fix a mistake with a *new* one), they use the raw `db` handle and never a Mongoose model (importing a schema fires `autoIndex` and races the migration), and they must be idempotent because a failure is not recorded and retries from the top. Do **not** write another one-off `src/migration/backfill/`-style script — that pattern is what this replaces. Note `src/migration/` is a *different thing*: the one-time SmartSuite→Mongo data import for bringing up an empty database.
 - **Changing the *options* of an existing index is the case that most often needs one.** Mongoose's `autoIndex` only creates indexes that are missing — it never rebuilds one whose options changed. Editing the schema therefore fixes only collections created *afterwards*, and silently leaves existing ones on the old definition (this is how the `agencyId + legacySmartSuiteId` dedupe index stayed `sparse` on three collections after being corrected to a partial filter, breaking lead creation with E11000). Discover affected collections by index name rather than hard-coding them (which collections are stale depends on when each was created, so it differs per environment), and check for conflicting data *before* dropping — rebuilding a unique index over real duplicates fails, and failing after the drop leaves no uniqueness at all. `git log -- packages/api/src/migration/backfill/fix-legacy-dedupe-indexes.ts` has a worked example of the logic (the script itself was deleted once production had no database old enough to need it); the logic is what to reuse, in a migration file rather than a standalone script.
 - **`createdBy` / `updatedBy` are stamped for you — except on `bulkWrite`.** `authorshipPlugin` (`src/common/mongo/authorship.plugin.ts`) is registered connection-wide and fills both fields from the request context for `save()`/`create()`, `updateOne`, `updateMany`, `findOneAndUpdate` and `insertMany` on every schema extending `TenantRecord`. **`Model.bulkWrite()` bypasses Mongoose middleware entirely**, so a bulk call site that should record an author must spread `authorshipForInsert()` into the document itself — see `AuditGenerationService.buildItem`. Writes with no request context (migration, seeds, the worker) leave both null, which reads as "system"; never mint a placeholder user id, and never backfill.
+- **An audit item has two truths — never collapse them** (PAC-106). The producer's
+  `isResolved` / `notes` / attachments are a *claim*; the manager's `reviewVerdict` /
+  `reviewNote` is the *verification*, and Approve reads only the verdict. Which items are
+  the producer's is `isProducerActionable` (`producerVisible !== false`, or the manager
+  failed it) — in shared, with its Mongo twin `IS_PRODUCER_ACTIONABLE` unit-tested equal.
+- **"Management only" is `@RequirePermissions(<module>:…, management:read)`** — an
+  AND-set, and handler-level metadata *replaces* the controller's, so list the module
+  permission again. `management:read` is the capability; never a role name. The web side
+  is `canAll([...])` (`NavItem.allOf`, `RequirePermission permission + anyOf`).
 - Run each package's `lint` (`npm run lint -w @sfa/api` / `-w @sfa/web`) before finishing.
 - Prefer real Mongoose schemas + services over extending the mock data / stubs when wiring a dashboard.

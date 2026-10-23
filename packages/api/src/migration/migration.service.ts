@@ -27,6 +27,7 @@ import { HouseholdMember } from '../households/schemas/household-member.schema';
 import { Household } from '../households/schemas/household.schema';
 import { Lead } from '../leads/schemas/lead.schema';
 import { auditItemDueAt } from '../audit-generation/audit-due';
+import { auditItemFlagsForName } from '../audit-generation/audit-visibility';
 import { normalizePolicyNumber } from '../policies/policy-number';
 import { businessDateInstant } from '../common/dates/business-dates';
 import { QuoteRecap } from '../quote-recaps/schemas/quote-recap.schema';
@@ -2028,6 +2029,17 @@ export class MigrationService {
           required: toBool(rec[DEAL_AUDIT_ITEM_FIELDS.required]),
           blocking: toBool(rec[DEAL_AUDIT_ITEM_FIELDS.blocking]),
           applicable: toBool(rec[DEAL_AUDIT_ITEM_FIELDS.applicable]),
+          /*
+           * Who sees it (PAC-106). A migrated item has no `templateId`, so by
+           * name — and stamped here rather than left to the versioned
+           * migration, which has already been recorded as run by the time an
+           * import fills a fresh database.
+           */
+          ...auditItemFlagsForName(
+            itemCode
+              ? (DEAL_AUDIT_ITEM_NAME_LABELS[itemCode] ?? itemCode)
+              : undefined,
+          ),
           clientName,
           producerName,
           producerId: deal?.producerId,
@@ -2283,7 +2295,8 @@ export class MigrationService {
       `Deal audits: ${outcome.auditsCreated} roll-ups created, ` +
         `${outcome.itemsLinked} items linked, ${outcome.assigneesSet} assignees set, ` +
         `${outcome.statusesHealed} statuses healed, ` +
-        `${outcome.countersSynced} counter sets synced`,
+        `${outcome.countersSynced} counter sets synced, ` +
+        `${outcome.autoSubmitted} with no producer items submitted for review`,
     );
   }
 
@@ -2311,12 +2324,15 @@ export class MigrationService {
         continue;
       }
       const categoryCode = selectCode(rec[AUDIT_TEMPLATE_FIELDS.category]);
+      const name = toText(rec[AUDIT_TEMPLATE_FIELDS.name]);
       await this.persist(
         this.auditTemplateModel,
         ctx,
         legacyId,
         {
-          name: toText(rec[AUDIT_TEMPLATE_FIELDS.name]),
+          name,
+          // Who sees its items (PAC-106) — SmartSuite has no such column.
+          ...auditItemFlagsForName(name),
           category: categoryCode
             ? (DEAL_AUDIT_CATEGORY_LABELS[categoryCode] ?? categoryCode)
             : undefined,

@@ -1,4 +1,4 @@
-import { ModuleKey } from "@sfa/shared";
+import { ModuleKey, modulePermission } from "@sfa/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { AvailabilityBadge } from "@/components/common/AvailabilityBadge";
@@ -48,7 +48,8 @@ import { cn } from "@/lib/utils";
  *
  * The mockup's "Pending Action Items" ("Follow up: quote expiring", …) were
  * fixtures for a to-do list that never existed; the open items are the real
- * thing. Each opens the household until the Deal Audit page ships (PAC-106).
+ * thing. Each opens its Deal Audit page (PAC-106), or the household for
+ * someone who cannot open that page.
  */
 export function ProducerDrawer({
   producerId,
@@ -204,11 +205,19 @@ function PipelineItem({ lead }: { lead: ProducerPipelineLead }) {
 }
 
 function OpenItem({ item }: { item: ProducerOpenAuditItem }) {
-  const { canRead } = usePermissions();
+  const { canRead, canAll } = usePermissions();
+  const to = canAll([
+    modulePermission(ModuleKey.DealAudits, "read"),
+    modulePermission(ModuleKey.Management, "read"),
+  ])
+    ? `/deal-audits/${item.dealId}`
+    : item.householdId && canRead(ModuleKey.Clients)
+      ? `/clients/${item.householdId}`
+      : null;
   const name =
-    item.householdId && canRead(ModuleKey.Clients) ? (
+    to ? (
       <Link
-        to={`/clients/${item.householdId}`}
+        to={to}
         className="truncate font-medium text-foreground underline-offset-4 hover:underline"
       >
         {item.clientName}

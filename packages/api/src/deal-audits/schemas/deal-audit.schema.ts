@@ -42,6 +42,28 @@ export class AuditOwnerRef {
 export const AuditOwnerRefSchema = SchemaFactory.createForClass(AuditOwnerRef);
 
 /**
+ * The marker a send-back leaves on the audit (PAC-106 §4) — "sent back by
+ * <manager> — <note>" on the producer's card and drawer. Cleared when the
+ * assignee resubmits, so it always describes the *current* round.
+ */
+@Schema({ _id: false })
+export class AuditSentBack {
+  @Prop({ type: Date, required: true })
+  at: Date;
+
+  @Prop({ type: ObjectIdType, ref: 'User', required: true })
+  byId: Types.ObjectId;
+
+  @Prop({ trim: true })
+  note?: string;
+
+  @Prop({ default: 0 })
+  failedItemCount: number;
+}
+
+export const AuditSentBackSchema = SchemaFactory.createForClass(AuditSentBack);
+
+/**
  * Migrated from SmartSuite "The Deal Audits Table" (6941fdb2dc9a6d024fd8caef).
  * The parent audit summary for a deal (rolls up Deal Audit Items -> dealAuditItems).
  *
@@ -76,12 +98,10 @@ export class DealAudit extends TenantRecord {
    * sales record is deliberate (PAC-72 section E).
    */
   /*
-   * Deliberately **unindexed**. Nothing queries by status alone: the board
-   * filters on `openFailedCount`, and the workflow endpoints load one audit by
-   * `dealId`. The two dead `producerId` indexes dropped from `activities` are
-   * the standing reminder that an index for a predicate nobody uses is pure
-   * write cost — add one with the query that needs it (a failed-deals view is
-   * the likely first, in section B item 10).
+   * Not indexed on its own. Since PAC-106 the producer board filters on it
+   * (`Not Submitted` / `Fail` only), which is served by the compound
+   * assignee + status index below; the Deal Audits queue reaches audits
+   * through `deals` and a `{agencyId, dealId}` lookup, never by status alone.
    */
   @Prop({
     type: String,
@@ -120,14 +140,23 @@ export class DealAudit extends TenantRecord {
   @Prop({ type: Date })
   submittedAt?: Date;
 
+  /**
+   * Who handed it to the reviewer. **Null on a `Pending` audit means the
+   * system did** (PAC-106): an audit with nothing for the producer to do is
+   * submitted automatically at generation, so it never waits on them.
+   */
   @Prop({ type: ObjectIdType, ref: 'User' })
-  submittedById?: Types.ObjectId;
+  submittedById?: Types.ObjectId | null;
 
   @Prop({ type: Date })
   reviewedAt?: Date;
 
   @Prop({ type: ObjectIdType, ref: 'User' })
   reviewedById?: Types.ObjectId;
+
+  /** The current send-back round, until the assignee resubmits (PAC-106). */
+  @Prop({ type: AuditSentBackSchema, default: null })
+  sentBack?: AuditSentBack | null;
 
   /*
    * Denormalized roll-ups of this audit's items (PAC-72 section A).
@@ -152,9 +181,32 @@ export class DealAudit extends TenantRecord {
   @Prop({ default: 0 })
   resolvedCount: number;
 
-  /** Still failed and unresolved. Zero means the card leaves the board. */
+  /**
+   * Still failed and unresolved, across **every** item — manager-only ones
+   * included. What the Manager view's "Open Audit Items" sums (PAC-139).
+   */
   @Prop({ default: 0 })
   openFailedCount: number;
+
+  /*
+   * The same roll-ups over the **producer-actionable** items only (PAC-106):
+   * producer-visible ones, plus any manager-only item the manager failed —
+   * see `isProducerActionable`. The hand-off board renders these, because a
+   * producer's "3 of 5 outstanding" must not count Correct Sold Date, which
+   * they never see and cannot act on.
+   */
+
+  /** Producer-actionable items — the board's completion denominator. */
+  @Prop({ default: 0 })
+  producerItemCount: number;
+
+  /** …of which resolved — the numerator. */
+  @Prop({ default: 0 })
+  producerResolvedCount: number;
+
+  /** …of which still open. */
+  @Prop({ default: 0 })
+  producerOpenCount: number;
 
   /** `firstCreatedAt` of the oldest open item — the board's sort key. */
   @Prop({ type: Date })
@@ -219,6 +271,29 @@ DealAuditSchema.index({
   'auditAssignee.id': 1,
   dueAt: 1,
   openFailedCount: 1,
+});
+
+/**
+ * The hand-off board's query since PAC-106: agency + assignee, audits the
+ * producer still has to act on (`Not Submitted` / `Fail`) with at least one
+ * producer-actionable item, oldest open first.
+ *
+ * Equality → sort → range, as above: the two-value `auditStatus` `$in` is
+ * still equality bounds, `oldestOpenAt` the sort, `producerItemCount` the
+ * `> 0` range. The `due` filter is a residual predicate on this already-narrow
+ * set.
+ *
+ * ⚠ Supersedes the two `…openFailedCount` board indexes above, which the board
+ * no longer uses. They are **left in place** rather than edited: this is a new
+ * key pattern, which `autoIndex` builds on its own, whereas dropping theirs is
+ * an index change that needs a migration. Drop them in that cleanup.
+ */
+DealAuditSchema.index({
+  agencyId: 1,
+  'auditAssignee.id': 1,
+  auditStatus: 1,
+  oldestOpenAt: 1,
+  producerItemCount: 1,
 });
 
 /**

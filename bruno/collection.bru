@@ -51,7 +51,10 @@ docs {
   ## Folders
   - **Auth** — login / refresh (public, no bearer).
   - **Deal Audits** — Deals Pending Service Hand-off board (PAC-12, read) +
-    resolve item / presign attachment (PAC-14, write).
+    resolve item / presign attachment (PAC-14, write) + the workflow (PAC-72)
+    + the manager's review (PAC-106): the Deal Audits queue, the Deal Audit
+    page, item verdicts, Approve / Send back. The review half runs as the
+    branch manager (`auditReviewerToken`).
   - **Leaderboard** — Motivation Hub: office total, ranked standings, % to goal
     (PAC-13, read). Its tests assert the privacy contract.
   - **Leads** — Leads list with search, facet filters and pagination

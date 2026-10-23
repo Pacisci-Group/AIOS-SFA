@@ -301,6 +301,8 @@ export class DemoSeedService {
     const crms = team.filter(
       (m) => m.spec.roleSlug === 'csr' || m.spec.roleSlug === 'crm',
     );
+    // The audit reviewers (PAC-106): reviewing is a manager's job now.
+    const managers = team.filter((m) => m.spec.roleSlug === 'branch_manager');
 
     const households = await this.seedHouseholds(ctx, crms, rng);
     const contactsByHousehold = await this.seedContacts(ctx, households, rng);
@@ -324,7 +326,7 @@ export class DemoSeedService {
      * order used to be the other way round, which left the two collections
      * unlinked — invisible until the board tried to read them.
      */
-    const auditIds = await this.seedDealAudits(ctx, deals, crms, rng);
+    const auditIds = await this.seedDealAudits(ctx, deals, crms, managers, rng);
     const dealsWithOpenItems = await this.seedDealAuditItems(
       ctx,
       deals,
@@ -336,6 +338,7 @@ export class DemoSeedService {
       deals,
       auditIds,
       dealsWithOpenItems,
+      managers,
       rng,
     );
     await this.seedInterestedParties(ctx, policies, rng);
@@ -1261,9 +1264,19 @@ export class DemoSeedService {
       if (hasOpen && applicable.length) {
         withOpenItems.add(deal.legacyId);
       }
+      /*
+       * The open item is the first one the **producer** works when there is
+       * one (PAC-106) — their board lists only those, and a demo deal whose
+       * only open item is a manager check would be a card with nothing on
+       * it. Chosen without a draw, so every later draw is unchanged.
+       */
+      const producerIndex = applicable.findIndex(
+        (template) => template.producerVisible,
+      );
+      const openIndex = producerIndex >= 0 ? producerIndex : 0;
       for (let k = 0; k < applicable.length; k++) {
         const template = applicable[k];
-        const isFailed = hasOpen && k === 0; // first item is the open one
+        const isFailed = hasOpen && k === openIndex;
         const isResolved = !isFailed && rng.chance(0.85);
         const status = isFailed ? 'in_progress' : 'complete';
         const updateStatus = isResolved
@@ -1301,6 +1314,15 @@ export class DemoSeedService {
             required: template.required,
             blocking: template.blocking,
             applicable: true,
+            // Copied from the template, as generation does (PAC-106).
+            producerVisible: template.producerVisible,
+            requiresUpload: template.requiresUpload,
+            // `settleAuditStatuses` rules on items once the audit's state is
+            // known; a re-seed starts every item unreviewed again.
+            reviewVerdict: null,
+            reviewNote: null,
+            reviewedAt: null,
+            reviewedById: null,
             clientName: deal.clientName,
             producerName: deal.producer.fullName,
             producerId: deal.producer.userId,
@@ -1334,6 +1356,7 @@ export class DemoSeedService {
     ctx: Ctx,
     deals: DealRef[],
     crms: TeamMember[],
+    managers: TeamMember[],
     rng: Rng,
   ): Promise<Map<string, Types.ObjectId>> {
     const recent = this.dealsWithAudits(deals);
@@ -1346,10 +1369,15 @@ export class DemoSeedService {
        * stamps on a real sale — "Pat Producer" is the data-rich hero the
        * Producer Dashboard is demoed with, so their board has to fill up.
        *
-       * Reviewer is a CRM, which is the whole point of the two-role split: the
-       * person who gathers the evidence is not the person who signs it off.
+       * Reviewer is the deal's **branch manager** (PAC-106): the person who
+       * gathers the evidence is not the person who signs it off, and signing
+       * off is a manager's job now — a CRM no longer holds the permission.
+       *
+       * The CRM draw stays, unused: it keeps every later draw — and so every
+       * later demo record — where it was.
        */
-      const reviewer = crms.length ? rng.pick(crms) : undefined;
+      if (crms.length) rng.pick(crms);
+      const reviewer = this.managerFor(deal, managers);
       const id = await this.upsert(
         this.dealAuditModel,
         { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
@@ -1395,8 +1423,15 @@ export class DemoSeedService {
     deals: DealRef[],
     auditIds: Map<string, Types.ObjectId>,
     dealsWithOpenItems: Set<string>,
+    managers: TeamMember[],
     rng: Rng,
   ): Promise<void> {
+    const settled: Array<{
+      deal: DealRef;
+      auditId: Types.ObjectId;
+      auditStatus: DealAuditStatus;
+    }> = [];
+
     for (const deal of deals) {
       const auditId = auditIds.get(deal.legacyId);
       if (!auditId) continue;
@@ -1422,6 +1457,7 @@ export class DemoSeedService {
           },
         },
       );
+      settled.push({ deal, auditId, auditStatus });
 
       // The denormalized display copy on the sales record.
       await this.dealModel.updateOne(
@@ -1430,6 +1466,13 @@ export class DemoSeedService {
       );
     }
 
+    // The manager's side (PAC-106), after every draw above so none moves.
+    for (const { deal, auditId, auditStatus } of settled) {
+      await this.settleReview(deal, auditId, auditStatus, managers);
+    }
+    await this.pinSentBackFixture(ctx, settled, managers);
+    await this.pinReadyForReviewFixture(ctx, settled, managers);
+
     await reconcileDealAudits(
       {
         itemModel: this.dealAuditItemModel,
@@ -1437,6 +1480,244 @@ export class DemoSeedService {
         dealModel: this.dealModel,
       },
       ctx.agencyId,
+    );
+  }
+
+  /**
+   * The review fields for one settled audit (PAC-106), so the Deal Audit page
+   * and the producer's board have every state to show:
+   *
+   * - **Pass** — every item passed by the manager, and so resolved: Approve
+   *   needs every item passed, and an approved audit with unverified items
+   *   would be a state the app cannot reach.
+   * - **Pending** — submitted by the producer (a person: `submittedById`), the
+   *   resolved producer items carrying a note, nothing ruled on yet.
+   * - **Fail** — sent back: the open item failed with the manager's note, the
+   *   rest passed, and the `sentBack` marker the red card reads.
+   * - **Not Submitted** — untouched; `reconcileDealAudits` then submits the
+   *   ones with nothing for the producer to provide.
+   *
+   * No storage writes: the seed uploads no files, so evidence lists are empty
+   * and the "no document on file" states are what a demo shows.
+   */
+  private async settleReview(
+    deal: DealRef,
+    auditId: Types.ObjectId,
+    auditStatus: DealAuditStatus,
+    managers: TeamMember[],
+  ): Promise<void> {
+    const manager = this.managerFor(deal, managers);
+    const reviewedById = manager?.userId ?? null;
+    const submittedAt = this.addDays(deal.occurredAt, 2);
+    const reviewedAt = this.addDays(deal.occurredAt, 3);
+    const items = { dealAuditId: auditId };
+
+    if (auditStatus === 'Pass') {
+      await this.dealAuditItemModel.updateMany(items, {
+        $set: {
+          isResolved: true,
+          updateStatus: 'complete',
+          updateStatusLabel: 'Verified - Complete',
+          reviewVerdict: 'pass',
+          reviewedAt,
+          reviewedById,
+        },
+      });
+    }
+    if (auditStatus === 'Pending') {
+      await this.dealAuditItemModel.updateMany(
+        { ...items, producerVisible: true, isResolved: true },
+        { $set: { notes: 'Confirmed with the client; document requested.' } },
+      );
+    }
+    if (auditStatus === 'Fail') {
+      await this.dealAuditItemModel.updateMany(
+        { ...items, isFailed: true, isResolved: false },
+        {
+          $set: {
+            reviewVerdict: 'fail',
+            reviewNote: 'The document on file does not match the application.',
+            reviewedAt,
+            reviewedById,
+          },
+        },
+      );
+      // Everything else passed — and a pass resolves the item, as the
+      // verdict endpoint's does.
+      await this.dealAuditItemModel.updateMany(
+        { ...items, reviewVerdict: null },
+        {
+          $set: {
+            isResolved: true,
+            updateStatus: 'complete',
+            updateStatusLabel: 'Verified - Complete',
+            reviewVerdict: 'pass',
+            reviewedAt,
+            reviewedById,
+          },
+        },
+      );
+    }
+
+    const failedItemCount =
+      auditStatus === 'Fail'
+        ? await this.dealAuditItemModel.countDocuments({
+            ...items,
+            reviewVerdict: 'fail',
+          })
+        : 0;
+    await this.dealAuditModel.updateOne(
+      { _id: auditId },
+      {
+        $set: {
+          submittedAt: auditStatus === 'Not Submitted' ? null : submittedAt,
+          submittedById:
+            auditStatus === 'Not Submitted' ? null : deal.producer.userId,
+          reviewedAt:
+            auditStatus === 'Pass' || auditStatus === 'Fail'
+              ? reviewedAt
+              : null,
+          sentBack:
+            auditStatus === 'Fail' && reviewedById
+              ? {
+                  at: reviewedAt,
+                  byId: reviewedById,
+                  note: 'Please fix the items marked failed and resubmit.',
+                  failedItemCount,
+                }
+              : null,
+        },
+      },
+    );
+  }
+
+  /**
+   * One sent-back audit on Pat Producer's board, whatever the draws gave
+   * (PAC-106) — the red card, the manager's note and **Fix it** are the
+   * producer half of the demo, and a dataset without one cannot show them.
+   *
+   * Pat's newest Not Submitted audit with a producer item open is moved to
+   * `Fail`; chosen by date, not drawn.
+   */
+  private async pinSentBackFixture(
+    ctx: Ctx,
+    settled: Array<{
+      deal: DealRef;
+      auditId: Types.ObjectId;
+      auditStatus: DealAuditStatus;
+    }>,
+    managers: TeamMember[],
+  ): Promise<void> {
+    const pat = settled.filter(
+      (entry) => entry.deal.producer.spec.key === 'producer',
+    );
+    if (pat.some((entry) => entry.auditStatus === 'Fail')) return;
+
+    const candidates = pat
+      .filter((entry) => entry.auditStatus === 'Not Submitted')
+      .sort(
+        (a, b) => b.deal.occurredAt.getTime() - a.deal.occurredAt.getTime(),
+      );
+    for (const entry of candidates) {
+      const hasProducerWork = await this.dealAuditItemModel.exists({
+        agencyId: ctx.agencyId,
+        dealAuditId: entry.auditId,
+        producerVisible: true,
+        isFailed: true,
+        isResolved: false,
+      });
+      if (!hasProducerWork) continue;
+
+      await this.dealAuditModel.updateOne(
+        { _id: entry.auditId },
+        { $set: { auditStatus: 'Fail' } },
+      );
+      await this.dealModel.updateOne(
+        { _id: entry.deal.id },
+        { $set: { dealAuditStatus: 'Fail' } },
+      );
+      await this.settleReview(entry.deal, entry.auditId, 'Fail', managers);
+      return;
+    }
+  }
+
+  /**
+   * One audit waiting for the manager, whatever the draws gave (PAC-106) —
+   * the queue's **Perform audit** and the Deal Audit page's Pass / Fail are
+   * the manager half of the demo.
+   *
+   * The newest Not Submitted audit with producer work is resolved and
+   * submitted as its producer would: each producer item resolved with a
+   * note, then `Pending` with that producer as the submitter. Another
+   * producer's audit is preferred, so Pat's board keeps its cards.
+   */
+  private async pinReadyForReviewFixture(
+    ctx: Ctx,
+    settled: Array<{
+      deal: DealRef;
+      auditId: Types.ObjectId;
+      auditStatus: DealAuditStatus;
+    }>,
+    managers: TeamMember[],
+  ): Promise<void> {
+    const waiting = await this.dealAuditModel.exists({
+      agencyId: ctx.agencyId,
+      _id: { $in: settled.map((entry) => entry.auditId) },
+      auditStatus: 'Pending',
+      submittedById: { $ne: null },
+    });
+    if (waiting) return;
+
+    const isPat = (entry: { deal: DealRef }) =>
+      entry.deal.producer.spec.key === 'producer';
+    const candidates = settled
+      .filter((entry) => entry.auditStatus === 'Not Submitted')
+      .sort(
+        (a, b) =>
+          Number(isPat(a)) - Number(isPat(b)) ||
+          b.deal.occurredAt.getTime() - a.deal.occurredAt.getTime(),
+      );
+    for (const entry of candidates) {
+      const resolved = await this.dealAuditItemModel.updateMany(
+        {
+          agencyId: ctx.agencyId,
+          dealAuditId: entry.auditId,
+          producerVisible: true,
+        },
+        {
+          $set: {
+            isResolved: true,
+            updateStatus: 'complete',
+            updateStatusLabel: 'Complete',
+            resolvedAt: this.addDays(entry.deal.occurredAt, 2),
+            resolvedById: entry.deal.producer.userId,
+            notes: 'Confirmed with the client; document requested.',
+          },
+        },
+      );
+      if (resolved.matchedCount === 0) continue;
+
+      await this.dealAuditModel.updateOne(
+        { _id: entry.auditId },
+        { $set: { auditStatus: 'Pending' } },
+      );
+      await this.dealModel.updateOne(
+        { _id: entry.deal.id },
+        { $set: { dealAuditStatus: 'Pending' } },
+      );
+      await this.settleReview(entry.deal, entry.auditId, 'Pending', managers);
+      return;
+    }
+  }
+
+  /** The deal's branch manager, else any — the reviewer of its audit. */
+  private managerFor(
+    deal: DealRef,
+    managers: TeamMember[],
+  ): TeamMember | undefined {
+    return (
+      managers.find((m) => m.branchSlug === deal.producer.branchSlug) ??
+      managers[0]
     );
   }
 

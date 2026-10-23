@@ -1,0 +1,60 @@
+meta {
+  name: Set Item Verdict (Fail)
+  type: http
+  seq: 15
+}
+
+patch {
+  url: {{baseUrl}}/deal-audits/{{reviewItemId}}/verdict
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "verdict": "fail",
+    "note": "The document on file is from 2019 — please upload this year's."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("overturns the earlier pass", function () {
+    const review = res.getBody().item.review;
+    expect(review.verdict).to.equal("fail");
+    expect(review.note).to.contain("2019");
+  });
+
+  test("the audit can now be sent back, not approved", function () {
+    const body = res.getBody();
+    expect(body.counts.failed).to.be.at.least(1);
+    expect(body.canSendBack).to.equal(true);
+    expect(body.canApprove).to.equal(false);
+  });
+}
+
+docs {
+  # PATCH /deal-audits/:itemId/verdict — fail an item (PAC-106)
+
+  Same endpoint as **Set Item Verdict**, ruling `fail` on the item that
+  request just passed — a manager may change their mind until the audit is
+  decided. The note is what the producer sees on the reopened item once the
+  audit is sent back.
+
+  A failed item is what **Review Audit** (`request_changes`) needs: Send back
+  with nothing failed is `409 audit_nothing_failed`. Until then the item is
+  untouched — `isResolved` stays as the producer left it (here `true`, from the
+  pass) — and it reopens only when the audit goes back.
+}

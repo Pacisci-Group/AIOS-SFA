@@ -17,6 +17,10 @@ export interface AuditCounters {
   itemCount: number;
   resolvedCount: number;
   openFailedCount: number;
+  /** The same three over producer-actionable items only (PAC-106). */
+  producerItemCount: number;
+  producerResolvedCount: number;
+  producerOpenCount: number;
   oldestOpenAt: Date | null;
   dueAt: Date | null;
 }
@@ -25,6 +29,9 @@ const EMPTY: AuditCounters = {
   itemCount: 0,
   resolvedCount: 0,
   openFailedCount: 0,
+  producerItemCount: 0,
+  producerResolvedCount: 0,
+  producerOpenCount: 0,
   oldestOpenAt: null,
   dueAt: null,
 };
@@ -40,6 +47,25 @@ const IS_OPEN = {
 };
 
 /**
+ * Whether an item belongs on the producer's hand-off board (PAC-106) — the
+ * aggregation twin of `isProducerActionable` in `@sfa/shared`.
+ *
+ * Producer-visible, **or** failed by the manager: a failed manager-only item
+ * carries the note the producer has to act on. `$ne: false` rather than
+ * `$eq: true` because a pre-PAC-106 item may lack the flag, and absent reads
+ * as visible.
+ *
+ * ⚠ `audit-counters.unit-spec.ts` evaluates this expression against the shared
+ * helper on every combination. Change both or neither.
+ */
+export const IS_PRODUCER_ACTIONABLE = {
+  $or: [
+    { $ne: ['$producerVisible', false] },
+    { $eq: ['$reviewVerdict', 'fail'] },
+  ],
+};
+
+/**
  * Recompute one audit's denormalized counters from its items (PAC-72).
  *
  * These exist so the hand-off board can **sort and paginate deals server-side**
@@ -48,9 +74,10 @@ const IS_OPEN = {
  * percentage needs a stored denominator at all. `Deal.auditItemCount` held a
  * total nothing read, and a resolved count was stored nowhere.
  *
- * Called after generation and after every resolve. Also the recompute for
- * drift: it derives everything from the items, so running it again is always
- * safe and always converges.
+ * Called after generation, after every resolve, and after every review write
+ * (verdict, send-back, resubmission — PAC-106). Also the recompute for drift:
+ * it derives everything from the items, so running it again is always safe and
+ * always converges.
  *
  * A single aggregation rather than four `countDocuments` calls — this runs on
  * the resolve path, which a user is waiting on.
@@ -74,6 +101,25 @@ export async function syncAuditCounters<
           $sum: { $cond: [{ $eq: ['$isResolved', true] }, 1, 0] },
         },
         openFailedCount: { $sum: { $cond: [IS_OPEN, 1, 0] } },
+        producerItemCount: {
+          $sum: { $cond: [IS_PRODUCER_ACTIONABLE, 1, 0] },
+        },
+        producerResolvedCount: {
+          $sum: {
+            $cond: [
+              {
+                $and: [IS_PRODUCER_ACTIONABLE, { $eq: ['$isResolved', true] }],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        producerOpenCount: {
+          $sum: {
+            $cond: [{ $and: [IS_PRODUCER_ACTIONABLE, IS_OPEN] }, 1, 0],
+          },
+        },
         /*
          * `$min` skips nulls, so the `$cond`'s null branch removes resolved
          * items from consideration rather than dragging the minimum to
@@ -100,6 +146,9 @@ export async function syncAuditCounters<
         itemCount: rows[0].itemCount,
         resolvedCount: rows[0].resolvedCount,
         openFailedCount: rows[0].openFailedCount,
+        producerItemCount: rows[0].producerItemCount,
+        producerResolvedCount: rows[0].producerResolvedCount,
+        producerOpenCount: rows[0].producerOpenCount,
         oldestOpenAt: rows[0].oldestOpenAt ?? null,
         dueAt: rows[0].dueAt ?? null,
       }

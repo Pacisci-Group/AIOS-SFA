@@ -59,6 +59,27 @@ docs {
   | Pass          | ✅ | a pass found to be wrong must be correctable |
   | Pending       | ❌ `409` | already with the reviewer |
 
+  ### A new round after a send-back (PAC-106)
+
+  Submitting a sent-back (`Fail`) audit starts a new round of review:
+  - every item the manager **failed** has its verdict and note cleared — the
+    manager rules again on the corrected evidence;
+  - every item the manager **passed** keeps its pass — it was checked against
+    a document that has not changed, and the manager can still overturn it;
+  - the audit's `sentBack` marker is cleared, so the producer's red card goes.
+
+  The audit then leaves the producer's board (it is with the manager) and
+  appears on the manager's **List Review Queue** as `Pending`.
+
+  ### Automatic submission
+
+  An audit generated with **no producer items** (every item manager-only — a
+  plain Auto sale) is submitted for the producer at generation: `Pending`,
+  `submittedById: null`, an `audit_submitted` entry reading "Submitted
+  automatically". If a policy added later (PAC-104) brings a producer item, a
+  *system*-submitted audit goes back to `Not Submitted`; a person's submission
+  never does.
+
   ⚠ Submitting is **not** restricted to the named assignee. An owner or manager
   acting on their behalf is legitimate and common; `submittedById` records who
   actually did it, and the meaningful separation is enforced on **review**.
