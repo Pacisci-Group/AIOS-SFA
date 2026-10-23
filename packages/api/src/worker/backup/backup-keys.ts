@@ -14,8 +14,9 @@
  * | `pre-deploy/` | a deploy's request | the bucket's lifecycle rule (Terraform) |
  *
  * The timestamp is compact UTC (`20261025T080012Z`), so within a prefix
- * **lexicographic order is chronological order**: rotation is a sort, never a
- * date parse that could misread a key.
+ * **lexicographic order is chronological order**. Rotation sorts on the key and
+ * reads the instant back only from a key that has already matched the exact
+ * archive pattern.
  */
 
 export type SnapshotKind = 'scheduled' | 'manual' | 'pre-deploy';
@@ -37,7 +38,19 @@ export const ARCHIVE_CONTENT_TYPE = 'application/gzip';
  * hand-copied file, a half-renamed key — is not ours to delete, so rotation
  * matches this and nothing looser.
  */
-const SCHEDULED_ARCHIVE = /^weekly\/\d{8}T\d{6}Z\.archive\.gz$/;
+const SCHEDULED_ARCHIVE =
+  /^weekly\/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.archive\.gz$/;
+
+/**
+ * Scheduled archives closer together than this are the same week.
+ *
+ * The cron fires exactly seven days apart, so two `weekly/` archives within six
+ * days of each other mean the week was run twice — a dashboard Rerun or Replay
+ * of a weekly run, which starts again from the cron's timer event and is
+ * indistinguishable from the cron itself. Without this, each such run would
+ * count as a restore point and push a real older week out of rotation.
+ */
+export const WEEKLY_SLOT_MS = 6 * 24 * 60 * 60_000;
 
 /** Labels long enough to say what they guard, short enough to read in a list. */
 const LABEL_MAX_LENGTH = 40;
@@ -89,27 +102,54 @@ export function isScheduledArchiveKey(key: string): boolean {
   return SCHEDULED_ARCHIVE.test(key);
 }
 
+/** When a scheduled archive was taken, from its key; `null` for any other key. */
+export function scheduledArchiveTime(key: string): number | null {
+  const m = SCHEDULED_ARCHIVE.exec(key);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m.map(Number);
+  return Date.UTC(y, mo - 1, d, h, mi, s);
+}
+
 /**
- * Which scheduled archives to delete so that `keep` remain.
+ * Which scheduled archives to delete so that one per week, for the newest
+ * `keep` weeks, remains.
  *
- * `protect` is the archive the run just wrote. It always survives and counts
- * toward `keep` — even if it sorts oldest, which a skewed clock could make it —
- * so rotation can never delete the one archive it has just proved exists.
- * Everything that is not a scheduled archive is ignored, never returned.
+ * Walks the archives newest first and keeps each one that is not within
+ * {@link WEEKLY_SLOT_MS} of an archive already kept, until `keep` are kept. So
+ * the normal case is exactly "the new archive and the three before it, oldest
+ * deleted", and a re-run week costs its own earlier archive — never an older
+ * week's.
  *
- * Returned oldest-last is not promised; callers delete every key returned.
+ * `protect` is the archive the run just wrote. It is considered first, always
+ * survives and counts toward `keep` — even if it sorts oldest, which a skewed
+ * clock could make it — so rotation can never delete the one archive it has
+ * just proved exists. Everything that is not a scheduled archive is ignored,
+ * never returned. Callers delete every key returned, in any order.
  */
 export function selectKeysToDelete(
   keys: readonly string[],
   keep: number,
   { protect }: { protect?: string } = {},
 ): string[] {
-  const protectedPresent = protect !== undefined && keys.includes(protect);
-  const others = keys
-    .filter(isScheduledArchiveKey)
-    .filter((key) => key !== protect)
-    .sort()
-    .reverse(); // newest first
-  const othersToKeep = Math.max(0, keep - (protectedPresent ? 1 : 0));
-  return others.slice(othersToKeep);
+  const archives = keys.filter(isScheduledArchiveKey);
+  const ordered = [
+    ...(protect !== undefined && archives.includes(protect) ? [protect] : []),
+    ...archives
+      .filter((key) => key !== protect)
+      .sort()
+      .reverse(), // newest first
+  ];
+
+  const kept: number[] = [];
+  const doomed: string[] = [];
+  for (const key of ordered) {
+    const at = scheduledArchiveTime(key) as number;
+    const sameWeek = kept.some((t) => Math.abs(t - at) < WEEKLY_SLOT_MS);
+    if (key !== protect && (kept.length >= keep || sameWeek)) {
+      doomed.push(key);
+    } else {
+      kept.push(at);
+    }
+  }
+  return doomed;
 }

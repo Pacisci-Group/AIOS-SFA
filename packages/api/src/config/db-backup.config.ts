@@ -36,8 +36,9 @@ export function dbBackupEnabled(raw: string | undefined): boolean {
 export const DEFAULT_DB_BACKUP_KEEP = 4;
 
 /**
- * How many scheduled archives survive rotation. Clamped to 1–52: at least the
- * one just written, at most a year of Sundays.
+ * How many weeks of scheduled archives survive rotation — one archive per week
+ * (see `selectKeysToDelete`). Clamped to 1–52: at least the one just written,
+ * at most a year of Sundays.
  */
 export function dbBackupKeep(raw: string | undefined): number {
   return boundedInt(raw, DEFAULT_DB_BACKUP_KEEP, 1, 52);

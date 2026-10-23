@@ -46,9 +46,12 @@ import { inlineStep } from '../helpers/inline-step';
 class CaptureMailTransport extends MailTransport {
   readonly sent: Array<{ message: OutboundMessage; idempotencyKey: string }> =
     [];
+  /** Every send attempted, including the ones that failed. */
+  readonly attempts: OutboundMessage[] = [];
   failWith: Error | null = null;
 
   send(message: OutboundMessage, idempotencyKey: string): Promise<SendResult> {
+    this.attempts.push(message);
     if (this.failWith) return Promise.reject(this.failWith);
     this.sent.push({ message, idempotencyKey });
     return Promise.resolve({
@@ -63,6 +66,8 @@ class FakeMongoDumpRunner {
   bytes = 1234;
   failWith: Error | null = null;
   versionError: Error | null = null;
+  /** When set, a dump waits for it — a dump that is still running. */
+  hold: Promise<void> | null = null;
 
   version(): Promise<string> {
     if (this.versionError) return Promise.reject(this.versionError);
@@ -71,6 +76,7 @@ class FakeMongoDumpRunner {
 
   async run(options: MongoDumpOptions): Promise<{ durationMs: number }> {
     this.calls.push(options);
+    if (this.hold) await this.hold;
     if (this.failWith) throw this.failWith;
     await writeFile(options.archivePath, Buffer.alloc(this.bytes, 7));
     return { durationMs: 42_000 };
@@ -85,6 +91,7 @@ class FakeMongoDumpRunner {
     this.bytes = 1234;
     this.failWith = null;
     this.versionError = null;
+    this.hold = null;
   }
 }
 
@@ -160,7 +167,45 @@ const MANUAL_EVENT = {
 const RUN: DbBackupRun = { runId: 'run-1', attempt: 0, maxAttempts: 3 };
 
 const SCHEDULED_KEY = /^weekly\/\d{8}T\d{6}Z\.archive\.gz$/;
-const weekly = (iso: string) => buildArchiveKey('scheduled', new Date(iso));
+const WEEK_MS = 7 * 24 * 60 * 60_000;
+/**
+ * A weekly archive from `n` weeks before now. Relative, because rotation keeps
+ * one archive per week counted back from the archive the run writes now.
+ */
+const weeksAgo = (n: number) =>
+  buildArchiveKey('scheduled', new Date(Date.now() - n * WEEK_MS));
+
+/**
+ * A `step` with Inngest's memoisation: a step that has completed returns its
+ * stored (JSON round-tripped) result instead of running again; one still in
+ * progress does not. `stopAfter` ends the "request" after that step completes,
+ * the way a lost response does — the work is done and stored, the caller never
+ * hears.
+ */
+function memoStep(memo = new Map<string, unknown>()) {
+  return (stopAfter?: string) => ({
+    run: async <T>(
+      id: string,
+      work: () => Promise<T> | T,
+    ): Promise<unknown> => {
+      if (memo.has(id)) return memo.get(id);
+      const result: unknown = JSON.parse(
+        JSON.stringify((await work()) ?? null),
+      );
+      memo.set(id, result);
+      if (id === stopAfter) throw new Error('response lost');
+      return result;
+    },
+  });
+}
+
+async function until(condition: () => boolean, timeoutMs = 2_000) {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 /** The env this suite sets, restored afterwards: `--runInBand` shares one process. */
 const ENV_KEYS = [
@@ -231,6 +276,7 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     delete process.env.DB_BACKUP_KEEP;
 
     mail.sent.length = 0;
+    mail.attempts.length = 0;
     mail.failWith = null;
     dumper.reset();
     store.reset();
@@ -307,13 +353,7 @@ describe('DbBackupSnapshotFn (e2e)', () => {
   });
 
   it('keeps the newest four weekly archives and touches nothing else', async () => {
-    const old = [
-      weekly('2026-09-20T08:00:00Z'),
-      weekly('2026-09-27T08:00:00Z'),
-      weekly('2026-10-04T08:00:00Z'),
-      weekly('2026-10-11T08:00:00Z'),
-      weekly('2026-10-18T08:00:00Z'),
-    ];
+    const old = [5, 4, 3, 2, 1].map(weeksAgo);
     old.forEach((key) => store.seed(key));
     store.seed('weekly/README.txt');
     store.seed('manual/20250101T000000Z-ancient.archive.gz');
@@ -338,10 +378,95 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     expect(text).toContain(old[1]);
   });
 
+  /**
+   * A dashboard Rerun of a weekly run starts again from the cron's own event,
+   * so it is a scheduled snapshot. It must replace this week's archive, not
+   * push out the oldest week.
+   */
+  it("replaces this week's archive on a re-run instead of an older week", async () => {
+    const earlierToday = buildArchiveKey(
+      'scheduled',
+      new Date(Date.now() - 2 * 60 * 60_000),
+    );
+    const older = [3, 2, 1].map(weeksAgo);
+    [...older, earlierToday].forEach((key) => store.seed(key));
+    const { step } = inlineStep();
+
+    const result = await fn.handle(CRON_EVENT, step, RUN);
+
+    expect(result).toMatchObject({ status: 'ok', deleted: 1 });
+    expect(store.objects.has(earlierToday)).toBe(false);
+    for (const key of older) expect(store.objects.has(key)).toBe(true);
+  });
+
+  /**
+   * The case the in-flight join exists for: the snapshot step's response is
+   * lost mid-dump, and Inngest retries it onto the same worker. The retry must
+   * wait for that dump — not start a second one, and not fail.
+   */
+  it('joins the dump still running when the snapshot step is retried', async () => {
+    const steps = memoStep();
+    let release: () => void = () => undefined;
+    dumper.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const lost = fn.handle(CRON_EVENT, steps('snapshot'), RUN);
+    await until(() => dumper.calls.length === 1);
+    const retry = fn.handle(CRON_EVENT, steps(), { ...RUN, attempt: 1 });
+    release();
+
+    await expect(lost).rejects.toThrow('response lost');
+    const result = await retry;
+    expect(dumper.calls).toHaveLength(1);
+    expect(result).toMatchObject({ status: 'ok', bytes: 1234 });
+    expect(store.objects.size).toBe(1);
+    expect(mail.sent).toHaveLength(1);
+  });
+
+  /**
+   * The provider refuses an idempotency key reused with a different body, so a
+   * retried report must render identically however much later it runs.
+   */
+  it('retries the report with exactly the same payload', async () => {
+    const steps = memoStep();
+    mail.failWith = new Error('Resend timed out');
+    await expect(fn.handle(CRON_EVENT, steps(), RUN)).rejects.toThrow(
+      'notify: Resend timed out',
+    );
+
+    jest.useFakeTimers({
+      now: Date.now() + 10 * 60_000,
+      doNotFake: [
+        'nextTick',
+        'queueMicrotask',
+        'setImmediate',
+        'clearImmediate',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'hrtime',
+        'performance',
+      ],
+    });
+    try {
+      mail.failWith = null;
+      await fn.handle(CRON_EVENT, steps(), { ...RUN, attempt: 1 });
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(mail.attempts).toHaveLength(2);
+    expect(mail.attempts[1].html).toBe(mail.attempts[0].html);
+    expect(mail.attempts[1].text).toBe(mail.attempts[0].text);
+    expect(dumper.calls).toHaveLength(1);
+  });
+
   it('honours DB_BACKUP_KEEP', async () => {
     process.env.DB_BACKUP_KEEP = '1';
-    store.seed(weekly('2026-10-11T08:00:00Z'));
-    store.seed(weekly('2026-10-18T08:00:00Z'));
+    store.seed(weeksAgo(2));
+    store.seed(weeksAgo(1));
     const { step } = inlineStep();
 
     const result = await fn.handle(CRON_EVENT, step, RUN);
@@ -353,13 +478,7 @@ describe('DbBackupSnapshotFn (e2e)', () => {
 
   /** A listing we cannot see our own write in is not one to delete from. */
   it('deletes nothing when the listing does not show the new archive', async () => {
-    const seeded = [
-      weekly('2026-09-20T08:00:00Z'),
-      weekly('2026-09-27T08:00:00Z'),
-      weekly('2026-10-04T08:00:00Z'),
-      weekly('2026-10-11T08:00:00Z'),
-      weekly('2026-10-18T08:00:00Z'),
-    ];
+    const seeded = [5, 4, 3, 2, 1].map(weeksAgo);
     seeded.forEach((key) => store.seed(key));
     store.hideFromListing = (key) => !seeded.includes(key);
     const { step } = inlineStep();
@@ -374,13 +493,7 @@ describe('DbBackupSnapshotFn (e2e)', () => {
   });
 
   it('stores a requested snapshot under its reason and never rotates', async () => {
-    const seeded = [
-      weekly('2026-09-20T08:00:00Z'),
-      weekly('2026-09-27T08:00:00Z'),
-      weekly('2026-10-04T08:00:00Z'),
-      weekly('2026-10-11T08:00:00Z'),
-      weekly('2026-10-18T08:00:00Z'),
-    ];
+    const seeded = [5, 4, 3, 2, 1].map(weeksAgo);
     seeded.forEach((key) => store.seed(key));
     const { ran, step } = inlineStep();
 
@@ -435,7 +548,9 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     dumper.failWith = new Error('mongodump exited with code 1: boom');
     const { step } = inlineStep();
 
-    await expect(fn.handle(CRON_EVENT, step, RUN)).rejects.toThrow('boom');
+    await expect(fn.handle(CRON_EVENT, step, RUN)).rejects.toThrow(
+      /^snapshot: mongodump exited with code 1: boom$/,
+    );
 
     expect(store.objects.size).toBe(0);
     expect(mail.sent).toHaveLength(0);
@@ -444,21 +559,57 @@ describe('DbBackupSnapshotFn (e2e)', () => {
 
   it('mails the failure once retries are exhausted', async () => {
     await fn.fail({
-      event: { data: { run_id: 'run-9', event: CRON_EVENT } },
-      error: new Error('mongodump exited with code 1: boom'),
+      event: {
+        ts: Date.parse('2026-10-25T08:15:00Z'),
+        data: { run_id: 'run-9', event: CRON_EVENT },
+      },
+      error: new Error('snapshot: mongodump exited with code 1: boom'),
     });
 
     expect(mail.sent).toHaveLength(1);
     const [{ message, idempotencyKey }] = mail.sent;
     expect(message.subject).toMatch(/^DB backup FAILED/);
     expect(message.text).toContain('weekly database snapshot');
+    expect(message.text).toContain('stored no archive and deleted none');
     expect(message.text).toContain('run-9');
     expect(message.text).toContain('boom');
+    // The failure's own time, not the clock: a retried handler sends the same.
+    expect(message.text).toContain('October 25, 2026');
     expect(idempotencyKey).toBe('db-backup:run-9:failed');
 
     const rows = await messages.find({ templateKey: 'dbBackupFailed' }).lean();
     expect(rows).toHaveLength(1);
     expect(rows[0].agencyId).toBeNull();
+  });
+
+  it('says a run that failed after the upload still stored its archive', async () => {
+    await fn.fail({
+      event: { data: { run_id: 'run-10', event: CRON_EVENT } },
+      error: new Error('rotate: AccessDenied'),
+    });
+
+    expect(mail.sent[0].message.text).toContain(
+      'archive was stored in sfa-test-db-backups',
+    );
+  });
+
+  /** Inngest rejects a request without a reason before the handler runs. */
+  it('reports a rejected request as rejected, not as a failed weekly run', async () => {
+    await fn.fail({
+      event: {
+        data: {
+          run_id: 'run-11',
+          event: { name: 'inngest/function.invoked', data: {} },
+        },
+      },
+      error: new Error(
+        'reason: Invalid option: expected one of "manual"|"pre-deploy"',
+      ),
+    });
+
+    const { message } = mail.sent[0];
+    expect(message.subject).toMatch(/^DB snapshot request REJECTED/);
+    expect(message.text).not.toContain('weekly');
   });
 
   it('refuses to dump, without retrying, when the bucket is not configured', async () => {

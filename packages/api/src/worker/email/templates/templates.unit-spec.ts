@@ -159,6 +159,8 @@ function dbBackupFailedData(
     host: 'app.smithfamily.agency',
     kind: 'scheduled',
     label: null,
+    stage: 'snapshot',
+    bucket: 'sfa-production-db-backups',
     runId: '01JB2Q8W5X3Y4Z6A7B8C9D0E1F',
     error: 'mongodump exited with code 1: <connection refused> & retrying',
     failedAt: '2026-10-25T08:15:00.000Z',
@@ -701,5 +703,40 @@ describe('db backup failed template', () => {
   it('never renders a missing label as "null"', () => {
     const { text } = dbBackupFailedTemplate.render(dbBackupFailedData());
     expect(text).not.toContain('null');
+  });
+
+  /** What the mail may say about the archives depends on where the run stopped. */
+  it('says a failed dump stored and deleted nothing', () => {
+    const { text } = dbBackupFailedTemplate.render(dbBackupFailedData());
+    expect(text).toContain('stored no archive and deleted none');
+  });
+
+  it('says a failed rotation still stored the archive', () => {
+    const { text } = dbBackupFailedTemplate.render(
+      dbBackupFailedData({ stage: 'rotate', error: 'rotate: AccessDenied' }),
+    );
+    expect(text).toContain('archive was stored in sfa-production-db-backups');
+    expect(text).not.toContain('stored no archive');
+  });
+
+  it('says a failed report changed nothing', () => {
+    const { text } = dbBackupFailedTemplate.render(
+      dbBackupFailedData({ stage: 'notify' }),
+    );
+    expect(text).toContain('only the report could not be sent');
+  });
+
+  /** A rejected Invoke or curl is not a failed weekly snapshot. */
+  it('reports a rejected request as a rejected request', () => {
+    const data = dbBackupFailedData({
+      stage: 'request',
+      error: 'reason: Invalid option: expected one of "manual"|"pre-deploy"',
+    });
+    expect(dbBackupFailedTemplate.subject(data)).toBe(
+      'DB snapshot request REJECTED — app.smithfamily.agency',
+    );
+    const { text } = dbBackupFailedTemplate.render(data);
+    expect(text).not.toContain('weekly');
+    expect(text).toContain('No snapshot was attempted');
   });
 });

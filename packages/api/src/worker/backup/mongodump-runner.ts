@@ -59,46 +59,33 @@ export interface MongoDumpOptions {
 export class MongoDumpRunner {
   private readonly logger = new Logger(MongoDumpRunner.name);
 
-  /**
-   * One dump per process. Function-level concurrency stops a second *run*; this
-   * stops a retried step from starting a second dump in the same worker while
-   * an earlier attempt's is still going (its HTTP response was lost, the dump
-   * was not).
-   */
-  private running = false;
-
   /** First line of `mongodump --version`. Throws `ENOENT` if it is not installed. */
   async version(): Promise<string> {
     const { stdout } = await runProcess(['--version'], VERSION_TIMEOUT_MS);
     return stdout.split('\n')[0]?.trim() || 'mongodump (unknown version)';
   }
 
+  /**
+   * One dump. A retried step that lands here while an earlier attempt's dump is
+   * still running joins it in `DbBackupSnapshotFn` rather than calling this
+   * again, so this does not guard against overlap itself.
+   */
   async run(options: MongoDumpOptions): Promise<{ durationMs: number }> {
-    if (this.running) {
-      throw new Error(
-        'A mongodump is already running in this worker; this attempt will be retried.',
-      );
-    }
-    this.running = true;
     const started = Date.now();
-    try {
-      const configPath = join(options.dir, 'mongodump.yaml');
-      await writeFile(configPath, mongoToolsConfigYaml(options.uri), {
-        mode: 0o600,
-      });
-      await runProcess(
-        buildArgs({
-          configPath,
-          archivePath: options.archivePath,
-          numParallelCollections: options.numParallelCollections,
-        }),
-        options.timeoutMs,
-        options.uri,
-      );
-      return { durationMs: Date.now() - started };
-    } finally {
-      this.running = false;
-    }
+    const configPath = join(options.dir, 'mongodump.yaml');
+    await writeFile(configPath, mongoToolsConfigYaml(options.uri), {
+      mode: 0o600,
+    });
+    await runProcess(
+      buildArgs({
+        configPath,
+        archivePath: options.archivePath,
+        numParallelCollections: options.numParallelCollections,
+      }),
+      options.timeoutMs,
+      options.uri,
+    );
+    return { durationMs: Date.now() - started };
   }
 
   /**

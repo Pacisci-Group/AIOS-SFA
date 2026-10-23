@@ -4,6 +4,7 @@ import {
   compactUtc,
   isScheduledArchiveKey,
   safeLabel,
+  scheduledArchiveTime,
   selectKeysToDelete,
 } from './backup-keys';
 
@@ -156,5 +157,65 @@ describe('selectKeysToDelete', () => {
 
   it('keeps keep when the protected key is absent from the listing', () => {
     expect(selectKeysToDelete([w1, w2, w3, w4, w5], 4)).toEqual([w1]);
+  });
+});
+
+describe('scheduledArchiveTime', () => {
+  it('reads the instant back from a scheduled key', () => {
+    expect(scheduledArchiveTime('weekly/20261025T080012Z.archive.gz')).toBe(
+      Date.parse('2026-10-25T08:00:12Z'),
+    );
+  });
+
+  it('is null for anything that is not a scheduled archive', () => {
+    expect(scheduledArchiveTime('weekly/README.txt')).toBeNull();
+    expect(
+      scheduledArchiveTime('manual/20261025T080012Z.archive.gz'),
+    ).toBeNull();
+  });
+});
+
+describe('selectKeysToDelete — one archive per week', () => {
+  const sunday = (iso: string) => weekly(`${iso}T08:00:00Z`);
+  const w2 = sunday('2026-10-04');
+  const w3 = sunday('2026-10-11');
+  const w4 = sunday('2026-10-18');
+  const w5 = sunday('2026-10-25');
+
+  /**
+   * A dashboard Rerun of Sunday's run writes a second archive for the same
+   * week. It must replace that week's earlier archive, not push out W-3 — the
+   * oldest restore point and the only one past DigitalOcean's 7-day window.
+   */
+  it("replaces the same week's earlier archive on a re-run", () => {
+    const rerun = weekly('2026-10-25T10:30:00Z');
+    expect(
+      selectKeysToDelete([w2, w3, w4, w5, rerun], 4, { protect: rerun }),
+    ).toEqual([w5]);
+  });
+
+  it('treats a re-run days later in the week the same way', () => {
+    const thursday = weekly('2026-10-29T09:00:00Z');
+    expect(
+      selectKeysToDelete([w2, w3, w4, w5, thursday], 4, { protect: thursday }),
+    ).toEqual([w5]);
+  });
+
+  it('counts a missed week as a gap, not a duplicate', () => {
+    const fortnightLater = sunday('2026-11-08');
+    expect(
+      selectKeysToDelete([w2, w3, w4, w5, fortnightLater], 4, {
+        protect: fortnightLater,
+      }),
+    ).toEqual([w2]);
+  });
+
+  it('keeps archives just over six days apart as separate weeks', () => {
+    const sixDaysOneMinuteLater = weekly('2026-10-31T08:01:00Z');
+    expect(
+      selectKeysToDelete([w4, w5, sixDaysOneMinuteLater], 4, {
+        protect: sixDaysOneMinuteLater,
+      }),
+    ).toEqual([]);
   });
 });
