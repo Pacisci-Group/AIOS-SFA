@@ -708,10 +708,11 @@ describe('db backup failed template', () => {
   /** What the mail may say about the archives depends on where the run stopped. */
   it('says a failed dump deleted nothing, without claiming nothing was stored', () => {
     const { text } = dbBackupFailedTemplate.render(dbBackupFailedData());
-    expect(text).toContain('The final attempt stored no archive');
+    expect(text).toContain('did not confirm that an archive was stored');
     expect(text).toContain('nothing was deleted');
-    // An earlier attempt whose response was lost may have stored one.
-    expect(text).toContain('An earlier attempt');
+    // An attempt whose response was lost may have stored one.
+    expect(text).toContain('may still have stored one');
+    expect(text).not.toContain('stored no archive');
   });
 
   it('says a run that failed before dumping stored and deleted nothing', () => {
@@ -722,11 +723,31 @@ describe('db backup failed template', () => {
   });
 
   it('says a failed rotation still stored the archive', () => {
-    const { text } = dbBackupFailedTemplate.render(
-      dbBackupFailedData({ stage: 'rotate', error: 'rotate: AccessDenied' }),
+    const data = dbBackupFailedData({
+      stage: 'rotate',
+      error: 'rotate: AccessDenied',
+    });
+    expect(dbBackupFailedTemplate.subject(data)).toBe(
+      'DB backup stored, rotation FAILED — app.smithfamily.agency',
     );
+    const { text, html } = dbBackupFailedTemplate.render(data);
     expect(text).toContain('archive was stored in sfa-production-db-backups');
     expect(text).not.toContain('stored no archive');
+    expect(html).toContain('archive stored; the rotation failed.');
+  });
+
+  /** The inbox preview line must agree with the subject. */
+  it('previews a failure after the upload as stored', () => {
+    for (const [stage, noun] of [
+      ['notify', 'report'],
+      ['record', 'delivery record'],
+    ] as const) {
+      const { html } = dbBackupFailedTemplate.render(
+        dbBackupFailedData({ stage }),
+      );
+      expect(html).toContain(`archive stored; the ${noun} failed.`);
+      expect(html).not.toContain('snapshot failed.');
+    }
   });
 
   it('says a failed report changed nothing', () => {

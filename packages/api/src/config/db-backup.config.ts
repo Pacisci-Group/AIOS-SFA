@@ -51,13 +51,14 @@ export const DEFAULT_DB_BACKUP_DUMP_TIMEOUT_MINUTES = 45;
 /**
  * How long `mongodump` may run before it is killed, in milliseconds.
  *
- * Clamped to 5–110 minutes. The ceiling stays inside Inngest's two-hour limit
- * on a single step with room left for the upload, which happens in the same
- * step; a dump that is killed fails that attempt rather than outliving it.
+ * Clamped to 5–105 minutes: the ceiling plus the 15 minutes the snapshot step
+ * budgets for the upload that follows (`RETRY_AFTER_MARGIN_MS` in
+ * `db-backup-snapshot.fn.ts`) is Inngest's two-hour limit on a single step. A
+ * dump that is killed fails that attempt rather than outliving it.
  */
 export function dbBackupDumpTimeoutMs(raw: string | undefined): number {
   return (
-    boundedInt(raw, DEFAULT_DB_BACKUP_DUMP_TIMEOUT_MINUTES, 5, 110) * 60_000
+    boundedInt(raw, DEFAULT_DB_BACKUP_DUMP_TIMEOUT_MINUTES, 5, 105) * 60_000
   );
 }
 

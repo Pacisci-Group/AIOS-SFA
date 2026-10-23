@@ -428,9 +428,15 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
         dbBackupDumpTimeoutMs(
           this.config.get<string>('DB_BACKUP_DUMP_TIMEOUT_MINUTES'),
         ) + RETRY_AFTER_MARGIN_MS;
+      // On the last attempt Inngest does not retry whatever the error, so say
+      // that rather than promise a retry that will not come.
+      const lastAttempt = run.attempt + 1 >= run.maxAttempts;
       this.logger.warn(
         `Snapshot ${plan.key}: another snapshot is still dumping in this worker ` +
-          `(${[...this.inFlight.keys()].join(', ')}); retrying in ${Math.round(retryAfterMs / 60_000)} minutes.`,
+          `(${[...this.inFlight.keys()].join(', ')}); ` +
+          (lastAttempt
+            ? 'no attempts left, so this run fails.'
+            : `retrying in ${Math.round(retryAfterMs / 60_000)} minutes.`),
       );
       return Promise.reject(
         new RetryAfterError(

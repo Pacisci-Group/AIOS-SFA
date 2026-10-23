@@ -48,9 +48,11 @@ describe('dbBackupDumpTimeoutMs', () => {
   });
 
   /** The ceiling keeps dump + upload inside Inngest's two-hour step limit. */
-  it('clamps to 5–110 minutes', () => {
+  it('clamps to 5–105 minutes', () => {
     expect(dbBackupDumpTimeoutMs('1')).toBe(5 * 60_000);
-    expect(dbBackupDumpTimeoutMs('600')).toBe(110 * 60_000);
+    // 105 + the step's 15-minute upload margin = Inngest's 2-hour step limit.
+    expect(dbBackupDumpTimeoutMs('600')).toBe(105 * 60_000);
+    expect(dbBackupDumpTimeoutMs('110')).toBe(105 * 60_000);
     expect(dbBackupDumpTimeoutMs('30')).toBe(30 * 60_000);
   });
 });

@@ -38,8 +38,9 @@ resource "digitalocean_spaces_bucket" "backups" {
   # Snapshots requested by hand or by a deploy are not rotated by the worker -
   # only the scheduled ones are - so the bucket ages these out instead.
   #
-  # There is no rule for weekly/: retention there is count-based in the worker,
-  # and the provider requires an expiration on every rule, so one cannot be
+  # There is no rule for weekly/: the worker keeps one archive per schedule week
+  # for the newest DB_BACKUP_KEEP weeks and deletes the rest itself, and the
+  # provider requires an expiration on every rule, so one cannot be
   # added just to abort stale multipart uploads (the worker uploads with a
   # single PUT, so it leaves none).
   lifecycle_rule {

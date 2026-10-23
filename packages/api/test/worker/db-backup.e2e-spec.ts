@@ -614,7 +614,9 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     const [{ message, idempotencyKey }] = mail.sent;
     expect(message.subject).toMatch(/^DB backup FAILED/);
     expect(message.text).toContain('weekly database snapshot');
-    expect(message.text).toContain('The final attempt stored no archive');
+    expect(message.text).toContain(
+      'did not confirm that an archive was stored',
+    );
     expect(message.text).toContain('nothing was deleted');
     expect(message.text).toContain('run-9');
     expect(message.text).toContain('boom');

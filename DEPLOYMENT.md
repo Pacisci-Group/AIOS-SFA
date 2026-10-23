@@ -567,7 +567,7 @@ combination otherwise. See "Database backups" below for what runs.
 |---|---|---|
 | `DB_BACKUP_ENABLED` | `false` | `true` (any case) takes snapshots; empty or `false` is off; anything else fails the preflight |
 | `DB_BACKUP_KEEP` | `4` | Weeks of weekly archives kept, one per week (1–52) |
-| `DB_BACKUP_DUMP_TIMEOUT_MINUTES` | `45` | mongodump is killed after this (5–110) |
+| `DB_BACKUP_DUMP_TIMEOUT_MINUTES` | `45` | mongodump is killed after this (5–105: with the upload's 15-minute margin, Inngest's 2-hour step limit) |
 | `DB_BACKUP_DUMP_PARALLEL` | `2` | Collections dumped at once (1–8) |
 | `INNGEST_STREAMING` | `true` | Keeps long step requests alive; the off switch, for every function at once |
 
