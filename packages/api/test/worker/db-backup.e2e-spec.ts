@@ -5,7 +5,7 @@ import { INestApplication } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
-import { NonRetriableError } from 'inngest';
+import { NonRetriableError, RetryAfterError } from 'inngest';
 import type { Model } from 'mongoose';
 import { ENV_FILE_PATH } from '../../src/config/env.config';
 import { InngestModule } from '../../src/inngest/inngest.module';
@@ -431,10 +431,11 @@ describe('DbBackupSnapshotFn (e2e)', () => {
 
   /**
    * `concurrency: 1` counts executing steps, so another run can start while a
-   * lost attempt's dump is still running here. Its dump must wait, not run
-   * beside it on a one-vCPU cluster.
+   * lost attempt's dump is still running here. It must neither dump beside it
+   * on a one-vCPU cluster nor wait inside its step — which would hold the slot
+   * the lost run's own retry needs — so it is told to come back later.
    */
-  it("queues a different run's dump behind one still running", async () => {
+  it('sends a different run away to retry while a dump is in flight', async () => {
     let release: () => void = () => undefined;
     dumper.hold = new Promise<void>((resolve) => {
       release = resolve;
@@ -442,17 +443,29 @@ describe('DbBackupSnapshotFn (e2e)', () => {
 
     const weeklyRun = fn.handle(CRON_EVENT, inlineStep().step, RUN);
     await until(() => dumper.calls.length === 1);
-    const manualRun = fn.handle(MANUAL_EVENT, inlineStep().step, {
+
+    const refused = fn.handle(MANUAL_EVENT, inlineStep().step, {
       ...RUN,
       runId: 'run-2',
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await expect(refused).rejects.toBeInstanceOf(RetryAfterError);
+    await expect(refused).rejects.toThrow(
+      /^snapshot: another snapshot is still dumping/,
+    );
+    // After the longest a dump can take (45 minutes by default) plus margin.
+    const retryAfter = await refused.catch(
+      (error: RetryAfterError) => error.retryAfter,
+    );
+    expect(Number(retryAfter)).toBe((45 + 15) * 60);
     expect(dumper.calls).toHaveLength(1);
 
     release();
-    await Promise.all([weeklyRun, manualRun]);
+    await expect(weeklyRun).resolves.toMatchObject({ status: 'ok' });
+    // Once nothing is in flight, the refused run's retry dumps normally.
+    await expect(
+      fn.handle(MANUAL_EVENT, inlineStep().step, { ...RUN, runId: 'run-2' }),
+    ).resolves.toMatchObject({ status: 'ok' });
     expect(dumper.calls).toHaveLength(2);
-    expect(store.objects.size).toBe(2);
   });
 
   /**
@@ -601,7 +614,8 @@ describe('DbBackupSnapshotFn (e2e)', () => {
     const [{ message, idempotencyKey }] = mail.sent;
     expect(message.subject).toMatch(/^DB backup FAILED/);
     expect(message.text).toContain('weekly database snapshot');
-    expect(message.text).toContain('stored no archive and deleted none');
+    expect(message.text).toContain('The final attempt stored no archive');
+    expect(message.text).toContain('nothing was deleted');
     expect(message.text).toContain('run-9');
     expect(message.text).toContain('boom');
     // The failure's own time, not the clock: a retried handler sends the same.

@@ -9,7 +9,7 @@
  *
  * | Prefix | Written by | Retention |
  * |---|---|---|
- * | `weekly/` | the Sunday cron | newest `DB_BACKUP_KEEP`, rotated by the worker |
+ * | `weekly/` | the Sunday cron | one per schedule week for the newest `DB_BACKUP_KEEP` weeks, rotated by the worker |
  * | `manual/` | an operator's request | the bucket's lifecycle rule (Terraform) |
  * | `pre-deploy/` | a deploy's request | the bucket's lifecycle rule (Terraform) |
  *

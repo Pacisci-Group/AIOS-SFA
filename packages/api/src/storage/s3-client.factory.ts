@@ -60,10 +60,15 @@ export function readS3Settings(
  *
  * Omitting both keys hands the SDK to its default credential chain; whether
  * that is acceptable is the caller's call (see `StorageService`).
+ *
+ * `http` sets the Node handler's timeouts, which default to none at all — a
+ * request that stalls then never settles. Idle (`socketTimeout`) rather than
+ * total, so a long upload that is still moving is never cut off.
  */
 export function createS3Client(
   settings: S3ClientSettings,
   endpointOverride?: string,
+  http?: { connectionTimeout?: number; socketTimeout?: number },
 ): S3Client {
   const endpoint = endpointOverride ?? settings.endpoint;
   const credentials =
@@ -80,5 +85,6 @@ export function createS3Client(
     forcePathStyle: settings.forcePathStyle,
     ...(endpoint ? { endpoint } : {}),
     ...credentials,
+    ...(http ? { requestHandler: http } : {}),
   });
 }

@@ -6,8 +6,9 @@ import type { Template } from './template.types';
  * Where a run failed, which decides what the mail may honestly say about the
  * archives:
  *
- * - `plan` / `snapshot` — before or during the dump and upload: this run stored
- *   nothing, and nothing was deleted.
+ * - `plan` — before the dump: nothing was stored or deleted.
+ * - `snapshot` — the dump or upload: the final attempt stored nothing (an
+ *   earlier attempt whose response was lost may have), and nothing was deleted.
  * - `rotate` — after the upload: this run's archive is stored; older weekly
  *   archives may not have been pruned.
  * - `notify` — after upload (and rotation, for a weekly run): only the report
@@ -45,8 +46,9 @@ const KIND_NOUN: Record<DbBackupFailedData['kind'], string> = {
 function consequence(data: DbBackupFailedData): string {
   switch (data.stage) {
     case 'plan':
-    case 'snapshot':
       return 'This run stored no archive and deleted none. Older archives are only ever deleted after a new one is stored, so the existing ones are untouched.';
+    case 'snapshot':
+      return `The final attempt stored no archive, and nothing was deleted: older archives are only ever deleted after a new one is stored. (An earlier attempt whose response was lost may have stored one — look in ${data.bucket} for a key from this run's start time.)`;
     case 'rotate':
       return `This run's archive was stored in ${data.bucket}, but rotation failed, so older weekly archives may not have been pruned. The next weekly run prunes again.`;
     case 'notify':
@@ -73,16 +75,28 @@ function consequence(data: DbBackupFailedData): string {
 export const dbBackupFailedTemplate: Template<DbBackupFailedData> = {
   key: 'dbBackupFailed',
 
-  subject: (data) =>
-    data.stage === 'request'
-      ? `DB snapshot request REJECTED — ${data.host}`
-      : `DB backup FAILED — ${data.host}`,
+  subject: (data) => {
+    switch (data.stage) {
+      case 'request':
+        return `DB snapshot request REJECTED — ${data.host}`;
+      case 'notify':
+        return `DB backup stored, report FAILED — ${data.host}`;
+      case 'record':
+        return `DB backup stored, delivery record FAILED — ${data.host}`;
+      default:
+        return `DB backup FAILED — ${data.host}`;
+    }
+  },
 
   render: (data) => {
+    const when = formatUtc(data.failedAt);
+    const label = data.label ? ` (${data.label})` : '';
     const what =
       data.stage === 'request'
-        ? `A database snapshot request to ${data.host} was rejected on ${formatUtc(data.failedAt)} before it ran.`
-        : `The ${KIND_NOUN[data.kind]} of ${data.host} failed on ${formatUtc(data.failedAt)}${data.label ? ` (${data.label})` : ''} and has stopped retrying.`;
+        ? `A database snapshot request to ${data.host} was rejected on ${when} before it ran.`
+        : data.stage === 'notify' || data.stage === 'record'
+          ? `The ${KIND_NOUN[data.kind]} of ${data.host}${label} stored its archive, but its run failed afterwards on ${when} and has stopped retrying.`
+          : `The ${KIND_NOUN[data.kind]} of ${data.host} failed on ${when}${label} and has stopped retrying.`;
     const error = `Error: ${data.error}`;
     const after = consequence(data);
     const backstop =

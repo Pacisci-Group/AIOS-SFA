@@ -68,8 +68,17 @@ export class BackupStore {
     }
   }
 
+  /**
+   * With bounded requests: a snapshot's upload runs inside a step, and an
+   * upload that hung with no timeout would hold that dump's in-flight entry —
+   * and so every later snapshot in this worker — until the process restarted.
+   * Idle-bounded, so a slow upload that is still sending bytes is left alone.
+   */
   private s3(): S3Client {
-    this.client ??= createS3Client(this.settings);
+    this.client ??= createS3Client(this.settings, undefined, {
+      connectionTimeout: 30_000,
+      socketTimeout: 5 * 60_000,
+    });
     return this.client;
   }
 

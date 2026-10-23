@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { NonRetriableError, cron } from 'inngest';
+import { NonRetriableError, RetryAfterError, cron } from 'inngest';
 import {
   DB_BACKUP_SCHEDULE,
   dbBackupAlertEmail,
@@ -57,6 +57,12 @@ const RETRIES = 2;
  * naming the fix, rather than failing inside the S3 client after a long dump.
  */
 const SINGLE_PUT_LIMIT_BYTES = 4.5 * 1024 ** 3;
+
+/**
+ * Headroom past the dump timeout before a run refused for an in-flight dump
+ * tries again: the upload and its cleanup, which follow the dump.
+ */
+const RETRY_AFTER_MARGIN_MS = 15 * 60_000;
 
 /** The steps a failure can be attributed to; see {@link inStage}. */
 type Stage = Exclude<DbBackupFailureStage, 'request' | 'unknown'>;
@@ -166,8 +172,10 @@ interface RotationResult {
  * `concurrency: 1` keeps a requested snapshot from overlapping the weekly one:
  * two dumps at once would double the load on a one-vCPU cluster. That limit
  * counts executing steps, not runs, so a run waiting out a retry backoff frees
- * its slot; a dump still running here from that run's lost attempt is what
- * {@link DbBackupSnapshotFn.inFlight} queues the next one behind.
+ * its slot — while the dump its lost attempt started may still be running here.
+ * A different run that takes the slot then is sent away to retry later (see
+ * {@link DbBackupSnapshotFn.inFlight}), so the slot comes back to the run whose
+ * dump it is.
  *
  * ## Disabled is not a failure
  * The function is registered everywhere; `DB_BACKUP_ENABLED` decides whether a
@@ -198,8 +206,12 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
    * the second PUT an atomic overwrite with an equally valid archive.
    *
    * A dump for a *different* key — another run that got the concurrency slot
-   * while this one waited out a retry backoff — queues behind whatever is in
-   * flight here rather than running beside it.
+   * while this one waited out a retry backoff — is refused with a
+   * `RetryAfterError` rather than run beside it or queued behind it. Queueing
+   * would hold the step, and with it the slot, for up to two dumps: past
+   * Inngest's two-hour step limit with a long dump, and keeping out the very
+   * retry that would have joined the dump in flight. Refusing frees the slot
+   * at once; the refused run comes back after the longest a dump can take.
    */
   private readonly inFlight = new Map<string, Promise<SnapshotResult>>();
 
@@ -411,17 +423,25 @@ export class DbBackupSnapshotFn implements InngestFunctionProvider {
       );
       return running;
     }
-    const ahead = [...this.inFlight.values()];
-    if (ahead.length > 0) {
+    if (this.inFlight.size > 0) {
+      const retryAfterMs =
+        dbBackupDumpTimeoutMs(
+          this.config.get<string>('DB_BACKUP_DUMP_TIMEOUT_MINUTES'),
+        ) + RETRY_AFTER_MARGIN_MS;
       this.logger.warn(
-        `Snapshot ${plan.key}: waiting for ${ahead.length} dump(s) still running in this worker.`,
+        `Snapshot ${plan.key}: another snapshot is still dumping in this worker ` +
+          `(${[...this.inFlight.keys()].join(', ')}); retrying in ${Math.round(retryAfterMs / 60_000)} minutes.`,
+      );
+      return Promise.reject(
+        new RetryAfterError(
+          'another snapshot is still dumping in this worker',
+          retryAfterMs,
+        ),
       );
     }
-    const attempt = Promise.allSettled(ahead)
-      .then(() => this.dumpAndStore(plan, run))
-      .finally(() => {
-        this.inFlight.delete(plan.key);
-      });
+    const attempt = this.dumpAndStore(plan, run).finally(() => {
+      this.inFlight.delete(plan.key);
+    });
     this.inFlight.set(plan.key, attempt);
     return attempt;
   }
@@ -595,13 +615,20 @@ function requestFrom(event: DbBackupEvent): SnapshotRequest {
 
 /**
  * Run a step's body, prefixing any error with the step's name — what `fail()`
- * reads to say whether the run stored an archive before it failed. A
- * `NonRetriableError` stays one, so the prefix never changes retry behaviour.
+ * reads to say whether the run stored an archive before it failed. The prefix
+ * never changes retry behaviour: a `NonRetriableError` stays one, and a
+ * `RetryAfterError` is re-thrown as itself with only its message prefixed
+ * (rebuilding one from its `retryAfter`, which it stores as a seconds string,
+ * would misread it as milliseconds).
  */
 async function inStage<T>(stage: Stage, work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
+    if (error instanceof RetryAfterError) {
+      error.message = `${stage}: ${error.message}`;
+      throw error;
+    }
     const message = `${stage}: ${error instanceof Error ? error.message : String(error)}`;
     if (error instanceof NonRetriableError) {
       throw new NonRetriableError(message, { cause: error });

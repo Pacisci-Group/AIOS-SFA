@@ -706,8 +706,18 @@ describe('db backup failed template', () => {
   });
 
   /** What the mail may say about the archives depends on where the run stopped. */
-  it('says a failed dump stored and deleted nothing', () => {
+  it('says a failed dump deleted nothing, without claiming nothing was stored', () => {
     const { text } = dbBackupFailedTemplate.render(dbBackupFailedData());
+    expect(text).toContain('The final attempt stored no archive');
+    expect(text).toContain('nothing was deleted');
+    // An earlier attempt whose response was lost may have stored one.
+    expect(text).toContain('An earlier attempt');
+  });
+
+  it('says a run that failed before dumping stored and deleted nothing', () => {
+    const { text } = dbBackupFailedTemplate.render(
+      dbBackupFailedData({ stage: 'plan' }),
+    );
     expect(text).toContain('stored no archive and deleted none');
   });
 
@@ -738,11 +748,23 @@ describe('db backup failed template', () => {
 
   /** The report already arrived; the mail must not say it did not. */
   it('says a failed delivery record is only that', () => {
-    const { text } = dbBackupFailedTemplate.render(
-      dbBackupFailedData({ stage: 'record' }),
+    const data = dbBackupFailedData({ stage: 'record' });
+    expect(dbBackupFailedTemplate.subject(data)).toBe(
+      'DB backup stored, delivery record FAILED — app.smithfamily.agency',
     );
+    const { text } = dbBackupFailedTemplate.render(data);
+    expect(text).toContain('stored its archive, but its run failed afterwards');
     expect(text).toContain('sent its report');
     expect(text).not.toContain('could not be sent');
+    expect(text).not.toContain('snapshot of app.smithfamily.agency failed');
+  });
+
+  /** The archive is stored; the headline must not say the backup failed. */
+  it('headlines a failed report as stored', () => {
+    const data = dbBackupFailedData({ stage: 'notify' });
+    expect(dbBackupFailedTemplate.subject(data)).toBe(
+      'DB backup stored, report FAILED — app.smithfamily.agency',
+    );
   });
 
   /** A rejected Invoke or curl is not a failed weekly snapshot. */
