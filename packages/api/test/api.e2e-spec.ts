@@ -885,15 +885,20 @@ describe('SFA API (e2e)', () => {
         const auditorToken = (await login(app, auditorEmail, TEST_PASSWORD))
           .accessToken;
 
-        // The owner, who can see the column, finds the row by branch name.
-        expect(
-          (await list(ownerToken, '?q=Test%20Branch')).total,
-        ).toBeGreaterThan(0);
+        // The owner, who can see the column, finds the producer by branch name.
+        expect(emails(await list(ownerToken, '?q=Test%20Branch'))).toContain(
+          seed.producerEmail,
+        );
 
-        // The auditor, who cannot, finds nothing by branch name — but the rest
-        // of the search still works for them, so this is the arm being
-        // withheld rather than the endpoint being broken.
-        expect((await list(auditorToken, '?q=Test%20Branch')).total).toBe(0);
+        // The auditor, who cannot, does not: the producer's only path to
+        // "Branch" is the column the auditor cannot see. Not an absolute zero
+        // — the seeded Branch Manager (PAC-161) still matches through the
+        // *role-name* arm, which is not what is withheld. The rest of the
+        // search still works for them, so this is the arm being withheld
+        // rather than the endpoint being broken.
+        expect(
+          emails(await list(auditorToken, '?q=Test%20Branch')),
+        ).not.toContain(seed.producerEmail);
         expect(emails(await list(auditorToken, '?q=producer'))).toContain(
           seed.producerEmail,
         );
