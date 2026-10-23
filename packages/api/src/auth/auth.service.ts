@@ -11,18 +11,22 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   AccessContext,
   AgencyPermission,
+  DEFAULT_AGENCY_TIME_ZONE,
   DEFAULT_USER_AVAILABILITY,
   JwtPayload,
 } from '@sfa/shared';
 import { hashResetToken } from '../common/crypto/reset-token';
+import { assertDateOfBirth } from '../common/hr/employee-profile.rules';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
 import {
   HostTenantResolver,
   type HostTenant,
 } from '../common/tenancy/host-tenant.resolver';
+import { agencyTodayIso } from '../performance/performance.range';
 import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
@@ -47,6 +51,8 @@ export class AuthService {
     private configService: ConfigService,
     private hostResolver: HostTenantResolver,
     private tenantUrls: TenantUrlService,
+    // PAC-162: the birthday asked at the setup step lives on the HR profile.
+    private employeeProfiles: EmployeeProfilesService,
   ) {}
 
   async login(dto: LoginDto, host: HostTenant | undefined) {
@@ -229,6 +235,21 @@ export class AuthService {
     // already lands here. It catches the hand-edited and the stale-domain case.
     await this.assertBelongsOnHost(user, host);
 
+    /*
+     * The birthday is checked *before* the password is written, for the
+     * same reason the host is: a 400 after the password is set would consume
+     * the single-use token and lock the invitee out of an account they have
+     * not reached. "Today" is the agency's, not the server's (PAC-159).
+     */
+    const birthday =
+      dto.dateOfBirth !== undefined || dto.showBirthday !== undefined;
+    const today = birthday
+      ? agencyTodayIso(await this.agencyTimeZone(user.agencyId))
+      : null;
+    if (dto.dateOfBirth !== undefined && today) {
+      assertDateOfBirth(dto.dateOfBirth, today);
+    }
+
     // Only when sent. An older client omits them, and an omitted name must
     // leave the inviter's value alone rather than clearing it.
     if (dto.firstName !== undefined) {
@@ -256,7 +277,32 @@ export class AuthService {
     await user.save();
     await this.accessResolver.invalidateUser(user._id.toString());
 
+    // After the account is live: a platform admin has no agency and no
+    // profile, and `setBirthday` creates the profile for an invite that
+    // predates PAC-162. Validated above, so this cannot 400 here.
+    if (birthday && today && user.agencyId) {
+      await this.employeeProfiles.setBirthday(
+        user.agencyId.toString(),
+        user._id,
+        { dateOfBirth: dto.dateOfBirth, showBirthday: dto.showBirthday },
+        user._id.toString(),
+        today,
+      );
+    }
+
     return this.issueTokens(user);
+  }
+
+  /** `Agency.timezone`, or the platform default for a platform account or an older row. */
+  private async agencyTimeZone(
+    agencyId: Types.ObjectId | undefined,
+  ): Promise<string> {
+    if (!agencyId) return DEFAULT_AGENCY_TIME_ZONE;
+    const agency = await this.agencyModel
+      .findById(agencyId)
+      .select('timezone')
+      .lean<{ timezone?: string } | null>();
+    return agency?.timezone ?? DEFAULT_AGENCY_TIME_ZONE;
   }
 
   /**

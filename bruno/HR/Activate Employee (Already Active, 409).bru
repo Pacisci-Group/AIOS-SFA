@@ -1,0 +1,35 @@
+meta {
+  name: Activate Employee (Already Active, 409)
+  type: http
+  seq: 28
+}
+
+post {
+  url: {{baseUrl}}/hr/employees/{{hrPendingUserId}}/activate
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "leavePolicyId": "{{hrOnboardingPolicyId}}",
+    "hireDate": "{{hrHireDate}}"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST /hr/employees/:userId/activate — 409 when already active (PAC-162)
+
+  Rules on an active profile change through `PUT …/assignment`, never by
+  activating again.
+}

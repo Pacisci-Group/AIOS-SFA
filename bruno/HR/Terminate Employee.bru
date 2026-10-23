@@ -1,0 +1,51 @@
+meta {
+  name: Terminate Employee
+  type: http
+  seq: 32
+}
+
+post {
+  url: {{baseUrl}}/hr/employees/{{hrPendingUserId}}/terminate
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "terminationDate": "2099-12-31",
+    "reason": "Bruno run"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("flips the status now and keeps the date", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("terminated");
+    expect(body.terminationDate).to.equal("2099-12-31");
+    expect(body.assignments.length).to.equal(2);
+    expect(body.events[0].kind).to.equal("terminated");
+  });
+}
+
+docs {
+  # POST /hr/employees/:userId/terminate (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Body: `{ terminationDate: "YYYY-MM-DD", reason }`. The date may be in the
+    **future** (a notice period) and may not precede the hire date.
+  - The status flips to `terminated` when recorded, so the list is honest
+    about who is leaving; PAC-165 bounds a request's dates by the **date**.
+  - History is kept and stays readable. `409` when already terminated.
+  - Removing a user from the agency (`DELETE /users/:userId`) terminates
+    the profile on the agency's today with reason "Removed from the agency";
+    reactivating the account does **not** un-terminate — an admin rehires
+    through `activate`.
+}

@@ -59,13 +59,19 @@ export function getInvitePreview(token: string) {
 export async function acceptInvite(
   token: string,
   password: string,
-  names?: { firstName?: string; lastName?: string },
+  details?: {
+    firstName?: string;
+    lastName?: string;
+    /** The two HR fields the setup step asks for (PAC-162). */
+    dateOfBirth?: string;
+    showBirthday?: boolean;
+  },
 ) {
   const data = await publicFetch<AcceptInviteResult>('/auth/accept-invite', {
     method: 'POST',
     // Names omitted rather than sent empty when the caller has none: absent
     // means "keep what the inviter typed", where `''` would clear it.
-    body: JSON.stringify({ token, password, ...(names ?? {}) }),
+    body: JSON.stringify({ token, password, ...(details ?? {}) }),
   });
 
   setTokens(data.accessToken, data.refreshToken);

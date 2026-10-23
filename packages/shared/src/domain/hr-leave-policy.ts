@@ -92,7 +92,15 @@ export const ROUTING_RECIPIENTS = [
 ] as const;
 export type RoutingRecipient = (typeof ROUTING_RECIPIENTS)[number];
 
-/** Epic §9, one key per trigger. The HR engines emit these; nothing else. */
+/**
+ * Epic §9, one key per trigger. The HR engines emit these; nothing else.
+ *
+ * ⚠ `onboarding.pending` is **reserved, not consulted** (PAC-162): the
+ * notification fires for a person who has no policy yet, so there is no
+ * policy whose routing could apply. It is routed by a fixed rule — the
+ * branch's `hr:write` holders, then the `agency:hr:admin` holders. The row
+ * stays so a stored policy's `routing` keeps its shape.
+ */
 export const NOTIFICATION_TRIGGERS = [
   'timeoff.submitted',
   'timeoff.changes_requested',

@@ -1,0 +1,37 @@
+meta {
+  name: List Employees (Filtered)
+  type: http
+  seq: 42
+}
+
+get {
+  url: {{baseUrl}}/hr/employees?status=active&q=producer
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every row matches the facets", function () {
+    const body = res.getBody();
+    expect(body.items.length).to.be.greaterThan(0);
+    for (const item of body.items) {
+      expect(item.status).to.equal("active");
+      expect(`${item.user.name} ${item.user.email}`.toLowerCase()).to.contain("producer");
+    }
+  });
+}
+
+docs {
+  # GET /hr/employees?status=active&q=producer — the Employees page's facets (PAC-162)
+
+  Filters are real-time on the page (no Apply button) and ANDed here:
+  `status[]`, `branchId`, `leavePolicyId`, and `q` over name and email. See
+  **List Onboardings (Pending)** for the full contract.
+}

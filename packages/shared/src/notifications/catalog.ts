@@ -70,6 +70,20 @@ export const NOTIFICATION_TYPES = {
     category: 'attendance',
     defaultChannels: { email: true, push: false },
   },
+  /**
+   * An employee was invited without a leave policy and needs HR onboarding
+   * (PAC-162). Recipients: the `hr:write` holders in the invitee's branch
+   * minus the inviter; the `agency:hr:admin` holders when the branch has
+   * none. Emitted only while the agency has an active leave policy — an
+   * agency that does not use leave must not hear about onboardings it cannot
+   * do. `data`: `{ userId, employeeName, email, branchName, roleNames }`.
+   *
+   * Email on, push off: a decision to take this week, not an interruption.
+   */
+  'hr.onboarding_pending': {
+    category: 'attendance',
+    defaultChannels: { email: true, push: false },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

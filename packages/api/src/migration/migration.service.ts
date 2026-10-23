@@ -15,6 +15,7 @@ import { Agency } from '../platform/schemas/agency.schema';
 import { Carrier } from '../carriers/schemas/carrier.schema';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { AgencyRole } from '../roles/schemas/agency-role.schema';
 import { provisionTenant } from '../seed/provision-tenant';
@@ -374,6 +375,8 @@ export class MigrationService {
     @InjectModel(LeadSource.name)
     private readonly leadSourceModel: Model<LeadSource>,
     private readonly leadSources: LeadSourcesService,
+    // A pending HR profile for every imported user (PAC-162).
+    private readonly employeeProfiles: EmployeeProfilesService,
   ) {}
 
   /** name slug → `leadSources` id, so thousands of records cost one query each source. */
@@ -937,6 +940,22 @@ export class MigrationService {
     this.logger.log(
       `Users: fetched ${stat.fetched}, mapped ${map.size} producers`,
     );
+
+    /*
+     * Every imported person starts `pending` on the HR Onboardings list
+     * (PAC-162): SmartSuite's Users table carries no hire date or birthday,
+     * and no leave policy exists until an admin creates one. Idempotent, so a
+     * resumed `--from` run is covered; the `employee_profiles` migration does
+     * the same for a database imported before this landed.
+     */
+    if (!ctx.dryRun) {
+      const created = await this.employeeProfiles.ensureProfilesForAgency(
+        ctx.agencyId,
+      );
+      if (created > 0) {
+        this.logger.log(`Users: ${created} pending HR profile(s) created`);
+      }
+    }
     return map;
   }
 

@@ -22,6 +22,13 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       countryName: 'United States',
       regionName: 'Oklahoma',
     },
+    'hr.onboarding_pending': {
+      userId: '68f3c0ffee0000000000c23',
+      employeeName: 'Sam Seller',
+      email: 'sam@example.com',
+      branchName: 'Main',
+      roleNames: ['Producer'],
+    },
   };
 
 describe('renderNotification', () => {
@@ -58,6 +65,27 @@ describe('renderNotification', () => {
       '11 suggested holidays for 2027 from United States, Oklahoma. Review and confirm them in HR settings.',
     );
     expect(rendered.href).toBe('/settings/hr?tab=calendar&proposal=2027');
+  });
+
+  it('deep-links a pending onboarding to the person and names their branch and role', () => {
+    const rendered = renderNotification(
+      'hr.onboarding_pending',
+      FIXTURES['hr.onboarding_pending'],
+    );
+    expect(rendered.title).toBe('Sam Seller needs HR onboarding');
+    expect(rendered.body).toBe(
+      'Sam Seller (Producer) was invited in Main without a leave policy. Pick their policy, schedule and start date to activate them.',
+    );
+    expect(rendered.href).toBe('/hr/onboardings?user=68f3c0ffee0000000000c23');
+  });
+
+  it('falls back to the email, then a generic name, for a pending onboarding', () => {
+    expect(
+      renderNotification('hr.onboarding_pending', { email: 'x@y.z' }).title,
+    ).toBe('x@y.z needs HR onboarding');
+    expect(renderNotification('hr.onboarding_pending', {}).href).toBe(
+      '/hr/onboardings',
+    );
   });
 
   it('names the reporter and the summary when both are present', () => {

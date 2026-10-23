@@ -67,6 +67,23 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
         : '/settings/hr?tab=calendar',
     };
   },
+  'hr.onboarding_pending': (data) => {
+    const name = text(data.employeeName) ?? text(data.email) ?? 'A new employee';
+    const branch = text(data.branchName);
+    const roles = Array.isArray(data.roleNames)
+      ? data.roleNames.filter((r): r is string => typeof r === 'string')
+      : [];
+    const who = roles.length > 0 ? `${name} (${roles.join(', ')})` : name;
+    const where = branch ? ` in ${branch}` : '';
+    const userId = text(data.userId);
+    return {
+      title: `${name} needs HR onboarding`,
+      body: `${who} was invited${where} without a leave policy. Pick their policy, schedule and start date to activate them.`,
+      href: userId
+        ? `/hr/onboardings?user=${encodeURIComponent(userId)}`
+        : '/hr/onboardings',
+    };
+  },
 };
 
 /**

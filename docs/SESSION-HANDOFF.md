@@ -1775,3 +1775,38 @@ Branch `asad/pac-161-hr-foundation` off `dev`, one PR. Plan: `docs/plans/pac-161
 - `LeavePoliciesService.employeesOn` returns 0 until PAC-162; `effectiveRules(asOf)` ignores `asOf` until PAC-162's assignment history.
 - `AgencyCalendarService.addDays` is where PAC-165 flags approved leave on a new closure; `inngest/events/hr.events.ts` is not created until its consumer exists.
 - Manager-view audit aging still uses the hard-coded US federal holidays in `common/dates/business-days.ts`.
+
+## 26. PAC-162 — Employee profiles + HR onboarding (handoff, 2026-10-23)
+
+Branch `asad/pac-162-employee-profiles` off `asad/pac-161-hr-foundation` (stacked; the PR targets the PAC-161 branch until that merges, then is retargeted to `dev`). Plan: `docs/plans/pac-162-employee-profiles-implementation-plan.md` (16 decisions — read those first).
+
+### Decisions — do not re-litigate
+- One `employeeProfiles` collection, one row per user per agency, string `agencyId`, no `branchId` (resolved through the user). Current rule fields + an embedded append-only `assignments[]` whose last entry always equals the fields; `effectiveFrom` is an agency day, never future, ≥ hire date, ≥ previous entry.
+- `effectiveRulesFor(agencyId, userId, asOfDay?)` on the common `EmployeeProfilesService` is what PAC-165/167 call — the assignment as of the day, the policy as it is now. 409 while pending, resolves while terminated.
+- Schedules: `workScheduleTemplates` + per-employee override + the agency workweek at 09:00–17:00 as the fallback. Nothing seeded.
+- Profiles are created in `UsersService.createPendingUser` (invite dialog and the panel's owner invite) and caught up by `ensureProfilesForAgency` (migration `20261023100000-employee_profiles.js`, the HR module-enable toggle, the SmartSuite users step, the demo seed, reactivation). Revoking an invite deletes the profile with the user row; removing a user terminates it today; reactivation leaves it terminated.
+- `hr.onboarding_pending`: invite path only, only while `hasActivePolicy`, branch `hr:write` holders minus the inviter → `agency:hr:admin` fallback. The policy's `routing['onboarding.pending']` row is reserved, not consulted.
+- Overrides are a **diff** (`diffRules`, shared); the server merges, validates, and strips paths equal to the template. "Save as new policy" creates a policy from the merged rules and assigns it with nothing custom.
+- DOB on the profile, set at accept-invite (checked *before* the password so a bad date never consumes the token) and on `/settings/profile`; admins see the date, never an age; never in a list.
+- Demo seed creates a "Standard" policy + "Mon–Fri 9–5" template and activates all but two of the team (open question 1 of the plan).
+
+### What exists now
+- `@sfa/shared`: `domain/hr-employee-profile.ts` (types, `diffRules`, `overridePaths`, `scheduleFromWorkweek`, `weeklyMinutes`), notification `hr.onboarding_pending`.
+- API: collections `employeeProfiles`, `workScheduleTemplates`, `employeeProfileEvents`; `common/hr/employee-profiles.service.ts` (+ rules, changes), `HrCommonModule` now carries the three schemas; `hr/employee-profiles.*`, `hr/schedule-templates.*`; endpoints `GET/POST/PUT/PATCH /hr/employees…`, `GET/PATCH /hr/me/profile`, `/hr/schedule-templates…`; `POST /users/invite` takes `leavePolicyId` + `hireDate`; `POST /auth/accept-invite` takes `dateOfBirth` + `showBirthday`; `LeavePoliciesService.employeesOn` reads real rows.
+- Web: `/hr/onboardings`, `/hr/employees`, `/hr/employees/:userId` (the policy editor in `mode="overrides"`), `/settings/hr?tab=schedules`, the invite dialog's policy picker + start date, the wizard's birthday fields, `HrProfileCard` on `/settings/profile`; an **HR** nav section (`agency:hr:admin`).
+- Tests: shared `hr-employee-profile.spec.ts`; API unit (`employee-profile.rules`, `.changes`, `assignmentAsOf`), e2e `hr-employees.e2e-spec.ts` (20 cases); Bruno `HR/` seq 18–42 (25 requests, all green).
+
+### Verified
+- `npm run build -w @sfa/api`, `-w @sfa/web`; API unit suite 1476 green; e2e `hr-employees` 20/20; full Bruno run — every new request passes; the failures are pre-existing (CRM urgency order, quote-recap create, two mailer-campaign checks, and `HR/Add Calendar Days` 409 because that date already sits on the shared dev calendar from an earlier run).
+- Browser (as the demo Branch Manager): Onboardings → Marcus Bell → policy picked → allocation 120 → Activate → "1 custom rule", history entry, change log; Employees facets; Schedules tab; profile card.
+
+### Gotchas
+- `assignments[]` entries **replace** every rule-shaped field; a `PUT …/assignment` that omits `scheduleTemplateId` drops the person back to the workweek. The web panel always sends all five.
+- A terminated profile answers 409 before it checks the date — order the checks that way in tests.
+- Numeric object keys iterate ascending whatever the literal says (`validateSchedule` problems come out in weekday order).
+- `useUrlState` values are strings / string arrays only.
+
+### Not in this ticket (seams left)
+- PAC-165: `effectiveRulesFor` / `effectiveScheduleFor` / `effectiveAllocations`; `terminationDate` as the request ceiling; `EffectiveRulesSummary` for My Time Off.
+- PAC-167: `workAnniversary` for the points cycle; `effectiveScheduleFor` for timing classification.
+- PAC-169: `birthdaysFor(agencyId)` (month/day only) and `hireDate` for the calendar layers.

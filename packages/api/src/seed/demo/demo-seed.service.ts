@@ -6,10 +6,23 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  DEFAULT_LEAVE_POLICY_RULES,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
+  scheduleFromWorkweek,
   type StoredAddress,
 } from '@sfa/shared';
+import { EmployeeProfilesService } from '../../common/hr/employee-profiles.service';
+import { EmployeeProfile } from '../../hr/schemas/employee-profile.schema';
+import { EmployeeProfileEvent } from '../../hr/schemas/employee-profile-event.schema';
+import { LeavePolicy } from '../../hr/schemas/leave-policy.schema';
+import { WorkScheduleTemplate } from '../../hr/schemas/work-schedule-template.schema';
+import {
+  addDays as addCalendarDays,
+  agencyTodayIso,
+  parseIsoDate,
+  toIsoDate,
+} from '../../performance/performance.range';
 import type { DealAuditStatus, ServiceTicketStatus } from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
 import { SequenceService } from '../../common/mongo/sequence.service';
@@ -280,6 +293,17 @@ export class DemoSeedService {
     private readonly leadSources: LeadSourcesService,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly sequences: SequenceService,
+    // HR (PAC-162): one demo leave policy and schedule template, and the
+    // team's employee profiles on them.
+    @InjectModel(LeavePolicy.name)
+    private readonly leavePolicyModel: Model<LeavePolicy>,
+    @InjectModel(WorkScheduleTemplate.name)
+    private readonly scheduleTemplateModel: Model<WorkScheduleTemplate>,
+    @InjectModel(EmployeeProfile.name)
+    private readonly employeeProfileModel: Model<EmployeeProfile>,
+    @InjectModel(EmployeeProfileEvent.name)
+    private readonly employeeProfileEventModel: Model<EmployeeProfileEvent>,
+    private readonly employeeProfiles: EmployeeProfilesService,
   ) {}
 
   async run(options: DemoSeedOptions): Promise<DemoSeedSummary> {
@@ -301,6 +325,7 @@ export class DemoSeedService {
     }
 
     const team = await this.seedTeam(ctx, options);
+    await this.seedEmployeeProfiles(ctx, team);
     const producers = team.filter((m) => m.spec.roleSlug === 'producer');
     const crms = team.filter(
       (m) => m.spec.roleSlug === 'csr' || m.spec.roleSlug === 'crm',
@@ -524,6 +549,109 @@ export class DemoSeedService {
       });
     }
     return team;
+  }
+
+  // ---------------------------------------------------------------------------
+  // HR: a leave policy, a schedule template, and the team's profiles (PAC-162)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * One demo leave policy ("Standard", SFA's spec defaults) and one schedule
+   * template ("Mon–Fri 9–5"), then the team on them: every member but two is
+   * activated with a hire date spread over the last three years, one on a
+   * four-day override and one with a custom allocation, so the Employees page
+   * has a "Custom" badge to show. The two left `pending` are what the
+   * Onboardings page demos.
+   *
+   * This departs from PAC-161's "demo seed: calendar only" line on purpose: a
+   * *policy* is not a holiday row (the no-human rule is about holidays), the
+   * demo tenant is throwaway data, and without a policy nothing in HR demos.
+   * Idempotent: the policy and template are upserted by name, profiles are
+   * ensured, and an already-active profile is left as it is.
+   */
+  private async seedEmployeeProfiles(
+    ctx: Ctx,
+    team: TeamMember[],
+  ): Promise<void> {
+    const policy = await this.leavePolicyModel.findOneAndUpdate(
+      { agencyId: ctx.agencyId, name: 'Standard', status: 'active' },
+      {
+        $setOnInsert: {
+          agencyId: ctx.agencyId,
+          name: 'Standard',
+          status: 'active',
+          version: 1,
+          rules: structuredClone(DEFAULT_LEAVE_POLICY_RULES),
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+    const template = await this.scheduleTemplateModel.findOneAndUpdate(
+      { agencyId: ctx.agencyId, name: 'Mon–Fri 9–5', status: 'active' },
+      {
+        $setOnInsert: {
+          agencyId: ctx.agencyId,
+          name: 'Mon–Fri 9–5',
+          status: 'active',
+          version: 1,
+          schedule: scheduleFromWorkweek([1, 2, 3, 4, 5]),
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+    this.inc('leavePolicies');
+    this.inc('workScheduleTemplates');
+
+    await this.employeeProfiles.ensureProfilesForAgency(ctx.agencyId);
+
+    const today = agencyTodayIso(ctx.timeZone, this.now);
+    const todayDate = parseIsoDate(today);
+    const pendingKeys = new Set(['crm-marcus', 'data-dana']);
+    let index = 0;
+    for (const member of team) {
+      this.inc('employeeProfiles');
+      if (pendingKeys.has(member.spec.key)) continue;
+      const profile = await this.employeeProfiles.profileFor(
+        ctx.agencyId,
+        member.userId,
+      );
+      if (!profile || profile.status !== 'pending') continue;
+
+      const hireDate = toIsoDate(
+        addCalendarDays(todayDate, -(30 + index * 97)),
+      );
+      index += 1;
+      await this.employeeProfiles.activate(
+        ctx.agencyId,
+        member.userId.toHexString(),
+        {
+          leavePolicyId: policy._id.toHexString(),
+          hireDate,
+          scheduleTemplateId: template._id.toHexString(),
+          ...(member.spec.key === 'producer-sam'
+            ? {
+                // A four-day week: Friday off, longer days.
+                scheduleOverride: {
+                  1: { start: '08:00', end: '18:00' },
+                  2: { start: '08:00', end: '18:00' },
+                  3: { start: '08:00', end: '18:00' },
+                  4: { start: '08:00', end: '18:00' },
+                  5: null,
+                },
+              }
+            : {}),
+          ...(member.spec.key === 'producer-alex'
+            ? {
+                overrides: { pto: { annualAllocationHours: 120 } },
+                allocations: { paid: 120 },
+              }
+            : {}),
+          reason: 'Demo seed',
+        },
+        null,
+        today,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2131,6 +2259,11 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+    // The team's HR profiles are derived from the roster and rebuilt by
+    // `seedEmployeeProfiles` (PAC-162); the demo policy and schedule template
+    // are upserted by name and left alone.
+    await this.employeeProfileEventModel.deleteMany({ agencyId });
+    await this.employeeProfileModel.deleteMany({ agencyId });
     // Same exception again: a membership is a *link*, not an imported record,
     // so it has no `legacySmartSuiteId` to match the filter above. Purged on
     // its provenance marker instead — which is also what keeps a membership

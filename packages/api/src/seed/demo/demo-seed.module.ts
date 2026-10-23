@@ -84,6 +84,7 @@ import {
   MailerCampaignSchema,
 } from '../../mailers/schemas/mailer-campaign.schema';
 import { Carrier, CarrierSchema } from '../../carriers/schemas/carrier.schema';
+import { HrCommonModule } from '../../common/hr/hr-common.module';
 import { LeadSourcesModule } from '../../lead-sources/lead-sources.module';
 import { PermissionsModule } from '../../permissions/permissions.module';
 import { DemoSeedService } from './demo-seed.service';
@@ -149,6 +150,9 @@ import { DemoSeedService } from './demo-seed.service';
     // Leads and deals reference a `leadSources` row (PAC-135). Self-contained,
     // so it is safe in this standalone graph.
     LeadSourcesModule,
+    // The team's HR profiles, on a demo policy and schedule (PAC-162). Brings
+    // the leave-policy, template and profile models with it.
+    HrCommonModule,
   ],
   providers: [DemoSeedService],
 })

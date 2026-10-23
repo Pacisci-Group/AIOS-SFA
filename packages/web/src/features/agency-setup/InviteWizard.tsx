@@ -22,10 +22,27 @@ import {
   SKIP_FLAG_BY_STEP,
 } from "./AgencySetupSteps";
 
+/** The latest day a birthday may be, on the browser's calendar — there is no session yet to ask the agency's. */
+function localYesterdayYmd(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /** Phase 1: what the invitee tells us about themselves before they have a session. */
 const profileSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required").max(100),
   lastName: z.string().trim().min(1, "Last name is required").max(100),
+  /**
+   * Optional, and the employee's own (PAC-162): written to their HR profile,
+   * readable by them and the HR admins, shown on the agency calendar as a
+   * month and day only when the toggle is on. The API refuses a date that
+   * is not in the past; the picker's `max` is the first line of defence.
+   */
+  dateOfBirth: z
+    .string()
+    .regex(/^(\d{4}-\d{2}-\d{2})?$/, "Pick a date."),
+  showBirthday: z.boolean(),
 });
 
 /**
@@ -88,6 +105,8 @@ export function InviteWizard({
     defaultValues: {
       firstName: preview.firstName ?? "",
       lastName: preview.lastName ?? "",
+      dateOfBirth: "",
+      showBirthday: true,
     },
     validators: { onBlur: profileSchema },
     onSubmit: () => goToStep(1),
@@ -102,10 +121,14 @@ export function InviteWizard({
   async function handlePassword(password: string) {
     setSubmitError(null);
     try {
-      const { firstName, lastName } = form.state.values;
+      const { firstName, lastName, dateOfBirth, showBirthday } =
+        form.state.values;
       const result = await acceptInvite(token, password, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
+        // Omitted rather than sent empty: absent means "not given", and the
+        // toggle only means something once there is a date to show.
+        ...(dateOfBirth ? { dateOfBirth, showBirthday } : {}),
       });
       // `acceptInvite` has already persisted the tokens; this tells React about
       // the session so `ProtectedRoute` lets them through on the next render.
@@ -211,6 +234,35 @@ export function InviteWizard({
                 than dropped because it tells whoever opened the link which
                 account they are activating, which matters on a shared machine.
               */}
+              {/*
+                The two HR fields the employee owns (PAC-162). Optional: a
+                blank date is simply not given, and can be added later from
+                the profile page. The year is never shown to anyone — the
+                calendar shows a month and day for those who leave the
+                toggle on.
+              */}
+              <FormGrid>
+                <form.AppField name="dateOfBirth">
+                  {(f) => (
+                    <f.TextField
+                      label="Date of birth (optional)"
+                      type="date"
+                      max={localYesterdayYmd()}
+                      autoComplete="bday"
+                      inputClassName="bg-card border-border"
+                    />
+                  )}
+                </form.AppField>
+                <form.AppField name="showBirthday">
+                  {(f) => (
+                    <f.CheckboxField
+                      label="Show my birthday on the agency calendar"
+                      hint="Month and day only — never the year or your age."
+                      className="sm:self-end"
+                    />
+                  )}
+                </form.AppField>
+              </FormGrid>
               <p className="text-xs text-muted-foreground">
                 Signing in as{" "}
                 <span className="text-foreground">{preview.email}</span>

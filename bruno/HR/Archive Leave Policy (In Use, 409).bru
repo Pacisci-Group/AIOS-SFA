@@ -1,0 +1,29 @@
+meta {
+  name: Archive Leave Policy (In Use, 409)
+  type: http
+  seq: 31
+}
+
+post {
+  url: {{baseUrl}}/hr/leave-policies/{{hrOnboardingPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 409 Conflict while an employee is on it", function () {
+    expect(res.getStatus()).to.equal(409);
+    expect(res.getBody().message).to.match(/Move 1 employee/);
+  });
+}
+
+docs {
+  # POST /hr/leave-policies/:id/archive — 409 while anyone is on it (PAC-162)
+
+  The seam PAC-161 left: `employeesOn` now counts the non-terminated
+  `employeeProfiles` on the policy, and `employeeCount` on the list is real.
+  Terminated profiles keep their reference and do not block.
+}

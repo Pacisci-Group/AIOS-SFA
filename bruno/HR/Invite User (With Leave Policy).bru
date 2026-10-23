@@ -1,0 +1,60 @@
+meta {
+  name: Invite User (With Leave Policy)
+  type: http
+  seq: 37
+}
+
+post {
+  url: {{baseUrl}}/users/invite
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrOwnerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  bru.setVar("hrActiveEmail", `pac162-active-${Date.now()}@sfa.local`);
+}
+
+body:json {
+  {
+    "email": "{{hrActiveEmail}}",
+    "roleIds": ["{{hrProducerRoleId}}"],
+    "firstName": "Active",
+    "lastName": "FromInvite",
+    "leavePolicyId": "{{hrOnboardingPolicyId}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrActiveUserId", res.getBody().userId);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /users/invite — with a leave policy (PAC-162)
+
+  `leavePolicyId` (an **active** policy of the agency, else `400`) makes the
+  invitee's HR profile **active** from day one on the template's defaults,
+  with `hireDate` defaulting to the invite day on the agency's calendar
+  (`hireDate` may be given, `YYYY-MM-DD`, not in the future). No onboarding
+  notification is sent. Everything is editable later from HR → Employees.
+
+  `POST /auth/accept-invite` then also accepts the invitee's optional
+  `dateOfBirth` (`YYYY-MM-DD`) and `showBirthday` (default true), written to
+  the profile — checked before the password so a bad date never consumes
+  the single-use token.
+}

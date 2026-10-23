@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
+import { PermissionHoldersModule } from '../common/access/permission-holders.module';
+import { HrCommonModule } from '../common/hr/hr-common.module';
 import { MailModule } from '../mail/mail.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
@@ -65,6 +67,10 @@ import { UsersService } from './users.service';
     // For the agency logo + display name on the invite email, so it matches
     // the dashboard the invitee is being sent to.
     TenantBrandingModule,
+    // PAC-162: every invite creates an HR profile, and a pending one notifies
+    // the branch's reviewers. `InngestModule` is global.
+    HrCommonModule,
+    PermissionHoldersModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },

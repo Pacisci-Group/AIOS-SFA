@@ -1,0 +1,43 @@
+meta {
+  name: Update Schedule Template
+  type: http
+  seq: 22
+}
+
+patch {
+  url: {{baseUrl}}/hr/schedule-templates/{{hrScheduleTemplateId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "schedule": {
+      "1": { "start": "07:30", "end": "17:30" },
+      "2": { "start": "07:30", "end": "17:30" },
+      "3": { "start": "07:30", "end": "17:30" },
+      "4": { "start": "07:30", "end": "17:30" }
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK and bumps the version", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().version).to.equal(2);
+    expect(res.getBody().schedule["1"].start).to.equal("07:30");
+  });
+}
+
+docs {
+  # PATCH /hr/schedule-templates/:id — a name, a schedule, or both (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - The schedule is replaced whole. Bumps `version`.
+  - `400` bad schedule · `404` not this agency's · `409` archived, or the new
+    name is taken.
+}

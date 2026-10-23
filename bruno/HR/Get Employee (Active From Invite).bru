@@ -1,0 +1,38 @@
+meta {
+  name: Get Employee (Active From Invite)
+  type: http
+  seq: 38
+}
+
+get {
+  url: {{baseUrl}}/hr/employees/{{hrActiveUserId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is active on the policy with the template's defaults", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("active");
+    expect(body.leavePolicy.id).to.equal(bru.getVar("hrOnboardingPolicyId"));
+    expect(body.effective.overriddenPaths).to.eql([]);
+    expect(body.assignments.length).to.equal(1);
+    expect(body.assignments[0].reason).to.equal("Invited with a leave policy");
+    expect(body.hireDate).to.match(/^\d{4}-\d{2}-\d{2}$/);
+    expect(body.user.accountStatus).to.equal("invited");
+  });
+}
+
+docs {
+  # GET /hr/employees/:userId — a profile created by an invite with a policy (PAC-162)
+
+  The HR `status` (active) and the account status (invited) are different
+  facts: the person is on the books before they have set a password.
+}

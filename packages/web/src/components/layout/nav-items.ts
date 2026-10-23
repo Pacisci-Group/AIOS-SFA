@@ -3,14 +3,16 @@ import {
   ChartColumn,
   FileDown,
   Home,
+  IdCard,
   LayoutDashboard,
   SlidersHorizontal,
   Ticket,
   TrendingUp,
+  UserRoundPlus,
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { ModuleKey } from "@sfa/shared";
+import { AgencyPermission, ModuleKey } from "@sfa/shared";
 import { SETTINGS_PERMISSIONS } from "@/features/settings/settings-sections";
 
 export type NavItem = {
@@ -140,6 +142,29 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Data Export",
         icon: FileDown,
         module: ModuleKey.DataExport,
+      },
+    ],
+  },
+  {
+    /*
+     * HR (PAC-162): the admin's two lists. Both behind `agency:hr:admin`, an
+     * admin capability rather than a module pair — a reviewer (`hr:write`)
+     * sees neither. PAC-165 adds My Time Off (`hr:read`) and PAC-169 the
+     * Calendar here; the section is theirs to grow.
+     */
+    title: "HR",
+    items: [
+      {
+        to: "/hr/onboardings",
+        label: "Onboardings",
+        icon: UserRoundPlus,
+        permission: AgencyPermission.HrAdmin,
+      },
+      {
+        to: "/hr/employees",
+        label: "Employees",
+        icon: IdCard,
+        permission: AgencyPermission.HrAdmin,
       },
     ],
   },

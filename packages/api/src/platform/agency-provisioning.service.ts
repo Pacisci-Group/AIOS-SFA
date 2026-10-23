@@ -24,6 +24,7 @@ import {
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { seedAuditTemplates } from '../seed/audit-templates.seed';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
 import { ensureAgencyCalendar } from '../common/hr/ensure-agency-calendar';
 import { AgencyCalendar } from '../hr/schemas/agency-calendar.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -93,6 +94,9 @@ export class AgencyProvisioningService {
     private roleAssignments: RoleAssignmentsService,
     private usersService: UsersService,
     private appointments: AgencyCarrierAppointmentsService,
+    // The owner's HR profile, created with the owner by `createPendingUser`
+    // and removed with them on rollback (PAC-162).
+    private employeeProfiles: EmployeeProfilesService,
   ) {}
 
   /**
@@ -291,6 +295,12 @@ export class AgencyProvisioningService {
           .select('_id');
         if (!orphan) return;
         await this.roleAssignments.purgeUser(orphan._id);
+        // ⚠ A **string** `agencyId` — the profile follows the calendar's
+        // convention, not the user's (PAC-162).
+        await this.employeeProfiles.deleteForRevokedInvite(
+          agencyId.toString(),
+          orphan._id,
+        );
         await this.userModel.deleteOne({ _id: orphan._id });
       });
 

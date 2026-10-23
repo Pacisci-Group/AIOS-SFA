@@ -1,0 +1,41 @@
+meta {
+  name: Create Onboarding Policy
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{baseUrl}}/hr/leave-policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "name": "Bruno onboarding policy {{$timestamp}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrOnboardingPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /hr/leave-policies — a policy for the onboarding chain (PAC-162)
+
+  The policy `Create Leave Policy` made is archived at seq 17; the employee
+  requests below need a live one to invite onto, onboard onto, and then try
+  to archive while someone is on it. Captured as `hrOnboardingPolicyId`.
+}

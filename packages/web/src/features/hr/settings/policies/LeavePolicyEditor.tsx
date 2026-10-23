@@ -1,12 +1,11 @@
-import { useState } from "react";
-import { Plus, X } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { Plus, RotateCcw, X } from "lucide-react";
 import { NOTIFICATION_TRIGGERS } from "@sfa/shared";
 import { FormError, FormGrid, FormSection, FormSubPanel } from "@/components/form";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useAppForm } from "@/hooks/form";
 import {
   CARRYOVER_OPTIONS,
@@ -22,7 +21,9 @@ import {
   SEQUENCE_OPTIONS,
   TRIGGER_LABELS,
   VALIDATION_MODE_OPTIONS,
+  isUnder,
   leavePolicyFormSchema,
+  ruleLabel,
   type LeavePolicyFormValues,
 } from "./leave-policy-form";
 
@@ -32,8 +33,32 @@ interface LeavePolicyEditorProps {
   /** The server's one-line verdict on the last save, if it refused. */
   serverError: string | null;
   saveLabel: string;
-  onSubmit: (values: LeavePolicyFormValues) => void;
+  /**
+   * `intent` is `'newPolicy'` when the secondary button was pressed (PAC-162):
+   * the same validated values, meant to become a named policy of their own.
+   */
+  onSubmit: (values: LeavePolicyFormValues, intent?: "newPolicy") => void;
   onCancel?: () => void;
+  /**
+   * `overrides` (PAC-162): the same form over one employee's **merged**
+   * rules. The name section is hidden (the policy keeps its name), every
+   * section that an override touches carries a "Custom" badge, and the
+   * banner lists the overridden rules with a reset that re-seeds the form
+   * from the template. The caller turns the submitted values back into a
+   * diff; nothing here knows what an override is beyond the paths.
+   */
+  mode?: "policy" | "overrides";
+  /** Dotted rule paths the overrides change — the "Custom" badges. */
+  overriddenPaths?: readonly string[];
+  /** Re-seed the form from the template (the caller remounts with new values). */
+  onResetToTemplate?: () => void;
+  /**
+   * Renders a secondary submit — "Save as new policy" — that validates the
+   * same form and calls `onSubmit` with `intent: 'newPolicy'`. The epic's
+   * rule: a person whose rules match nobody gets a new named policy, never a
+   * clone with a large override set.
+   */
+  newPolicyLabel?: ReactNode;
 }
 
 /**
@@ -52,13 +77,32 @@ export function LeavePolicyEditor({
   saveLabel,
   onSubmit,
   onCancel,
+  mode = "policy",
+  overriddenPaths = [],
+  onResetToTemplate,
+  newPolicyLabel,
 }: LeavePolicyEditorProps) {
   const [defaultValues] = useState(initial);
+  // Which button submitted: read once in `onSubmit`, then cleared.
+  const intentRef = useRef<"newPolicy" | undefined>(undefined);
   const form = useAppForm({
     defaultValues,
     validators: { onBlur: leavePolicyFormSchema },
-    onSubmit: ({ value }) => onSubmit(value),
+    onSubmit: ({ value }) => {
+      const intent = intentRef.current;
+      intentRef.current = undefined;
+      onSubmit(value, intent);
+    },
   });
+
+  const overrides = mode === "overrides";
+  /** The "Custom" badge on a section whose rules an override touches. */
+  const customBadge = (prefix: string) =>
+    overrides && overriddenPaths.some((path) => isUnder(path, prefix)) ? (
+      <Badge variant="secondary" size="sm">
+        Custom
+      </Badge>
+    ) : undefined;
 
   /** A checkbox group over a `string[]` field. */
   const checkboxGroup = (
@@ -103,17 +147,60 @@ export function LeavePolicyEditor({
           void form.handleSubmit();
         }}
       >
-        <FormSection title="Policy">
-          <form.AppField name="name">
-            {(f) => (
-              <f.TextField label="Name" placeholder="Company policy" autoComplete="off" />
-            )}
-          </form.AppField>
-        </FormSection>
+        {overrides ? (
+          <div className="rounded-xl border border-border bg-card px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <p className="text-sm font-semibold text-card-foreground">
+                  {overriddenPaths.length === 0
+                    ? "On the policy as written"
+                    : `${overriddenPaths.length} custom rule${overriddenPaths.length === 1 ? "" : "s"}`}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {overriddenPaths.length === 0
+                    ? "Change any value below to give this person a custom rule. Only what differs from the policy is stored."
+                    : "Only these differ from the policy; everything else follows it, including future edits to the policy."}
+                </p>
+                {overriddenPaths.length > 0 && (
+                  <ul className="flex flex-wrap gap-1.5 pt-1">
+                    {overriddenPaths.map((path) => (
+                      <li key={path}>
+                        <Badge variant="secondary" size="sm">
+                          {ruleLabel(path)}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {onResetToTemplate && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={saving}
+                  onClick={onResetToTemplate}
+                >
+                  <RotateCcw className="size-4" />
+                  Reset to policy
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <FormSection title="Policy">
+            <form.AppField name="name">
+              {(f) => (
+                <f.TextField label="Name" placeholder="Company policy" autoComplete="off" />
+              )}
+            </form.AppField>
+          </FormSection>
+        )}
 
         <FormSection
           title="Leave types"
           description="Each type says whether a request draws from the PTO balance."
+          action={customBadge("leaveTypes")}
         >
           <form.Field name="leaveTypes" mode="array">
             {(field) => (
@@ -174,7 +261,11 @@ export function LeavePolicyEditor({
           </form.Field>
         </FormSection>
 
-        <FormSection title="Reasons" description="One per line, in the order the forms list them.">
+        <FormSection
+          title="Reasons"
+          description="One per line, in the order the forms list them."
+          action={customBadge("reasons")}
+        >
           <FormGrid>
             <form.AppField name="reasonsTimeOff">
               {(f) => <f.TextareaField label="Time-off requests" rows={7} />}
@@ -185,7 +276,7 @@ export function LeavePolicyEditor({
           </FormGrid>
         </FormSection>
 
-        <FormSection title="Requests">
+        <FormSection title="Requests" action={customBadge("requests")}>
           <FormGrid>
             <form.AppField name="partialDayIncrementMinutes">
               {(f) => (
@@ -319,7 +410,7 @@ export function LeavePolicyEditor({
           </form.Field>
         </FormSection>
 
-        <FormSection title="PTO">
+        <FormSection title="PTO" action={customBadge("pto")}>
           <FormGrid columns={3} gap={3}>
             <form.AppField name="annualAllocationHours">
               {(f) => <f.NumberField label="Annual allocation (hours)" min="0" />}
@@ -410,7 +501,11 @@ export function LeavePolicyEditor({
           </FormGrid>
         </FormSection>
 
-        <FormSection title="Reminders" description="Business days on the agency calendar.">
+        <FormSection
+          title="Reminders"
+          description="Business days on the agency calendar."
+          action={customBadge("reminders")}
+        >
           <FormGrid columns={3} gap={3}>
             <form.AppField name="reminderBusinessDays">
               {(f) => <f.NumberField label="Remind reviewers after" inputMode="numeric" min="0" />}
@@ -424,7 +519,7 @@ export function LeavePolicyEditor({
           </FormGrid>
         </FormSection>
 
-        <FormSection title="Attendance">
+        <FormSection title="Attendance" action={customBadge("attendance")}>
           <FormGrid gap={3}>
             <form.AppField name="tardyGraceMinutes">
               {(f) => <f.NumberField label="Tardy grace (minutes)" inputMode="numeric" min="0" />}
@@ -440,7 +535,7 @@ export function LeavePolicyEditor({
           </form.Field>
         </FormSection>
 
-        <FormSection title="Points">
+        <FormSection title="Points" action={customBadge("points")}>
           <form.AppField name="pointsEnabled">
             {(f) => <f.CheckboxField label="Attendance points are on" />}
           </form.AppField>
@@ -554,7 +649,11 @@ export function LeavePolicyEditor({
           </form.Field>
         </FormSection>
 
-        <FormSection title="Routing" description="Who is told, per trigger.">
+        <FormSection
+          title="Routing"
+          description="Who is told, per trigger."
+          action={customBadge("routing")}
+        >
           <div className="space-y-3">
             {NOTIFICATION_TRIGGERS.map((trigger) => (
               <form.Field key={trigger} name={`routing.${trigger}`}>
@@ -576,10 +675,23 @@ export function LeavePolicyEditor({
 
         <FormError>{serverError}</FormError>
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           {onCancel && (
             <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
               Cancel
+            </Button>
+          )}
+          {newPolicyLabel && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={saving}
+              onClick={() => {
+                intentRef.current = "newPolicy";
+                void form.handleSubmit();
+              }}
+            >
+              {newPolicyLabel}
             </Button>
           )}
           <Button type="submit" variant="brand" disabled={saving}>

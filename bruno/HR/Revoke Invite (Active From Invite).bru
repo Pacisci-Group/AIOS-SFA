@@ -1,0 +1,27 @@
+meta {
+  name: Revoke Invite (Active From Invite)
+  type: http
+  seq: 40
+}
+
+delete {
+  url: {{baseUrl}}/users/{{hrActiveUserId}}/invite
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrOwnerAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /users/:userId/invite — cleanup of the second invitee (PAC-162)
+
+  See **Revoke Invite (Pending Onboarding)**. With both invitees gone the
+  onboarding policy has nobody on it, and the next request archives it.
+}

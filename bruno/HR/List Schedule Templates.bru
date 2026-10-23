@@ -1,0 +1,33 @@
+meta {
+  name: List Schedule Templates
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/hr/schedule-templates
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("includes the template just created", function () {
+    const ids = res.getBody().templates.map((t) => t.id);
+    expect(ids).to.include(bru.getVar("hrScheduleTemplateId"));
+  });
+}
+
+docs {
+  # GET /hr/schedule-templates — active first, then archived (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Response: `{ templates: WorkScheduleTemplateView[] }`. An empty list is
+    normal — everyone is then on the agency workweek.
+}

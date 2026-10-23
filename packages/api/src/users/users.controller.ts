@@ -172,12 +172,15 @@ export class UsersController {
   invite(
     @AgencyId() agencyId: string,
     @CurrentUser() actor: JwtPayload | undefined,
+    @Access() access: AccessContext,
     @Body() body: InviteUserDto,
   ) {
     return this.usersService.inviteUser({
       agencyId,
       ...body,
       invitedByUserId: actor?.sub,
+      // "Today" for a hire date defaulted at invite (PAC-162).
+      timeZone: access.timeZone,
     });
   }
 

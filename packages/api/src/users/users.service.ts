@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -13,13 +14,22 @@ import {
   AgencyPermission,
   ALL_MODULE_KEYS,
   allPagePermissionKeys,
+  DEFAULT_AGENCY_TIME_ZONE,
+  ModuleKey,
+  modulePermission,
   PageLevel,
   PageLevelOverride,
   pageLevelToPermissions,
   permissionsToPageLevel,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { PermissionHoldersService } from '../common/access/permission-holders.service';
 import { hashResetToken, mintResetToken } from '../common/crypto/reset-token';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
+import { LeavePolicyService } from '../common/hr/leave-policy.service';
+import { notificationRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
+import { agencyTodayIso } from '../performance/performance.range';
 import {
   inviteExpiryDays,
   inviteResendCooldownSeconds,
@@ -109,6 +119,8 @@ function statusFilter(
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
@@ -125,6 +137,11 @@ export class UsersService {
     private tenantUrls: TenantUrlService,
     private tenantBranding: TenantBrandingService,
     private hostResolver: HostTenantResolver,
+    // PAC-162: the HR profile every invite creates, and who is told about it.
+    private employeeProfiles: EmployeeProfilesService,
+    private leavePolicies: LeavePolicyService,
+    private permissionHolders: PermissionHoldersService,
+    private inngest: InngestService,
   ) {}
 
   /**
@@ -361,7 +378,86 @@ export class UsersService {
    */
   async inviteUser(input: InviteUserInput): Promise<InviteResponse> {
     const user = await this.createPendingUser(input);
-    return this.issueInvite(user, input.invitedByUserId);
+    const response = await this.issueInvite(user, input.invitedByUserId);
+    // After the email: a notification about an onboarding is worth nothing
+    // if the invite itself did not go out, and it must never fail the invite.
+    await this.notifyPendingOnboarding(user, input.invitedByUserId);
+    return response;
+  }
+
+  /**
+   * `hr.onboarding_pending` (PAC-162) for an invitee whose profile is
+   * pending — the branch's `hr:write` holders minus the inviter, or the
+   * `agency:hr:admin` holders when the branch has none. Only while the
+   * agency has an active leave policy: an agency that does not use leave
+   * must not hear, on every invite, about an onboarding it cannot do.
+   */
+  private async notifyPendingOnboarding(
+    user: UserDocument,
+    invitedByUserId?: string,
+  ): Promise<void> {
+    if (!user.agencyId) return;
+    const agencyId = user.agencyId.toString();
+    try {
+      const profile = await this.employeeProfiles.profileFor(
+        agencyId,
+        user._id,
+      );
+      if (!profile || profile.status !== 'pending') return;
+      if (!(await this.leavePolicies.hasActivePolicy(agencyId))) return;
+
+      const except = invitedByUserId ?? null;
+      let recipients = user.branchId
+        ? await this.permissionHolders.usersHolding(
+            agencyId,
+            modulePermission(ModuleKey.Hr, 'write'),
+            { branchId: user.branchId, exceptUserId: except },
+          )
+        : [];
+      if (recipients.length === 0) {
+        recipients = await this.permissionHolders.usersHolding(
+          agencyId,
+          AgencyPermission.HrAdmin,
+          { exceptUserId: except },
+        );
+      }
+      if (recipients.length === 0) return;
+
+      const [branch, roleNames] = await Promise.all([
+        user.branchId
+          ? this.branchModel.findById(user.branchId).select('name').lean()
+          : null,
+        this.permissionsService.resolveRoleNames(user),
+      ]);
+      await this.inngest.send(notificationRequested, {
+        type: 'hr.onboarding_pending',
+        recipientIds: recipients.map((id) => id.toHexString()),
+        agencyId,
+        actorId: except && Types.ObjectId.isValid(except) ? except : null,
+        entity: { kind: 'employeeProfile', id: profile._id.toHexString() },
+        data: {
+          userId: user._id.toHexString(),
+          employeeName: fullName(user.firstName, user.lastName),
+          email: user.email,
+          branchName: branch?.name ?? null,
+          roleNames,
+        },
+        dedupeKey: `hr.onboarding_pending:${profile._id.toHexString()}`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Could not request the onboarding notification for ${user._id.toString()}: ${String(err)}`,
+      );
+    }
+  }
+
+  /** `Agency.timezone`, or the platform default for a row that predates it. */
+  private async agencyTimeZone(agencyId: string): Promise<string> {
+    const agency = await this.agencyModel
+      .findById(agencyId)
+      .select('timezone')
+      .lean<{ timezone?: string } | null>();
+    return agency?.timezone ?? DEFAULT_AGENCY_TIME_ZONE;
   }
 
   /**
@@ -413,6 +509,28 @@ export class UsersService {
       input.roleIds,
     );
 
+    /*
+     * The HR profile (PAC-162): every account is an employee, the owner
+     * included. With a policy it is active from the hire date (the invite
+     * day unless given); without, it is pending on the Onboardings list.
+     * An invalid policy is a 400 *here*, after the user exists — the row is
+     * then a pending invite the owner can revoke, which is the recoverable
+     * outcome, and the policy was validated by the dialog before it got here.
+     */
+    if (input.leavePolicyId) {
+      const today = agencyTodayIso(
+        input.timeZone ?? (await this.agencyTimeZone(input.agencyId)),
+      );
+      await this.employeeProfiles.ensureProfile(input.agencyId, user._id, {
+        leavePolicyId: input.leavePolicyId,
+        hireDate: input.hireDate ?? today,
+        today,
+        actorId: input.invitedByUserId ?? null,
+      });
+    } else {
+      await this.employeeProfiles.ensureProfile(input.agencyId, user._id);
+    }
+
     return user;
   }
 
@@ -457,6 +575,9 @@ export class UsersService {
    */
   async revokeInvite(agencyId: string, userId: string): Promise<void> {
     const user = await this.findPendingInvite(agencyId, userId);
+    // The profile goes with the row it points at (PAC-162) — the same
+    // exception, for the same reason: this was never a person.
+    await this.employeeProfiles.deleteForRevokedInvite(agencyId, user._id);
     await this.userModel.deleteOne({ _id: user._id });
     await this.accessResolver.invalidateUser(userId);
   }
@@ -559,6 +680,16 @@ export class UsersService {
     user.passwordResetExpiresAt = undefined;
     await user.save();
 
+    // A person leaving the agency leaves HR the same day (PAC-162).
+    // Best-effort: the account is removed either way, and an admin can
+    // terminate by hand if this part failed.
+    await this.employeeProfiles.terminateForRemoval(
+      agencyId,
+      user._id,
+      actorUserId ?? null,
+      agencyTodayIso(actor.timeZone),
+    );
+
     // Last, and load-bearing — see the docblock. Their next request re-resolves
     // from Mongo, finds `isActive: false`, and gets nothing.
     await this.accessResolver.invalidateUser(userId);
@@ -599,6 +730,11 @@ export class UsersService {
     user.deactivatedByUserId = null;
     await user.save();
     await this.accessResolver.invalidateUser(userId);
+
+    // A user removed before PAC-162 has no profile; a user removed after it
+    // has a terminated one, which stays terminated — an HR admin rehires
+    // explicitly, with a new hire date.
+    await this.employeeProfiles.ensureProfile(agencyId, user._id);
 
     return this.findById(agencyId, userId);
   }

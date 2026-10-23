@@ -1,0 +1,59 @@
+meta {
+  name: Invite User (Pending Onboarding)
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{baseUrl}}/users/invite
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrOwnerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  bru.setVar("hrPendingEmail", `pac162-pending-${Date.now()}@sfa.local`);
+}
+
+body:json {
+  {
+    "email": "{{hrPendingEmail}}",
+    "roleIds": ["{{hrProducerRoleId}}"],
+    "firstName": "Pending",
+    "lastName": "Onboarding"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrPendingUserId", res.getBody().userId);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /users/invite — without a leave policy (PAC-162)
+
+  No `leavePolicyId`, so the invitee's HR profile is created **pending** and
+  lands on HR → Onboardings. If the agency has an active leave policy, the
+  `hr:write` holders in the invitee's branch (minus the inviter) are sent
+  `hr.onboarding_pending`; with no branch, or a branch with no reviewer, the
+  `agency:hr:admin` holders. With no active policy nothing is sent — the
+  agency does not use leave.
+
+  See `Users/Invite User` for the full contract. **Revoke Invite (Pending
+  Onboarding)** at the end of this folder deletes the row — and its profile —
+  so a repeated run leaves nothing behind.
+}

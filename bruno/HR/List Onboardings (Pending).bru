@@ -1,0 +1,50 @@
+meta {
+  name: List Onboardings (Pending)
+  type: http
+  seq: 25
+}
+
+get {
+  url: {{baseUrl}}/hr/employees?status=pending&pageSize=100
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the invitee as pending, with counts and no birthday", function () {
+    const body = res.getBody();
+    const row = body.items.find((i) => i.userId === bru.getVar("hrPendingUserId"));
+    expect(row).to.not.equal(undefined);
+    expect(row.status).to.equal("pending");
+    expect(row.user.accountStatus).to.equal("invited");
+    expect(row).to.not.have.property("dateOfBirth");
+    expect(body.counts.pending).to.be.greaterThan(0);
+    expect(body.activePolicyCount).to.be.greaterThan(0);
+  });
+}
+
+docs {
+  # GET /hr/employees — the Employees and Onboardings lists (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Query: `page`, `pageSize` (≤100), `q` (name or email), `status[]`
+    (`pending | active | terminated`, ORed), `branchId`, `leavePolicyId`.
+    `?status=pending` is the Onboardings page.
+  - Response: `{ page, pageSize, total, totalPages, items: EmployeeListItem[],
+    counts: { pending, active, terminated }, activePolicyCount }`. `counts`
+    are whole-agency, independent of the filters; `activePolicyCount === 0`
+    is the "create a leave policy first" empty state.
+  - Each item: `{ id, userId, status, user: { name, email, branchId,
+    branchName, roleNames, accountStatus }, hireDate, terminationDate,
+    leavePolicy, customRuleCount, scheduleTemplateName, createdAt }`.
+    **Never a date of birth.**
+  - Sorted by last name, first name, email; a `$lookup` on `users`, so a
+    name is searched where it lives rather than copied.
+}

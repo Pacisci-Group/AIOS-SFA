@@ -91,6 +91,15 @@ const CarrierAppointmentsPage = lazy(
 const HrSettingsPage = lazy(
   () => import('@/features/hr/settings/HrSettingsPage'),
 );
+const OnboardingsPage = lazy(
+  () => import('@/features/hr/employees/OnboardingsPage'),
+);
+const EmployeesPage = lazy(
+  () => import('@/features/hr/employees/EmployeesPage'),
+);
+const EmployeePage = lazy(
+  () => import('@/features/hr/employees/EmployeePage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -684,6 +693,33 @@ export function App() {
                   element={
                     <LazyPage>
                       <HrSettingsPage />
+                    </LazyPage>
+                  }
+                />
+                {/* Employee profiles + HR onboarding (PAC-162): the same
+                    admin capability. The employee's own record is a card
+                    on `/settings/profile`, not a route. */}
+                <Route
+                  path="/hr/onboardings"
+                  element={
+                    <LazyPage>
+                      <OnboardingsPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/hr/employees"
+                  element={
+                    <LazyPage>
+                      <EmployeesPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/hr/employees/:userId"
+                  element={
+                    <LazyPage>
+                      <EmployeePage />
                     </LazyPage>
                   }
                 />

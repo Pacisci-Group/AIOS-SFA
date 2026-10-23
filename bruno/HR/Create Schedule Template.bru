@@ -1,0 +1,70 @@
+meta {
+  name: Create Schedule Template
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/hr/schedule-templates
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "name": "Bruno four tens {{$timestamp}}",
+    "schedule": {
+      "1": { "start": "07:00", "end": "17:00" },
+      "2": { "start": "07:00", "end": "17:00" },
+      "3": { "start": "07:00", "end": "17:00" },
+      "4": { "start": "07:00", "end": "17:00" },
+      "5": null
+    }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrScheduleTemplateId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("adds up to forty hours with Friday off", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("active");
+    expect(body.version).to.equal(1);
+    expect(body.weeklyMinutes).to.equal(40 * 60);
+    expect(body.schedule["5"]).to.equal(null);
+    expect(body.employeeCount).to.equal(0);
+  });
+}
+
+docs {
+  # POST /hr/schedule-templates — a named weekly schedule (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  ## Body
+  `{ "name": "…", "schedule"?: { "<weekday 0–6>": { "start": "HH:mm", "end": "HH:mm" } | null } }`.
+  Sunday is `0`. A missing `schedule` is the agency workweek at 09:00–17:00.
+  Each shift's end must be after its start; at least one shift.
+
+  ## Response `201` — `WorkScheduleTemplateView`
+  `{ id, name, status, version, schedule, weeklyMinutes, employeeCount, createdAt, updatedAt, archivedAt }`.
+
+  ## Errors
+  - `400` — a bad clock, an inverted shift, a weekday outside 0–6, no shift at all.
+  - `409` — an active template with that name exists (case-insensitive).
+
+  An employee's profile references a template by id and may override it day
+  by day; with neither, the agency workweek applies. Nothing is seeded.
+}

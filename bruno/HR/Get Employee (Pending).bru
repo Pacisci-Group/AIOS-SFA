@@ -1,0 +1,45 @@
+meta {
+  name: Get Employee (Pending)
+  type: http
+  seq: 26
+}
+
+get {
+  url: {{baseUrl}}/hr/employees/{{hrPendingUserId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a pending profile has no rules yet", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("pending");
+    expect(body.leavePolicy).to.equal(null);
+    expect(body.effective).to.equal(null);
+    expect(body.assignments).to.eql([]);
+    expect(body.schedule.source).to.equal("workweek");
+    expect(body.events.map((e) => e.kind)).to.eql(["created"]);
+  });
+}
+
+docs {
+  # GET /hr/employees/:userId — one person's HR record (PAC-162)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Addressed by **user id**; one profile per user per agency. `404` for
+    another agency's user.
+  - Response `EmployeeProfileView`: status, the user (name, email, branch,
+    roles, account status), hire / anniversary / termination dates, the date
+    of birth and `showBirthday` (admin and self only), `leavePolicy`,
+    `overrides`, `effective` (template + overrides, `null` while pending),
+    `schedule` (template, override, the effective week and its source),
+    `allocations` / `effectiveAllocations`, `assignments[]` (newest first —
+    the history), `events[]` (the last 50 before/after audit rows).
+}

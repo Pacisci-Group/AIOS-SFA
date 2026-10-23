@@ -1,0 +1,35 @@
+meta {
+  name: List Roles (for the HR invite)
+  type: http
+  seq: 19
+}
+
+get {
+  url: {{baseUrl}}/roles
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrOwnerAccessToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const roles = res.getBody();
+    const producer = roles.find((r) => r.slug === "producer") ?? roles[0];
+    if (producer) bru.setVar("hrProducerRoleId", producer._id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # GET /roles — the Producer role id for the HR onboarding invites
+
+  Same request as `Users/List Roles (for the invite picker)`, captured as
+  `hrProducerRoleId` because the `HR/` folder runs before `Users/`.
+}

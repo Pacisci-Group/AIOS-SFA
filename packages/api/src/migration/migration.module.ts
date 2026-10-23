@@ -75,6 +75,7 @@ import {
   AgencyCalendar,
   AgencyCalendarSchema,
 } from '../hr/schemas/agency-calendar.schema';
+import { HrCommonModule } from '../common/hr/hr-common.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
 import {
@@ -110,6 +111,8 @@ import { MigrationService } from './migration.service';
     // Imported leads and deals reference a `leadSources` row (PAC-135). The
     // module depends on nothing, so it is safe in this standalone graph.
     LeadSourcesModule,
+    // The pending HR profile every imported user starts with (PAC-162).
+    HrCommonModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       // Resolves the global carrier the tenant's appointment is with (PAC-93).
