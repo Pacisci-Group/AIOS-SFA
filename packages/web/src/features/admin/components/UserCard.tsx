@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { userStatus, type AgencyUser } from "@/lib/users-api";
 import { UserRowMenu } from "../UserRowMenu";
+import { UserCodes } from "./UserCodes";
 import {
   branchLabel,
   displayName,
@@ -19,8 +20,8 @@ interface UserCardProps {
 }
 
 /**
- * One employee as a card — phone and tablet, where the table's five columns
- * don't fit. The counterpart to `LeadCard`, and the same trade: every field the
+ * One employee as a card — phone and tablet, where the table's columns don't
+ * fit. The counterpart to `LeadCard`, and the same trade: every field the
  * table shows is still here, stacked, with the row menu pinned to the corner.
  */
 export function UserCard({
@@ -84,6 +85,8 @@ export function UserCard({
             </span>
           )}
         </div>
+
+        <UserCodes user={user} layout="inline" className="mt-1.5" />
       </div>
 
       <span className="relative z-10">

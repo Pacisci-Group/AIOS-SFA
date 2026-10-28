@@ -1,0 +1,50 @@
+meta {
+  name: Reclassify Run
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/reclassify
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 201", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("reports what changed and the run after it", function () {
+    const body = res.getBody();
+    expect(body.reclassified).to.be.a("number");
+    expect(body.run.id).to.equal(bru.getVar("reconRunId"));
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs/:id/reclassify — re-apply the users' Allstate codes
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+
+  Re-applies the Allstate codes currently on the agency's users (Bind ID,
+  sub-producer code — set on the Users page, the profile page or while
+  accepting an invite) to a stored run without re-reading the file —
+  matching never depends on codes, only who bound and who is credited does.
+  Reviews are kept. Use it after setting someone's code.
+
+  ## Response `201`
+
+  ```json
+  { "reclassified": 2, "run": { …ReconciliationRunDetail… } }
+  ```
+
+  ## Errors
+  - `404` — no such run
+  - `409` — the run did not finish
+}

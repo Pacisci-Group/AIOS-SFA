@@ -1,6 +1,6 @@
 import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
-import type { CarrierOption } from "@sfa/shared";
+import { ALLSTATE_CODE_LABELS, type CarrierOption } from "@sfa/shared";
 import { FormSection } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -127,6 +127,18 @@ export const ReviewStep = withForm({
               value={`${values.owner.firstName} ${values.owner.lastName}`.trim()}
             />
             <Row label="Email" value={values.owner.email} />
+            <Row
+              label={ALLSTATE_CODE_LABELS.allstateBindId}
+              value={values.owner.allstateBindId.trim().toUpperCase() || "Not set"}
+              mono={!!values.owner.allstateBindId.trim()}
+              muted={!values.owner.allstateBindId.trim()}
+            />
+            <Row
+              label={ALLSTATE_CODE_LABELS.allstateSubProducerCode}
+              value={values.owner.allstateSubProducerCode.trim() || "Not set"}
+              mono={!!values.owner.allstateSubProducerCode.trim()}
+              muted={!values.owner.allstateSubProducerCode.trim()}
+            />
           </dl>
           <p className="text-xs text-muted-foreground">
             They will be emailed a link to set a password. The link expires in

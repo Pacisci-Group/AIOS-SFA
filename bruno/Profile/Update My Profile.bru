@@ -21,7 +21,9 @@ headers {
 body:json {
   {
     "firstName": "Pat",
-    "lastName": "Producer"
+    "lastName": "Producer",
+    "allstateBindId": "sokdemop",
+    "allstateSubProducerCode": "101"
   }
 }
 
@@ -35,6 +37,9 @@ tests {
     expect(body.firstName).to.equal("Pat");
     expect(body.lastName).to.equal("Producer");
     expect(body.name).to.equal("Pat Producer");
+    // Stored as Dash prints it — upper-cased.
+    expect(body.allstateBindId).to.equal("SOKDEMOP");
+    expect(body.allstateSubProducerCode).to.equal("101");
     // Same shape as GET /auth/me — the client overwrites its stored copy.
     expect(body).to.have.property("permissions");
     expect(body).to.have.property("avatarUrl");
@@ -42,24 +47,28 @@ tests {
 }
 
 docs {
-  # PATCH /me/profile — edit own name (PAC-81)
+  # PATCH /me/profile — edit own name and Allstate codes (PAC-81, PAC-173)
 
   **Module:** none (`@SkipTenant`, `@SkipBranch`, `@SkipModule`).
   **Permission:** none beyond a valid access token — the route only ever
   touches the caller's own document (`sub` from the JWT).
 
-  **Body** — both fields `clearable`: `null` (or an emptied string) removes
+  **Body** — every field `clearable`: `null` (or an emptied string) removes
   the value, omitting the key leaves it alone.
 
   | field     | type            | rules             |
   |-----------|-----------------|-------------------|
   | firstName | string \| null  | trimmed, ≤ 60     |
   | lastName  | string \| null  | trimmed, ≤ 60     |
+  | allstateBindId | string \| null | Allstate portal login; letters, digits, `.` `_` `-`, ≤ 32; stored upper-cased |
+  | allstateSubProducerCode | string \| null | ≤ 3 digits, stored zero-padded; `000` refused |
 
   **Response `200`** — the full auth-user blob, exactly as `GET /auth/me`
   returns it, so the client can replace its stored copy in one step.
 
-  **Errors** — `400` validation · `401` no/expired token or deactivated user.
+  **Errors** — `400` validation · `401` no/expired token or deactivated user ·
+  `409` `ALLSTATE_CODE_DUPLICATE` when a colleague already holds the code (see
+  **Update My Profile (Duplicate Code)**).
 
   > Email is deliberately **not** editable here — it is the login identifier.
   > The values in this request match the demo seed, so a collection run leaves

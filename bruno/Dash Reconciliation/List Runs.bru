@@ -1,0 +1,40 @@
+meta {
+  name: List Runs
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("includes the run just reconciled", function () {
+    const ids = res.getBody().items.map((run) => run.id);
+    expect(ids).to.include(bru.getVar("reconRunId"));
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs — uploaded reports, newest first
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  ## Query
+  - `includeSuperseded` — `true` to include runs a re-upload replaced (default `false`)
+  - `page`, `pageSize` (≤ 50, default 20)
+
+  Each item carries its totals and `openReviews` (rows still needing a
+  decision). A run left `processing` by a request that died reads as `failed`.
+}

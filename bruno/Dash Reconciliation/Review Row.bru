@@ -1,0 +1,63 @@
+meta {
+  name: Review Row
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "resolved",
+    "resolution": "confirmed_1800",
+    "note": "Assigned by Allstate; reviewed by Bruno"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("records the decision and who made it", function () {
+    const review = res.getBody().review;
+    expect(review.status).to.equal("resolved");
+    expect(review.resolution).to.equal("confirmed_1800");
+    expect(review.reviewedBy.name).to.be.a("string");
+    expect(review.reviewedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # PATCH /carrier-reconciliation/runs/:id/rows/:rowId/review — decide a row
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+
+  ## Body
+  - `status` — `open` | `resolved` | `dismissed`
+  - `resolution` — required with `resolved`: `entered_in_app`,
+    `number_corrected`, `credit_corrected`, `confirmed_1800`, `timing`,
+    `not_ours`, `duplicate`, `other`
+  - `note` — optional, ≤ 2000 characters; omitted keeps the current note
+
+  Reopening (`open`) clears the resolution and the reviewer. A decision on a
+  superseded run's row is carried to the new run only if the row still has
+  the same match and issues.
+
+  ## Errors
+  - `400` — validation, or `resolved` without a `resolution`
+  - `404` — no such run or row in the agency
+}

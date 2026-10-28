@@ -1,4 +1,5 @@
 import { useStore } from "@tanstack/react-form";
+import { AllstateCodeFields } from "@/components/allstate-codes/AllstateCodeFields";
 import { FormGrid, FormSection } from "@/components/form";
 import { withForm } from "@/hooks/form";
 import { EMPTY_ONBOARD } from "../onboard-schema";
@@ -10,7 +11,8 @@ import { useAvailability } from "./useAvailability";
  *
  * They are created as a pending invite holding the Agency Owner role, and are
  * emailed a link to set a password. Nobody here ever types their password, and
- * no credential is shared.
+ * no credential is shared. Their Allstate codes (PAC-173) are optional here;
+ * the owner can fill them in when accepting.
  */
 export const OwnerStep = withForm({
   defaultValues: EMPTY_ONBOARD,
@@ -63,6 +65,12 @@ export const OwnerStep = withForm({
             )}
           </form.AppField>
         </FormGrid>
+        <AllstateCodeFields
+          form={form}
+          fields="owner"
+          inputClassName="bg-card border-border"
+          markOptional
+        />
       </FormSection>
     );
   },

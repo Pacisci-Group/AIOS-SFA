@@ -12,6 +12,10 @@ import {
   StorageService,
   type PresignedUpload,
 } from '../storage/storage.service';
+import {
+  allstateCodeConflict,
+  applyAllstateCodes,
+} from '../users/allstate-codes';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   AVATAR_IMAGE_TYPES,
@@ -47,7 +51,12 @@ export class ProfileService {
     if (dto.lastName !== undefined) {
       user.lastName = dto.lastName ?? undefined;
     }
-    await user.save();
+    applyAllstateCodes(user, dto);
+    try {
+      await user.save();
+    } catch (error) {
+      throw (await allstateCodeConflict(error, this.userModel)) ?? error;
+    }
 
     return this.authService.me(userId);
   }

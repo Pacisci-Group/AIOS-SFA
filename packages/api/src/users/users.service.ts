@@ -45,6 +45,12 @@ import {
 } from '../roles/schemas/agency-role.schema';
 import { User, UserDocument } from './schemas/user.schema';
 import {
+  allstateCodeConflict,
+  allstateCodesForInsert,
+  applyAllstateCodes,
+} from './allstate-codes';
+import type { UpdateUserDetailsDto } from './dto/update-user-details.dto';
+import {
   UserWorkReleaseService,
   type ReleasedWork,
 } from './user-work-release.service';
@@ -381,17 +387,25 @@ export class UsersService {
     const email = input.email.toLowerCase();
     await this.assertEmailAvailable(email);
 
-    const user = await this.userModel.create({
-      agencyId: new Types.ObjectId(input.agencyId),
-      branchId: input.branchId ? new Types.ObjectId(input.branchId) : undefined,
-      email,
-      // A random unusable secret, not a known placeholder: until the invite is
-      // accepted there is no password, and this row must never be loggable into.
-      passwordHash: await bcrypt.hash(randomBytes(16).toString('hex'), 12),
-      firstName: input.firstName,
-      lastName: input.lastName,
-      isActive: false,
-    });
+    let user: UserDocument;
+    try {
+      user = await this.userModel.create({
+        agencyId: new Types.ObjectId(input.agencyId),
+        branchId: input.branchId
+          ? new Types.ObjectId(input.branchId)
+          : undefined,
+        email,
+        // A random unusable secret, not a known placeholder: until the invite is
+        // accepted there is no password, and this row must never be loggable into.
+        passwordHash: await bcrypt.hash(randomBytes(16).toString('hex'), 12),
+        firstName: input.firstName,
+        lastName: input.lastName,
+        ...allstateCodesForInsert(input),
+        isActive: false,
+      });
+    } catch (error) {
+      throw (await allstateCodeConflict(error, this.userModel)) ?? error;
+    }
 
     // The inviter is the actor. Owner protection does not fire on a brand-new
     // user — there is no owner role to strip — but routing through the one
@@ -1097,6 +1111,38 @@ export class UsersService {
     }
 
     await this.roleAssignments.setUserRoles(actor, agencyId, userId, roleIds);
+    return this.findById(agencyId, userId);
+  }
+
+  /**
+   * The owner's correction of someone's name or Allstate codes (PAC-173) —
+   * `PATCH /users/:userId/details`. Each field: a value sets, `null` clears,
+   * absent leaves it. Works on pending invites and removed users too: a
+   * leaver's Bind ID still names who bound their old sales.
+   */
+  async updateDetails(
+    agencyId: string,
+    userId: string,
+    dto: UpdateUserDetailsDto,
+  ): Promise<UserDetailResponse> {
+    const user = await this.userModel.findOne({
+      _id: new Types.ObjectId(userId),
+      agencyId: new Types.ObjectId(agencyId),
+      isPlatformAdmin: { $ne: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (dto.firstName !== undefined)
+      user.firstName = dto.firstName ?? undefined;
+    if (dto.lastName !== undefined) user.lastName = dto.lastName ?? undefined;
+    applyAllstateCodes(user, dto);
+    try {
+      await user.save();
+    } catch (error) {
+      throw (await allstateCodeConflict(error, this.userModel)) ?? error;
+    }
     return this.findById(agencyId, userId);
   }
 

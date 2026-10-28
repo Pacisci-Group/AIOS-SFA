@@ -101,6 +101,12 @@ export const PAGES: PageDefinition[] = [
     description:
       'Sales and service analytics: breakdowns by producer, lead source, line, carrier, branch, ZIP and CSR, trends over time and goal pacing. View is all the page needs; Edit grants nothing further.',
   },
+  {
+    moduleKey: ModuleKey.CarrierReconciliation,
+    label: 'Dash Reconciliation',
+    description:
+      "Reconcile the carrier's monthly new-business report against the agency's sales: policies missing from the app, app policies the carrier does not show, 1-800 policies for review and producer-credit mismatches. Edit uploads reports, reviews rows and re-checks a run against the staff's Allstate codes.",
+  },
 ];
 
 export interface PageLevelOverride {

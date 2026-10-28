@@ -1,6 +1,7 @@
 import {
   BarChart3,
   ChartColumn,
+  FileCheck2,
   FileDown,
   Home,
   LayoutDashboard,
@@ -140,6 +141,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Data Export",
         icon: FileDown,
         module: ModuleKey.DataExport,
+      },
+      {
+        to: "/reconciliation",
+        label: "Dash Reconciliation",
+        icon: FileCheck2,
+        module: ModuleKey.CarrierReconciliation,
       },
     ],
   },

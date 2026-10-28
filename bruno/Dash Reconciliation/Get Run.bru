@@ -1,0 +1,48 @@
+meta {
+  name: Get Run
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts every tab", function () {
+    const counts = res.getBody().tabCounts;
+    expect(counts).to.have.keys([
+      "missing_from_app",
+      "not_in_dash",
+      "review_1800",
+      "producer_mismatch",
+      "matched",
+      "ignored",
+    ]);
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id — one run, summarized
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  The run with its totals, the per-producer summary (capture rate, missing
+  premium, app-only policies, credit mismatches), each tab's row count and
+  how many still need a decision, and any parser warnings.
+
+  ## Errors
+  - `400` — `:id` is not an ObjectId
+  - `404` — no such run in the agency
+}

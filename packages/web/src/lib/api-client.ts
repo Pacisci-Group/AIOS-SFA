@@ -143,6 +143,18 @@ export interface AuthUser {
   firstName: string | null;
   lastName: string | null;
   /**
+   * The user's Allstate codes (PAC-173): the Bind ID they log in to the
+   * Allstate portal with (upper-cased, e.g. `SOK5PE0T`) and the three-digit
+   * sub-producer code Allstate credits them with (`034`). Null when not set.
+   * Shown and edited on the profile page; Dash Reconciliation reads them.
+   *
+   * Optional for the same reason as {@link AuthUser.timeZone}: a blob stored
+   * before the fields existed deserializes without them until the next
+   * `/auth/me` rewrites it.
+   */
+  allstateBindId?: string | null;
+  allstateSubProducerCode?: string | null;
+  /**
    * Relative API path of the profile photo, or null when none is set (PAC-81).
    * Stable (it carries a cache-buster, not a signature), but **authenticated**
    * — fetch it with {@link apiFetchBlob}, never point an `<img src>` at it.

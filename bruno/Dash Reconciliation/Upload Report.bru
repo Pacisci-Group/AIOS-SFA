@@ -1,0 +1,51 @@
+meta {
+  name: Upload Report
+  type: http
+  seq: 9
+}
+
+put {
+  url: {{reconUploadUrl}}
+  body: file
+  auth: none
+}
+
+body:file {
+  file: @file(fixtures/dash-new-business-demo.xlsx) @contentType(application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw report (step 2 of 3)
+
+  Not an API endpoint: this goes **straight to object storage** with the URL
+  from `Presign Upload`. `auth: none` — the collection's bearer would break
+  the S3 signature.
+
+  ## The fixture
+
+  `bruno/fixtures/dash-new-business-demo.xlsx` is a synthetic Dash export laid
+  out like the real one (metadata rows, then the 25-column header). Invented
+  names; the policy numbers are the demo seed's (`9002000NN`), so lines match:
+
+  | Line | What it exercises |
+  |---|---|
+  | 900200000, 900200002 | matched, credited to the producer who sold it |
+  | 900200004 | matched, but Dash credits Pat where the app credits Morgan |
+  | 900299990 | in Dash, not in the app |
+  | 900299991 (Bind ID `OSCVANJ`, 1-800) | 1-800 review |
+  | 900200005 (add item) | not new business |
+  | Motor Club line | never reconciled |
+
+  It carries **no agent number**, on purpose: `Carrier Appointments` gives
+  the demo agency a new random Allstate code every run, so a fixed number
+  would be refused as another agency's report. The run warns instead.
+
+  ⚠ `Presign Upload` and `Create Run` declare the file's size (**24069**
+  bytes). Regenerating the fixture means updating both.
+}
