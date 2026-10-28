@@ -1,0 +1,42 @@
+meta {
+  name: Review Row (Retired Resolution)
+  type: http
+  seq: 19
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "resolved",
+    "resolution": "confirmed_1800"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH …/review — `confirmed_1800` is retired (400)
+
+  v1 let a 1-800 row be "confirmed" with nothing done. A 1-800 policy is now
+  set up for service (`service_set_up`) or is not the agency's (`not_ours`),
+  so a review can no longer set `confirmed_1800`. A row decided with it before
+  still reads back with its label ("Confirmed 1-800 policy"), and a re-upload
+  of the same period reopens that row rather than carrying the decision.
+}

@@ -5,8 +5,8 @@ Ticket: https://linear.app/paciscigroup/issue/PAC-173 (sub-issue of PAC-152).
 Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 `web/` = `packages/web/src/`, `shared/` = `packages/shared/src/`.
 
-> **Changed since this was written (v2, PR 1 — 27 Oct 2026).** The notes below
-> describe v1. Where they disagree with this box, this box wins; the full
+> **Changed since this was written (v2, PRs 1–2 — 27–28 Oct 2026).** The notes
+> below describe v1. Where they disagree with this box, this box wins; the full
 > as-built rewrite follows the last v2 PR.
 >
 > - **There is no `producerCodes` registry.** The collection, its routes, the
@@ -26,9 +26,40 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 > - Migration `20261027140000-sfa_user_allstate_bind_ids` writes Smith Family
 >   Agency's 10 producers' Bind IDs onto their users, cross-referenced from the
 >   Jul–Sep export by name (Mike Iles = JAMES ILES).
-> - Still to come (v2 plan): premium/producer checks on matched rows,
->   assigning rows to Producers/CSRs, and the Sold / Cancel-rewrite /
->   Chargeback / Other / 1-800 service outcomes.
+> - **Matched rows are checked against the app (PR 2).** The app is the source
+>   of truth. A matched policy whose app premium is not Dash's written premium
+>   **to the cent** lands in a new **Premium differs** tab
+>   (`premium_mismatch`). Any difference flags (David, 27 Oct), and `1234.5`
+>   equals `1234.50`. The comparison is shared `reconciliationPremiumDelta`
+>   (app − Dash, in whole cents), used by the engine, the export and the
+>   page. A different producer stays `producer_mismatch`. A different item
+>   count is context only (`item_count_mismatch`, no tab).
+> - **Tabs**, in order: Missing from app, Not in Dash, 1-800 review, Premium
+>   differs, Producer mismatch, Matched, Not new business. Premium differs
+>   asks for a decision and is in the exception export. `totals` gain
+>   `premiumMismatch` and `premiumMismatchDelta` (`Σ |Dash − app|`). The
+>   export gains `premium_delta`. The page's Premium tab shows an
+>   "App − Dash" column and the total gap.
+> - **A 1-800 policy recorded as a sale.** A matched policy on a deal whose
+>   Bind ID is unnamed and on no user carries `direct_recorded_as_sale` in
+>   the 1-800 tab (it was there already; this says why). A named Bind ID
+>   (`former_staff`) never raises it. Un-selling has no flow yet, so these
+>   are resolved by hand.
+> - **Resolutions.** Premium differs offers "Premium corrected in the app",
+>   "Dash's figure is wrong — the app is right" and Other. 1-800 review
+>   offers "Set up for service", "Not this agency's business" and Other.
+>   `confirmed_1800` is **retired**: the review DTO refuses it, a row decided
+>   with it still reads and exports with its label, and a re-upload reopens
+>   that row instead of carrying the decision forward.
+> - A run reconciled before PR 2 reads `0` for both premium totals and has no
+>   Premium rows until it is **Re-checked**.
+> - On the Jul–Sep 2026 export against the local Smith Family Agency data,
+>   232 of 252 matched policies differ (20 exact, 228 with the app higher,
+>   median app/Dash 1.014), $9,340.69 apart in all. The 1-800 tab is still
+>   the same 7 rows, and the September subset still reproduces
+>   108 / 96 / 12 / 6 and $19,231.51.
+> - Still to come (v2 plan): assigning rows to Producers/CSRs, and the Sold /
+>   Cancel-rewrite / Chargeback / Other / 1-800 service outcomes.
 
 ## What it is
 

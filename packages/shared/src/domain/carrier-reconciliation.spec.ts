@@ -1,4 +1,12 @@
-import { RECONCILIATION_PRODUCER_KEY_PATTERN } from './carrier-reconciliation';
+import {
+  RECONCILIATION_PRODUCER_KEY_PATTERN,
+  RECONCILIATION_RESOLUTION_LABELS,
+  RECONCILIATION_RESOLUTIONS,
+  RECONCILIATION_RESOLUTIONS_BY_TAB,
+  RECONCILIATION_TABS,
+  RETIRED_RECONCILIATION_RESOLUTIONS,
+  reconciliationPremiumDelta,
+} from './carrier-reconciliation';
 
 describe('RECONCILIATION_PRODUCER_KEY_PATTERN', () => {
   it.each([
@@ -17,4 +25,72 @@ describe('RECONCILIATION_PRODUCER_KEY_PATTERN', () => {
       expect(RECONCILIATION_PRODUCER_KEY_PATTERN.test(key)).toBe(false);
     },
   );
+});
+
+describe('reconciliationPremiumDelta', () => {
+  it('compares to the cent: 1234.5 and 1234.50 agree', () => {
+    expect(reconciliationPremiumDelta(1234.5, 1234.5)).toBe(0);
+    expect(reconciliationPremiumDelta(1234.5, 1234.501)).toBe(0);
+  });
+
+  it('reads one cent apart as a difference, app minus Dash', () => {
+    expect(reconciliationPremiumDelta(1234.5, 1234.51)).toBe(0.01);
+    expect(reconciliationPremiumDelta(1234.51, 1234.5)).toBe(-0.01);
+  });
+
+  it('never lets float noise through', () => {
+    // 0.1 + 0.2 is 0.30000000000000004.
+    expect(reconciliationPremiumDelta(0.1 + 0.2, 0.3)).toBe(0);
+    expect(reconciliationPremiumDelta(1928, 1928.01)).toBe(0.01);
+  });
+
+  it('is null unless both sides have a premium', () => {
+    expect(reconciliationPremiumDelta(null, 100)).toBeNull();
+    expect(reconciliationPremiumDelta(100, undefined)).toBeNull();
+  });
+});
+
+describe('tabs', () => {
+  it('are listed in the order the page shows them', () => {
+    expect(RECONCILIATION_TABS).toEqual([
+      'missing_from_app',
+      'not_in_dash',
+      'review_1800',
+      'premium_mismatch',
+      'producer_mismatch',
+      'matched',
+      'ignored',
+    ]);
+  });
+});
+
+describe('resolutions', () => {
+  it('offers each tab its own decisions', () => {
+    expect(RECONCILIATION_RESOLUTIONS_BY_TAB.premium_mismatch).toEqual([
+      'premium_corrected',
+      'carrier_figure_wrong',
+      'other',
+    ]);
+    expect(RECONCILIATION_RESOLUTIONS_BY_TAB.review_1800).toEqual([
+      'service_set_up',
+      'not_ours',
+      'other',
+    ]);
+  });
+
+  it('offers on every tab only resolutions a review may set', () => {
+    for (const tab of RECONCILIATION_TABS) {
+      for (const resolution of RECONCILIATION_RESOLUTIONS_BY_TAB[tab]) {
+        expect(RECONCILIATION_RESOLUTIONS).toContain(resolution);
+      }
+    }
+  });
+
+  it('no longer offers confirmed_1800, but still labels it', () => {
+    expect(RECONCILIATION_RESOLUTIONS).not.toContain('confirmed_1800');
+    expect(RETIRED_RECONCILIATION_RESOLUTIONS).toContain('confirmed_1800');
+    expect(RECONCILIATION_RESOLUTION_LABELS.confirmed_1800).toBe(
+      'Confirmed 1-800 policy',
+    );
+  });
 });

@@ -7,6 +7,7 @@ import type {
   ReconciliationResolution,
   ReconciliationReviewStatus,
   ReconciliationTab,
+  RetiredReconciliationResolution,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import type { DashRow } from '../../common/carrier-reconciliation/dash-file-reader';
@@ -30,7 +31,8 @@ export type StoredSuggestion = Omit<SuggestionRaw, 'rowKey'> & {
  */
 export interface StoredReview {
   status: ReconciliationReviewStatus;
-  resolution: ReconciliationResolution | null;
+  /** A retired value only on a row decided before it was retired. */
+  resolution: ReconciliationResolution | RetiredReconciliationResolution | null;
   note: string | null;
   reviewedById: string | null;
   reviewedAt: Date | null;

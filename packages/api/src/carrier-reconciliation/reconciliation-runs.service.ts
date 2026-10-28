@@ -20,6 +20,7 @@ import {
   RECONCILIATION_TABS,
   RECONCILIATION_UNREADABLE_FILE,
   RECONCILIATION_WRONG_AGENCY,
+  reconciliationPremiumDelta,
   type AccessContext,
   type DataExportColumnDescriptor,
   type ReclassifyRunResponse,
@@ -112,6 +113,7 @@ const EXCEPTION_TABS: ReconciliationTab[] = [
   'missing_from_app',
   'not_in_dash',
   'review_1800',
+  'premium_mismatch',
   'producer_mismatch',
 ];
 
@@ -1162,6 +1164,14 @@ const EXPORT_COLUMNS: ExportColumn[] = [
     type: 'number',
     description: 'Premium in the app.',
     pick: (r) => r.app?.premium ?? null,
+  },
+  {
+    key: 'premium_delta',
+    type: 'number',
+    description:
+      'App premium minus Dash written premium, to the cent (matched rows).',
+    pick: (r) =>
+      reconciliationPremiumDelta(r.dash?.writtenPremium, r.app?.premium),
   },
   {
     key: 'dash_items',

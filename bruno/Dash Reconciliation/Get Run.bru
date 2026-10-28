@@ -25,10 +25,17 @@ tests {
       "missing_from_app",
       "not_in_dash",
       "review_1800",
+      "premium_mismatch",
       "producer_mismatch",
       "matched",
       "ignored",
     ]);
+  });
+
+  test("totals the premium differences", function () {
+    const totals = res.getBody().totals;
+    expect(totals.premiumMismatch).to.be.a("number");
+    expect(totals.premiumMismatchDelta).to.be.a("number");
   });
 }
 
@@ -41,6 +48,11 @@ docs {
   The run with its totals, the per-producer summary (capture rate, missing
   premium, app-only policies, credit mismatches), each tab's row count and
   how many still need a decision, and any parser warnings.
+
+  `totals.premiumMismatch` counts the matched policies whose premium differs
+  from Dash's, and `totals.premiumMismatchDelta` sums how far apart they are
+  (`Σ |Dash − app|`, so an over and an under never cancel). A run classified
+  before premiums were compared reads `0` for both until it is re-checked.
 
   ## Errors
   - `400` — `:id` is not an ObjectId
