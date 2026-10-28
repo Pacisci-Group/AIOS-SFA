@@ -1,0 +1,35 @@
+meta {
+  name: Presign Upload (Forbidden for Producer)
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "dash-report.xlsx",
+    "size": 1000
+  }
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs/presign — as a producer (403)
+
+  Uses the collection's default (producer) token. No default role carries
+  `carrier_reconciliation`; the owner grants it from the role matrix.
+}

@@ -1,0 +1,76 @@
+meta {
+  name: Presign Upload
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "dash-new-business-demo.xlsx",
+    "size": 24069
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("reconUploadUrl", res.getBody().uploadUrl);
+    bru.setVar("reconUploadKey", res.getBody().key);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("an agency-namespaced key and a signed XLSX PUT", function () {
+    const body = res.getBody();
+    expect(body.key).to.match(/^agencies\/[a-f0-9]{24}\/carrier-reconciliation\//);
+    expect(body.requiredHeaders["Content-Type"]).to.equal(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    expect(body.expiresIn).to.be.above(0);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs/presign — where to upload a Dash report (step 1 of 3)
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+
+  The report never passes through the API: the browser PUTs it straight to
+  object storage with the returned URL, then hands the key to `POST /runs`.
+  The key is `agencies/<agencyId>/carrier-reconciliation/<year>/<uuid>-<name>`,
+  which `POST /runs` checks before reading anything.
+
+  ## Body
+  - `filename` — must end `.xlsx` (Dash exports Excel)
+  - `size` — bytes, at most 10 MB
+
+  ## Response `201`
+
+  ```json
+  { "key": "agencies/…/carrier-reconciliation/2026/…-dash.xlsx",
+    "uploadUrl": "http://localhost:9000/…signed…",
+    "requiredHeaders": { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    "expiresIn": 300 }
+  ```
+
+  The PUT must send `requiredHeaders` byte for byte — the signature covers
+  `Content-Type`.
+}

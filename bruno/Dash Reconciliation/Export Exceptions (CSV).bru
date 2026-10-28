@@ -1,0 +1,52 @@
+meta {
+  name: Export Exceptions (CSV)
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/export?format=csv
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  format: csv
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a named CSV attachment with the header row", function () {
+    expect(res.getHeader("content-type")).to.contain("text/csv");
+    expect(res.getHeader("content-disposition")).to.match(
+      /attachment; filename="dash-reconciliation_2026-09-01_2026-10-31_exceptions\.csv"/,
+    );
+    expect(String(res.getBody())).to.contain("policy_number");
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/export — the exception list
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  Streams the rows of one tab, or of every tab that asks someone to act
+  (missing from app, not in Dash, 1-800 review, producer mismatch), as CSV
+  (UTF-8 with a BOM) or XLSX — what the owner hands to producers. Columns:
+  Dash row, tabs, review status, resolution and note, policy number, Dash
+  customer and app client, Dash producer, sub-producer code, Bind ID, app
+  producer, product, transaction, channel, dates, premiums, items, issues,
+  deal id.
+
+  ## Query
+  - `format` — `csv` | `xlsx` (default `xlsx`)
+  - `tab` — one tab (optional)
+}

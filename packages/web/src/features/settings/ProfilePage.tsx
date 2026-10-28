@@ -2,7 +2,12 @@ import { useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { KeyRound, Trash2, Upload, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
-import { DataRow, DetailCard } from '@/components/common/DetailCard';
+import { AllstateCodeFields } from '@/components/allstate-codes/AllstateCodeFields';
+import {
+  allstateCodeConflict,
+  allstateCodesFormValues,
+} from '@/components/allstate-codes/allstate-codes-schema';
+import { DataRow, DetailCard, SectionLabel } from '@/components/common/DetailCard';
 import { UserAvatar } from '@/components/common/UserAvatar';
 import { SetPasswordForm } from '@/components/auth/SetPasswordForm';
 import { FormError } from '@/components/form';
@@ -22,6 +27,7 @@ import {
   updateMyProfile,
   uploadAvatar,
 } from '@/lib/profile-api';
+import { serverFieldError } from '@/lib/server-field-error';
 import {
   profileFormSchema,
   toUpdateProfileInput,
@@ -31,8 +37,9 @@ import { SettingsPage } from './SettingsPage';
 import { NOT_AVAILABLE } from '@/lib/not-available';
 
 /**
- * The signed-in user's own profile (PAC-81): photo, name, email (read-only),
- * password, and the read-only account facts.
+ * The signed-in user's own profile (PAC-81): photo, name, Allstate codes
+ * (PAC-173, agency members only), email (read-only), password, and the
+ * read-only account facts.
  *
  * Routed at `/settings/profile` with **no permission gate** — everyone owns
  * their own profile, including a platform admin with no agency. Every mutation
@@ -67,10 +74,15 @@ export default function ProfilePage() {
         />
 
         <NameCard
-          key={`${user.firstName ?? ''}|${user.lastName ?? ''}`}
-          firstName={user.firstName}
-          lastName={user.lastName}
-          email={user.email}
+          key={[
+            user.firstName,
+            user.lastName,
+            user.allstateBindId,
+            user.allstateSubProducerCode,
+          ]
+            .map((part) => part ?? '')
+            .join('|')}
+          user={user}
           onSaved={refreshUser}
         />
 
@@ -200,22 +212,24 @@ function PhotoCard({
 }
 
 /**
- * Name form. Keyed by the stored name at the call site, so a save that comes
- * back normalised (trimmed, cleared) re-seeds the fields rather than leaving
+ * Name and Allstate codes form. Keyed by the stored values at the call site,
+ * so a save that comes back normalised (trimmed, cleared, a Bind ID
+ * upper-cased, `34` padded to `034`) re-seeds the fields rather than leaving
  * stale local state that no longer matches the server.
+ *
+ * The codes show only for a member of an agency: they are Allstate
+ * identifiers, unique within an agency, and mean nothing on a platform
+ * admin's own account.
  */
 function NameCard({
-  firstName,
-  lastName,
-  email,
+  user,
   onSaved,
 }: {
-  firstName: string | null;
-  lastName: string | null;
-  email: string;
+  user: AuthUser;
   onSaved: () => Promise<void>;
 }) {
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const showCodes = !!user.agencyId;
 
   const save = useMutation({
     mutationFn: updateMyProfile,
@@ -223,18 +237,28 @@ function NameCard({
       await onSaved();
       toast.success('Profile updated');
     },
-    onError: (err) => setSubmitError(errorMessage(err)),
+    onError: (err) => {
+      // A code someone else in the agency already holds: under its input,
+      // with the server's sentence naming who.
+      const conflict = allstateCodeConflict(err);
+      if (conflict) {
+        form.setFieldMeta(conflict.field, serverFieldError(conflict.message));
+        return;
+      }
+      setSubmitError(errorMessage(err));
+    },
   });
 
   const form = useAppForm({
     defaultValues: {
-      firstName: firstName ?? '',
-      lastName: lastName ?? '',
+      firstName: user.firstName ?? '',
+      lastName: user.lastName ?? '',
+      ...allstateCodesFormValues(user),
     } satisfies ProfileFormValues,
     validators: { onBlur: profileFormSchema },
     onSubmit: ({ value }) => {
       setSubmitError(null);
-      save.mutate(toUpdateProfileInput(value));
+      save.mutate(toUpdateProfileInput(value, { includeCodes: showCodes }));
     },
   });
 
@@ -272,6 +296,20 @@ function NameCard({
             </form.AppField>
           </div>
 
+          {showCodes && (
+            <div className="space-y-3">
+              <SectionLabel>Allstate codes</SectionLabel>
+              <AllstateCodeFields
+                form={form}
+                fields={{
+                  allstateBindId: 'allstateBindId',
+                  allstateSubProducerCode: 'allstateSubProducerCode',
+                }}
+                inputClassName="bg-card border-border"
+              />
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label htmlFor="profile-email" className="text-xs text-muted-foreground">
               Email
@@ -279,7 +317,7 @@ function NameCard({
             <Input
               id="profile-email"
               type="email"
-              value={email}
+              value={user.email}
               disabled
               className="bg-card border-border"
             />

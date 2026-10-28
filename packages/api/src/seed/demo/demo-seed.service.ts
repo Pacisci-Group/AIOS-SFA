@@ -494,7 +494,16 @@ export class DemoSeedService {
             // toggle flipped during a demo must not survive into the next one.
             availability: spec.availability ?? DEFAULT_USER_AVAILABILITY,
             legacySmartSuiteId: userLegacyId(spec.key),
+            // So a Dash reconciliation run credits a producer's lines and
+            // keeps them out of 1-800 review (PAC-173).
+            ...(spec.dash && {
+              allstateBindId: spec.dash.bindId,
+              allstateSubProducerCode: spec.dash.subProducer,
+            }),
           },
+          ...(!spec.dash && {
+            $unset: { allstateBindId: 1, allstateSubProducerCode: 1 },
+          }),
           $setOnInsert: { passwordHash },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true },

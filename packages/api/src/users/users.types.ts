@@ -51,6 +51,9 @@ export interface AgencyUserListItem {
   isPlatformAdmin: boolean;
   firstName?: string;
   lastName?: string;
+  /** Allstate codes (PAC-173); absent when unset. */
+  allstateBindId?: string;
+  allstateSubProducerCode?: string;
   isActive: boolean;
   /** Taking leads or not (PAC-139 §6). Set by the user, never from here. */
   availability: UserAvailability;
@@ -112,6 +115,9 @@ export interface UserDetailResponse {
   isPlatformAdmin: boolean;
   firstName?: string;
   lastName?: string;
+  /** Allstate codes (PAC-173); absent when unset. */
+  allstateBindId?: string;
+  allstateSubProducerCode?: string;
   isActive: boolean;
   /**
    * Set when the user was removed from the agency.
@@ -138,6 +144,9 @@ export interface InviteUserInput {
   roleIds: string[];
   firstName?: string;
   lastName?: string;
+  /** Allstate codes (PAC-173), as typed; normalised by `allstateCodesForInsert`. */
+  allstateBindId?: string;
+  allstateSubProducerCode?: string;
   invitedByUserId?: string;
   /**
    * Whether the inviter is a platform account.

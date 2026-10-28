@@ -22,14 +22,28 @@ interface PresignedUpload {
 }
 
 /**
- * Edit own name. Every mutation in this file returns the same auth-user blob
- * as `GET /auth/me` and re-stores it, so the caller only has to tell React
- * (`refreshUser()` / `adoptSession()`) — the persisted copy is already fresh.
+ * `PATCH /me/profile` body. `null` clears a field; an absent key leaves it.
+ * The Allstate codes (PAC-173) are optional keys so a caller with no agency —
+ * where the codes mean nothing — can leave them out entirely.
  */
-export async function updateMyProfile(input: {
+export interface UpdateMyProfileInput {
   firstName: string | null;
   lastName: string | null;
-}): Promise<AuthUser> {
+  allstateBindId?: string | null;
+  allstateSubProducerCode?: string | null;
+}
+
+/**
+ * Edit own name and Allstate codes. Every mutation in this file returns the
+ * same auth-user blob as `GET /auth/me` and re-stores it, so the caller only
+ * has to tell React (`refreshUser()` / `adoptSession()`) — the persisted copy
+ * is already fresh.
+ *
+ * A code another user of the agency holds is a `409` (`ALLSTATE_CODE_DUPLICATE`).
+ */
+export async function updateMyProfile(
+  input: UpdateMyProfileInput,
+): Promise<AuthUser> {
   const user = await apiFetch<AuthUser>('/me/profile', {
     method: 'PATCH',
     body: JSON.stringify(input),

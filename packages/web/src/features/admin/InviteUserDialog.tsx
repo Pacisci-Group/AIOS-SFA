@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
+import { AllstateCodeFields } from "@/components/allstate-codes/AllstateCodeFields";
+import { allstateCodeConflict } from "@/components/allstate-codes/allstate-codes-schema";
 import { FormError, FormGrid } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +20,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { ApiError } from "@/lib/api-client";
 import { listBranches } from "@/lib/branches-api";
 import { listRoles } from "@/lib/roles-api";
+import { serverFieldError } from "@/lib/server-field-error";
 import { agencyUserOptionsKey, inviteUser } from "@/lib/users-api";
 import {
   EMPTY_INVITE,
@@ -79,7 +82,14 @@ export function InviteUserDialog() {
       setOpen(false);
     },
     onError: (error) => {
-      // 409 is the one error with a specific remedy (the address is taken, and
+      // A code another user already holds (PAC-173) goes under its input —
+      // the server names who has it, which is the whole remedy.
+      const conflict = allstateCodeConflict(error);
+      if (conflict) {
+        form.setFieldMeta(conflict.field, serverFieldError(conflict.message));
+        return;
+      }
+      // The other 409 has a specific remedy too (the address is taken, and
       // the server says whether by a member or a pending invite), so it is
       // surfaced verbatim instead of behind a generic failure message.
       setSubmitError(
@@ -201,6 +211,17 @@ export function InviteUserDialog() {
                 )}
               </form.AppField>
             </FormGrid>
+
+            <AllstateCodeFields
+              form={form}
+              fields={{
+                allstateBindId: "allstateBindId",
+                allstateSubProducerCode: "allstateSubProducerCode",
+              }}
+              inputClassName="bg-card border-border"
+              markOptional
+              columns={1}
+            />
 
             <form.AppField name="email">
               {(f) => (
