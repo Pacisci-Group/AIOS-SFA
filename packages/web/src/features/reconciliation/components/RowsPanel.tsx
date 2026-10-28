@@ -21,6 +21,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -56,8 +63,12 @@ import {
   rowPolicyNumber,
   rowProducer,
 } from "../reconciliation-format";
+import { useReconciliationAssignees } from "../useReconciliationAssignees";
 
 const PAGE_SIZE = 25;
+
+/** Sentinel for "no filter" — `Select` cannot take an empty-string value. */
+const ANYONE = "__any__";
 
 const DECISION_TABS: ReadonlySet<ReconciliationTab> = new Set([
   "missing_from_app",
@@ -78,7 +89,7 @@ const TAB_HINTS: Record<ReconciliationTab, string> = {
   premium_mismatch:
     "In both, but the app's premium is not Dash's written premium to the cent. Any difference is listed — often fees the app includes and Dash leaves out. The app is the source of truth: correct the sale if it is wrong, or record that Dash's figure is.",
   producer_mismatch:
-    "In both, but Dash credits a different producer than the app's deal does.",
+    "In both, but bound in Dash by someone other than the producer on the app's deal.",
   matched: "In both, by policy number.",
   ignored:
     "Dash lines that are not new policies — items added to existing policies, Motor Club, repeated lines. Listed so the file's line count adds up.",
@@ -87,6 +98,8 @@ const TAB_HINTS: Record<ReconciliationTab, string> = {
 export interface RowsFilter {
   tab: ReconciliationTab;
   producer: string;
+  /** A user id, `unassigned` (or `me`), or `""` for anyone. */
+  assignee: string;
   q: string;
   page: number;
 }
@@ -108,6 +121,7 @@ export function RowsPanel({
   const params = {
     tab: filter.tab,
     producer: filter.producer || undefined,
+    assignee: filter.assignee || undefined,
     q: filter.q || undefined,
     page: filter.page,
     pageSize: PAGE_SIZE,
@@ -117,6 +131,7 @@ export function RowsPanel({
     queryFn: () => getReconciliationRows(run.id, params),
     placeholderData: keepPreviousData,
   });
+  const assignees = useReconciliationAssignees();
   const [downloading, setDownloading] = useState(false);
 
   // The box shows what is typed; the URL (and the query) follow a beat later.
@@ -148,6 +163,26 @@ export function RowsPanel({
   const data = rows.data;
   // The Premium tab shows how far apart the two figures are.
   const showDelta = filter.tab === "premium_mismatch";
+
+  const people = assignees.data ?? [];
+  // Someone the picker no longer lists (deactivated, or no longer a Producer
+  // or CSR) is still named by the rows the filter matched — once they are
+  // this filter's rows, not the previous one's kept on screen.
+  const filteredName =
+    filter.assignee === "me"
+      ? "me"
+      : (people.find((person) => person.id === filter.assignee)?.name ??
+        (rows.isPlaceholderData
+          ? undefined
+          : data?.items.find((row) => row.assignment)?.assignment?.user.name) ??
+        (assignees.isPending || rows.isPlaceholderData
+          ? "…"
+          : "someone no longer listed"));
+  const assigneeFilterLabel = !filter.assignee
+    ? "Any assignment"
+    : filter.assignee === "unassigned"
+      ? "Unassigned"
+      : `Assigned to ${filteredName}`;
 
   return (
     <DataPanel
@@ -195,6 +230,27 @@ export function RowsPanel({
               busy={rows.isFetching}
               className="w-full sm:w-72"
             />
+            <Select
+              value={filter.assignee || ANYONE}
+              onValueChange={(value) =>
+                onFilterChange({ assignee: value === ANYONE ? "" : value, page: 1 })
+              }
+            >
+              <SelectTrigger className="w-full bg-card sm:w-56" aria-label="Assignment">
+                {/* Named on the trigger, so a person picked here never reads
+                    as the producer chip beside it. */}
+                <SelectValue>{assigneeFilterLabel}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANYONE}>Any assignment</SelectItem>
+                <SelectItem value="unassigned">Unassigned</SelectItem>
+                {people.map((person) => (
+                  <SelectItem key={person.id} value={person.id}>
+                    {person.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {filter.producer && (
               <Badge variant="secondary" size="lg" className="gap-1">
                 {producerName ?? "Producer"}
@@ -239,7 +295,7 @@ export function RowsPanel({
       isError={rows.isError}
       isEmpty={(data?.items.length ?? 0) === 0}
       emptyMessage={
-        filter.q || filter.producer
+        filter.q || filter.producer || filter.assignee
           ? "No rows match these filters."
           : "Nothing here — this tab is clear."
       }
@@ -261,6 +317,7 @@ export function RowsPanel({
               <TableHead className="text-right">App − Dash</TableHead>
             )}
             <TableHead>Flags</TableHead>
+            <TableHead>Assigned</TableHead>
             <TableHead className="pr-5">Review</TableHead>
           </TableRow>
         </TableHeader>
@@ -318,6 +375,13 @@ export function RowsPanel({
                       </Tooltip>
                     ))}
                 </div>
+              </TableCell>
+              <TableCell>
+                {row.assignment ? (
+                  <Badge variant="secondary" size="sm">
+                    {row.assignment.user.name}
+                  </Badge>
+                ) : null}
               </TableCell>
               <TableCell className="pr-5">
                 {row.needsReview ? (

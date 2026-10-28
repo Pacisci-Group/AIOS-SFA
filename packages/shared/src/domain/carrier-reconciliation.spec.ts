@@ -5,6 +5,7 @@ import {
   RECONCILIATION_RESOLUTIONS_BY_TAB,
   RECONCILIATION_TABS,
   RETIRED_RECONCILIATION_RESOLUTIONS,
+  primaryReconciliationTab,
   reconciliationPremiumDelta,
 } from './carrier-reconciliation';
 
@@ -92,5 +93,17 @@ describe('resolutions', () => {
     expect(RECONCILIATION_RESOLUTION_LABELS.confirmed_1800).toBe(
       'Confirmed 1-800 policy',
     );
+  });
+});
+
+describe('primaryReconciliationTab', () => {
+  it('names the tab that asks for the work, not "Matched"', () => {
+    expect(primaryReconciliationTab(['matched', 'premium_mismatch'])).toBe(
+      'premium_mismatch',
+    );
+    expect(primaryReconciliationTab(['ignored', 'review_1800'])).toBe(
+      'review_1800',
+    );
+    expect(primaryReconciliationTab([])).toBeNull();
   });
 });

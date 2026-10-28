@@ -59,6 +59,8 @@ function transferLines(counts: WorkTransferCounts): string[] {
       plural(counts.rotationsTakenOver, "round-robin slot"),
     counts.rotationsDeactivated &&
       `${plural(counts.rotationsDeactivated, "duplicate round-robin slot")} switched off`,
+    counts.reconciliationRows &&
+      plural(counts.reconciliationRows, "Dash Reconciliation row"),
   ];
   return lines.filter((line): line is string => Boolean(line));
 }
@@ -77,6 +79,8 @@ function releaseLines(released: ReleasedWork): string[] {
       `${plural(released.leadsUnassigned, "open lead")} back to the unclaimed pool`,
     released.rotationsDeactivated &&
       `${plural(released.rotationsDeactivated, "round-robin slot")} switched off`,
+    released.reconciliationRowsUnassigned &&
+      `${plural(released.reconciliationRowsUnassigned, "Dash Reconciliation row")} back to the owner, unassigned`,
   ];
   return lines.filter((line): line is string => Boolean(line));
 }
@@ -164,6 +168,7 @@ export function TransferWorkDialog({
       ["households"],
       ["service-tickets"],
       ["deal-audits"],
+      ["carrier-reconciliation"],
     ]) {
       void queryClient.invalidateQueries({ queryKey });
     }

@@ -50,7 +50,9 @@ export function RunKpis({ run }: { run: ReconciliationRunDetail }) {
       <KpiCard
         label="1-800 to review"
         value={formatCount(totals.review1800)}
-        caption={`${formatCount(run.openReviews)} rows still need a decision`}
+        caption={`${formatCount(run.openReviews)} rows still need a decision${
+          run.assigned > 0 ? ` · ${formatCount(run.assigned)} assigned` : ""
+        }`}
         isPending={false}
         className="col-span-2 lg:col-span-1"
       />
@@ -74,7 +76,7 @@ export function ProducerTable({
   return (
     <DetailCard
       title="By producer"
-      titleHint="Who Dash credits with each new policy (the sub-producer, else whoever bound it), against what the app recorded. 1-800 policies are left out: they are nobody's to capture."
+      titleHint="Who bound each new policy in Dash — the person whose Bind ID it is, by their name in the app — against what the app recorded. 1-800 policies are left out: they are nobody's to capture."
       bodyless
     >
       {run.byProducer.length === 0 ? (

@@ -90,7 +90,7 @@ export type SuggestionRaw = Omit<ReconciliationSuggestion, 'rowId'> & {
 export interface RowDerived {
   bindIdStatus: BindIdStatus | null;
   credit: DashCredit;
-  /** `user:<id>`, `code:<sub-producer>`, `bind:<Bind ID>` or `none` — the summary's grouping. */
+  /** `user:<id>`, `bind:<Bind ID>` or `none` — the summary's grouping. */
   producerKey: string;
   issues: ReconciliationIssue[];
   tabs: ReconciliationTab[];
@@ -480,12 +480,7 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   const { dash, app } = base;
 
   let status: BindIdStatus | null = null;
-  let credit: DashCredit = {
-    code: null,
-    name: null,
-    userId: null,
-    via: 'none',
-  };
+  let credit: DashCredit = { name: null, userId: null, via: 'none' };
   let direct = false;
 
   if (dash) {
@@ -496,7 +491,6 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
     if (status === 'former_staff') issues.add('former_staff_bind_id');
     if (status === 'blank') issues.add('no_bind_id');
     if (direct) issues.add('direct_channel');
-    if (credit.code && !credit.userId) issues.add('unmapped_producer');
     if (!base.isSale) tabs.add('ignored');
   }
 
@@ -510,7 +504,8 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   const isDirect = !!dash && status === 'not_staff' && (base.isSale || direct);
 
   // A matched policy is checked against the app's, which is the source of
-  // truth: any difference is for a person to look at.
+  // truth: any difference is for a person to look at. Its producer is
+  // whoever's Bind ID bound it; the deal naming someone else is a mismatch.
   if (base.match === 'matched') {
     tabs.add('matched');
     if (!app?.producerId) issues.add('no_app_producer');
@@ -548,7 +543,6 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   let producerKey = 'none';
   if (dash) {
     if (credit.userId) producerKey = `user:${credit.userId}`;
-    else if (credit.code) producerKey = `code:${credit.code}`;
     // A former employee gets a line of their own in the summary rather than
     // being pooled with the lines that name nobody.
     else if (credit.via === 'bind_id' && dash.bindIdKey) {
@@ -577,7 +571,6 @@ export interface ProducerSummaryRaw {
   userId: string | null;
   /** The name Dash printed, for a producer with no app user. */
   dashName: string | null;
-  code: string | null;
   dashSales: number;
   dashPremium: number;
   matched: number;
@@ -626,9 +619,6 @@ export function summarize(rows: readonly SummaryRow[]): {
           ? row.producerKey.slice(5)
           : null,
         dashName: null,
-        code: row.producerKey.startsWith('code:')
-          ? row.producerKey.slice(5)
-          : null,
         dashSales: 0,
         dashPremium: 0,
         matched: 0,

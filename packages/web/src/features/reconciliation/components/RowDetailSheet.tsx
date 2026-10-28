@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { z } from "zod";
 import {
   AgencyPermission,
+  MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH,
+  ModuleKey,
   RECONCILIATION_IGNORED_REASON_LABELS,
   RECONCILIATION_RESOLUTION_LABELS,
   RECONCILIATION_RESOLUTIONS,
@@ -23,12 +25,15 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useAuth } from "@/contexts/auth-context";
 import { useAppForm } from "@/hooks/form";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
+  assignReconciliationRow,
   reconciliationKey,
   reviewReconciliationRow,
   type BindIdStatus,
+  type ReconciliationAssignment,
   type ReconciliationRowView,
   type ReconciliationSuggestion,
 } from "@/lib/carrier-reconciliation-api";
@@ -36,11 +41,16 @@ import { NOT_AVAILABLE } from "@/lib/not-available";
 import {
   apiErrorMessage,
   formatDay,
+  formatInstant,
   formatPremium,
   issueLabel,
   REVIEW_BADGE,
   rowPolicyNumber,
 } from "../reconciliation-format";
+import {
+  assigneeRoleLabel,
+  useReconciliationAssignees,
+} from "../useReconciliationAssignees";
 
 const BIND_STATUS_LABELS: Record<BindIdStatus, string> = {
   staff: "A staff member's Bind ID",
@@ -59,7 +69,12 @@ const SUGGESTION_REASONS: Record<ReconciliationSuggestion["reasons"][number], st
 
 /**
  * One row in full: what Dash says beside what the app says, why it is
- * flagged, likely counterparts, and the decision on it.
+ * flagged, likely counterparts, who it is assigned to, and the decision on it.
+ *
+ * Opened from the owner's page and from an assignee's (PAC-173), so every
+ * action in it is gated on its own permission: a Producer or CSR holds no
+ * `carrier_reconciliation` permission and reads the row without the forms,
+ * and a link shows only to a viewer whose page it opens would admit them.
  */
 export function RowDetailSheet({
   runId,
@@ -100,9 +115,26 @@ function RowDetail({
   row: ReconciliationRowView;
   onRowChanged: (row: ReconciliationRowView) => void;
 }) {
-  const { can } = usePermissions();
+  const { can, canAny } = usePermissions();
   const canWrite = can("carrier_reconciliation:write");
+  // The policy and household pages admit either page permission (see App.tsx).
+  const canOpenRecords = canAny([
+    `${ModuleKey.Clients}:read`,
+    `${ModuleKey.CrmService}:read`,
+  ]);
+  const { user } = useAuth();
+  // `/sold/:id/edit` needs `deal_audits:write`, and a Producer's is scoped to
+  // their own sales: someone else's would answer 404. The owner's page shows
+  // it for every sale.
+  const canEditSale =
+    can(`${ModuleKey.DealAudits}:write`) &&
+    (canWrite ||
+      (!!row.app?.producerId && row.app.producerId === user?.id));
+  // The API assigns only a row still waiting on a decision.
+  const canAssign = canWrite && row.needsReview && row.review.status === "open";
   const { dash, app } = row;
+  const showAppLinks =
+    canOpenRecords || (canEditSale && app?.dealId != null);
 
   return (
     <>
@@ -147,14 +179,11 @@ function RowDetail({
                   label="Product"
                   value={dash.productDescription ?? dash.product ?? NOT_AVAILABLE}
                 />
+                {/* Whoever's Bind ID bound it, by their name in the app — the
+                    sub-producer Dash prints is not read (owner, 28 Oct 2026). */}
                 <DataRow
-                  label="Credited to"
-                  value={
-                    row.credit.userName ??
-                    (row.credit.name
-                      ? `${row.credit.name}${row.credit.code ? ` (${row.credit.code})` : ""}`
-                      : NOT_AVAILABLE)
-                  }
+                  label="Producer"
+                  value={row.credit.userName ?? row.credit.name ?? NOT_AVAILABLE}
                 />
                 <DataRow
                   label="Bound by"
@@ -203,30 +232,34 @@ function RowDetail({
                   label="Premium · items"
                   value={`${formatPremium(app.premium)} · ${app.items}`}
                 />
-                <div className="flex flex-wrap gap-2 pt-1">
-                  <Link
-                    to={`/policies/${app.policyId}`}
-                    className={buttonVariants({ variant: "outline", size: "sm" })}
-                  >
-                    Open policy
-                  </Link>
-                  {app.householdId && (
-                    <Link
-                      to={`/clients/${app.householdId}`}
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
-                    >
-                      Open household
-                    </Link>
-                  )}
-                  {app.dealId && (
-                    <Link
-                      to={`/sold/${app.dealId}/edit`}
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
-                    >
-                      Edit sale
-                    </Link>
-                  )}
-                </div>
+                {showAppLinks && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {canOpenRecords && (
+                      <Link
+                        to={`/policies/${app.policyId}`}
+                        className={buttonVariants({ variant: "outline", size: "sm" })}
+                      >
+                        Open policy
+                      </Link>
+                    )}
+                    {canOpenRecords && app.householdId && (
+                      <Link
+                        to={`/clients/${app.householdId}`}
+                        className={buttonVariants({ variant: "outline", size: "sm" })}
+                      >
+                        Open household
+                      </Link>
+                    )}
+                    {canEditSale && app.dealId && (
+                      <Link
+                        to={`/sold/${app.dealId}/edit`}
+                        className={buttonVariants({ variant: "outline", size: "sm" })}
+                      >
+                        Edit sale
+                      </Link>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
@@ -254,7 +287,7 @@ function RowDetail({
                         {formatDay(suggestion.day)}
                       </span>
                     </span>
-                    {suggestion.kind === "app_policy" && suggestion.policyId && (
+                    {canOpenRecords && suggestion.kind === "app_policy" && suggestion.policyId && (
                       <Link
                         to={`/policies/${suggestion.policyId}`}
                         className={buttonVariants({ variant: "link", size: "sm" })}
@@ -273,7 +306,26 @@ function RowDetail({
           </section>
         )}
 
-        {dash && <UnknownCodesHint row={row} />}
+        {/* Fixing a code is the owner's job; an assignee reading the row
+            cannot set anyone's code or re-check the run. */}
+        {dash && canWrite && <UnknownCodesHint row={row} />}
+
+        {(canAssign || row.assignment) && (
+          <section className="space-y-3">
+            <SectionLabel>Assignment</SectionLabel>
+            {row.assignment ? (
+              <AssignmentSummary assignment={row.assignment} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Not assigned. Hand it to a Producer or CSR — they are notified
+                and see it on their own page.
+              </p>
+            )}
+            {canAssign && (
+              <AssignmentForm runId={runId} row={row} onSaved={onRowChanged} />
+            )}
+          </section>
+        )}
 
         {row.needsReview || row.review.status !== "open" ? (
           <section className="space-y-3">
@@ -305,12 +357,12 @@ function RowDetail({
 }
 
 /**
- * Where to fix a code nobody on staff holds (PAC-173).
+ * Where to fix a Bind ID nobody on staff holds (PAC-173).
  *
- * Codes live on the **users**, so a Bind ID or sub-producer code on no one is
- * fixed by setting it on that person — on the Users page, or by them on their
- * profile — and then re-checking the run. If it really is nobody's (Allstate's
- * call centre), it stays 1-800 and the decision below records that.
+ * Bind IDs live on the **users**, so one on no one is fixed by setting it on
+ * that person — on the Users page, or by them on their profile — and then
+ * re-checking the run. If it really is nobody's (Allstate's call centre), it
+ * stays 1-800 and the decision below records that.
  *
  * A Bind ID Dash names is read as a former employee's and is never 1-800, but
  * it is offered here too: it is just as likely someone still on staff whose
@@ -324,27 +376,16 @@ function UnknownCodesHint({ row }: { row: ReconciliationRowView }) {
     row.bindIdStatus === "not_staff" || row.bindIdStatus === "former_staff"
       ? row.dash?.bindId
       : null;
-  const subCode = row.issues.includes("unmapped_producer")
-    ? row.credit.code
-    : null;
-  if (!bindId && !subCode) return null;
-
-  const codes = [
-    bindId
-      ? `Bind ID ${bindId}${row.dash?.bindIdName ? ` (${row.dash.bindIdName})` : ""}`
-      : null,
-    subCode ? `sub-producer code ${subCode}` : null,
-  ]
-    .filter(Boolean)
-    .join(" and ");
+  if (!bindId) return null;
 
   return (
     <section className="space-y-2">
       <SectionLabel>Who is this?</SectionLabel>
       <p className="text-sm text-muted-foreground">
-        {codes} {bindId && subCode ? "are" : "is"} not on anyone on staff. If it
-        belongs to one of the agency's people, set this person's code on the
-        Users page, then Re-check the run.
+        Bind ID {bindId}
+        {row.dash?.bindIdName ? ` (${row.dash.bindIdName})` : ""} is not on
+        anyone on staff. If it belongs to one of the agency's people, set it on
+        them on the Users page, then Re-check the run.
       </p>
       {can(AgencyPermission.UsersRead) && (
         <Link
@@ -355,6 +396,191 @@ function UnknownCodesHint({ row }: { row: ReconciliationRowView }) {
         </Link>
       )}
     </section>
+  );
+}
+
+/** "Assigned to Sam by Olive on Oct 28, 3:04 PM", and the note left with it. */
+function AssignmentSummary({
+  assignment,
+}: {
+  assignment: ReconciliationAssignment;
+}) {
+  const { user } = useAuth();
+  const assignee =
+    assignment.user.id === user?.id ? "you" : assignment.user.name;
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">
+        Assigned to{" "}
+        <span className="font-medium text-card-foreground">{assignee}</span>
+        {assignment.assignedBy ? ` by ${assignment.assignedBy.name}` : ""} on{" "}
+        {formatInstant(assignment.assignedAt)}
+      </p>
+      {assignment.note && (
+        <p className="border-l-2 border-border pl-3 text-sm whitespace-pre-line">
+          {assignment.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Radix `Select` refuses an empty-string value, so "nobody" needs a token. */
+const UNASSIGNED = "__unassigned__";
+
+const assignmentSchema = z.object({
+  userId: z.string().min(1),
+  note: z.string().trim().max(MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH),
+});
+
+type AssignmentValues = z.infer<typeof assignmentSchema>;
+
+/** What a save did, for the toast. */
+function assignmentSavedMessage(
+  before: ReconciliationAssignment | null,
+  after: ReconciliationAssignment | null,
+): string {
+  if (!after) return "Unassigned.";
+  if (before?.user.id === after.user.id) return "Note saved.";
+  return `Assigned to ${after.user.name}. They have been notified.`;
+}
+
+/**
+ * Hand the row to a Producer or CSR, change who has it, or take it back
+ * (PAC-173). A new assignee is notified; saving the same person again only
+ * updates the note, and notifies no one. The note goes only with an assignee.
+ */
+function AssignmentForm({
+  runId,
+  row,
+  onSaved,
+}: {
+  runId: string;
+  row: ReconciliationRowView;
+  onSaved: (row: ReconciliationRowView) => void;
+}) {
+  const queryClient = useQueryClient();
+  const assignees = useReconciliationAssignees();
+  const current = row.assignment;
+
+  const save = useMutation({
+    mutationFn: (values: AssignmentValues) =>
+      assignReconciliationRow(
+        runId,
+        row.id,
+        values.userId === UNASSIGNED
+          ? { userId: null }
+          : { userId: values.userId, note: values.note.trim() || null },
+      ),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: reconciliationKey });
+      toast.success(assignmentSavedMessage(current, updated.assignment));
+      onSaved(updated);
+    },
+    onError: (error) =>
+      toast.error(apiErrorMessage(error, "The assignment could not be saved.")),
+  });
+
+  const people = assignees.data ?? [];
+  const options = [
+    { value: UNASSIGNED, label: "Unassigned" },
+    // Someone who stopped qualifying (deactivated, or no longer a Producer or
+    // CSR) is still the row's assignee; kept so the picker names them.
+    ...(current && !people.some((person) => person.id === current.user.id)
+      ? [
+          {
+            value: current.user.id,
+            label: assignees.isSuccess
+              ? `${current.user.name} (can no longer be assigned)`
+              : current.user.name,
+            triggerLabel: current.user.name,
+          },
+        ]
+      : []),
+    ...people.map((person) => ({
+      value: person.id,
+      label: (
+        <span className="flex items-baseline gap-2">
+          {person.name}
+          <span className="text-xs text-muted-foreground">
+            {assigneeRoleLabel(person)}
+          </span>
+        </span>
+      ),
+      triggerLabel: person.name,
+    })),
+  ];
+
+  const isUnchanged = (values: AssignmentValues) =>
+    values.userId === (current?.user.id ?? UNASSIGNED) &&
+    (values.userId === UNASSIGNED || values.note.trim() === (current?.note ?? ""));
+
+  const form = useAppForm({
+    defaultValues: {
+      userId: current?.user.id ?? UNASSIGNED,
+      note: current?.note ?? "",
+    } as AssignmentValues,
+    validators: { onSubmit: assignmentSchema },
+    onSubmit: ({ value }) => save.mutate(value),
+  });
+
+  return (
+    <form.AppForm>
+      <form
+        noValidate
+        className="space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void form.handleSubmit();
+        }}
+      >
+        <form.AppField name="userId">
+          {(f) => (
+            <f.SelectField
+              label="Assigned to"
+              options={options}
+              triggerClassName="w-full sm:w-72"
+              description={
+                assignees.isError
+                  ? "Could not load who can be assigned. Close the row and open it again to retry."
+                  : assignees.isSuccess && people.length === 0
+                    ? "The agency has no active Producers or CSRs to assign to."
+                    : undefined
+              }
+            />
+          )}
+        </form.AppField>
+        <form.Subscribe selector={(state) => state.values.userId}>
+          {(userId) =>
+            userId !== UNASSIGNED ? (
+              <form.AppField name="note">
+                {(f) => (
+                  <f.TextareaField
+                    label="Note for them"
+                    rows={2}
+                    placeholder="What to look into — optional"
+                  />
+                )}
+              </form.AppField>
+            ) : null
+          }
+        </form.Subscribe>
+        <form.Subscribe selector={(state) => state.values}>
+          {(values) => (
+            <div className="flex justify-end">
+              <Button
+                type="submit"
+                size="sm"
+                variant="outline"
+                disabled={save.isPending || isUnchanged(values)}
+              >
+                {save.isPending ? "Saving…" : "Save assignment"}
+              </Button>
+            </div>
+          )}
+        </form.Subscribe>
+      </form>
+    </form.AppForm>
   );
 }
 

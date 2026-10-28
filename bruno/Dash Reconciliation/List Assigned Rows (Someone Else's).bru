@@ -1,0 +1,28 @@
+meta {
+  name: List Assigned Rows (Someone Else's)
+  type: http
+  seq: 36
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned?userId={{reconOwnerId}}
+  body: none
+  auth: inherit
+}
+
+params:query {
+  userId: {{reconOwnerId}}
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned?userId=… — as a producer (403)
+
+  Listing another person's rows needs `carrier_reconciliation:read`. A
+  Producer or CSR only ever sees their own.
+}

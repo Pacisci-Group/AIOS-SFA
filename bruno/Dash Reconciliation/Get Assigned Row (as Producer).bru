@@ -1,0 +1,40 @@
+meta {
+  name: Get Assigned Row (as Producer)
+  type: http
+  seq: 31
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row, its assignment and its upload", function () {
+    const row = res.getBody();
+    expect(row.id).to.equal(bru.getVar("reconAssignRowId"));
+    expect(row.assignment.note).to.equal("Enter the deal from the Dash line");
+    expect(row.run.id).to.equal(bru.getVar("reconRunId"));
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId — one of my rows
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read`
+
+  What the notification opens. Returned whatever the row's state — decided
+  since, or on a run a re-upload replaced — so an old notification still
+  shows what happened, as long as the row is still assigned to the caller.
+
+  ## Errors
+  - `400` — `:rowId` is not an ObjectId
+  - `404` — no such row, or it is not assigned to the caller (unless they
+    hold `carrier_reconciliation:read`)
+}

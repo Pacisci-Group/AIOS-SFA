@@ -1,0 +1,40 @@
+meta {
+  name: Assign Row (Not a Producer or CSR)
+  type: http
+  seq: 28
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{reconOwnerId}}"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH …/assignment — someone outside the pool (400)
+
+  The owner holds no `producer` or `csr` role, so a row cannot be assigned to
+  them. Only an active Producer or CSR of the agency can take a row; the
+  same check refuses a user of another agency, a pending invite and a
+  deactivated account.
+}

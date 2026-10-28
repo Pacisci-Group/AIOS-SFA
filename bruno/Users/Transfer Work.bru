@@ -71,6 +71,9 @@ docs {
   - Round-robin slots (`crmRotations.crmId`): taken over where the successor has
     no active slot for that producer, switched off otherwise — a pool is never
     doubled, and `activeForProducer` is never turned on.
+  - Dash Reconciliation rows assigned to them that still wait on a decision, on
+    current runs (`assignment.userId`; `assignedById` / `assignedAt` become the
+    transfer's). A decided row keeps the name of whoever worked it (PAC-173).
 
   ## What never moves
   Attribution — `deals/quoteRecaps.producerId`, **resolved** audit items, `createdBy*`,

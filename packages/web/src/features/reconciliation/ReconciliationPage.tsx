@@ -4,6 +4,7 @@ import { AlertCircle, FileCheck2, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  RECONCILIATION_ASSIGNEE_FILTER_PATTERN,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_TABS,
 } from "@sfa/shared";
@@ -47,6 +48,7 @@ const URL_DEFAULTS = {
   run: "",
   tab: "",
   producer: "",
+  assignee: "",
   q: "",
   page: "",
 };
@@ -55,6 +57,7 @@ const URL_ALLOWED = {
   run: (value: string) => OBJECT_ID.test(value),
   tab: RECONCILIATION_TABS,
   producer: (value: string) => RECONCILIATION_PRODUCER_KEY_PATTERN.test(value),
+  assignee: (value: string) => RECONCILIATION_ASSIGNEE_FILTER_PATTERN.test(value),
   page: (value: string) => /^[1-9]\d{0,4}$/.test(value),
 } as const;
 
@@ -71,6 +74,9 @@ const URL_ALLOWED = {
  * Users page and the profile page — there is no code registry here. A Bind ID
  * on no user reads as 1-800; once that person's code is set, "Re-check"
  * re-applies the codes to the stored run without re-uploading the file.
+ *
+ * A row waiting on a decision can be handed to a Producer or CSR from its
+ * drawer; they work it from `/reconciliation/assigned` (`AssignedRowsPage`).
  */
 export default function ReconciliationPage() {
   const { can } = usePermissions();
@@ -111,6 +117,7 @@ export default function ReconciliationPage() {
   const filter: RowsFilter = {
     tab: (values.tab || defaultTab(run.data?.tabCounts)) as ReconciliationTab,
     producer: values.producer,
+    assignee: values.assignee,
     q: values.q,
     page: Number(values.page || 1),
   };
@@ -118,6 +125,7 @@ export default function ReconciliationPage() {
     setValues({
       ...(patch.tab !== undefined ? { tab: patch.tab } : {}),
       ...(patch.producer !== undefined ? { producer: patch.producer } : {}),
+      ...(patch.assignee !== undefined ? { assignee: patch.assignee } : {}),
       ...(patch.q !== undefined ? { q: patch.q } : {}),
       ...(patch.page !== undefined ? { page: patch.page > 1 ? String(patch.page) : "" } : {}),
     });
@@ -176,7 +184,7 @@ export default function ReconciliationPage() {
                 <Select
                   value={runId}
                   onValueChange={(next) =>
-                    setValues({ run: next, tab: "", producer: "", q: "", page: "" })
+                    setValues({ run: next, tab: "", producer: "", assignee: "", q: "", page: "" })
                   }
                 >
                   <SelectTrigger className="w-full bg-card sm:w-96" aria-label="Report">
@@ -268,7 +276,7 @@ export default function ReconciliationPage() {
         onOpenChange={setUploadOpen}
         onUploaded={(id) => {
           setUploadOpen(false);
-          setValues({ run: id, tab: "", producer: "", q: "", page: "" });
+          setValues({ run: id, tab: "", producer: "", assignee: "", q: "", page: "" });
         }}
       />
       {runId && (

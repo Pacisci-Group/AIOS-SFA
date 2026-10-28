@@ -5,6 +5,8 @@ import { AgencyPermission, DataScope } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { ReconciliationRow } from '../src/carrier-reconciliation/schemas/reconciliation-row.schema';
+import { ReconciliationRun } from '../src/carrier-reconciliation/schemas/reconciliation-run.schema';
 import { RenewalMaterializationService } from '../src/common/renewal/renewal-materialization.service';
 import { CrmAssignmentService } from '../src/crm-rotations/crm-assignment.service';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
@@ -81,6 +83,8 @@ describe('Work transfer scenarios (e2e)', () => {
   let rotations: Model<CrmRotation>;
   let producerAssignments: Model<ProducerAssignment>;
   let transfers: Model<WorkTransfer>;
+  let reconciliationRuns: Model<ReconciliationRun>;
+  let reconciliationRows: Model<ReconciliationRow>;
   let roles: Model<AgencyRole>;
   let roleAssignments: RoleAssignmentsService;
   let crmAssignment: CrmAssignmentService;
@@ -164,6 +168,8 @@ describe('Work transfer scenarios (e2e)', () => {
     rotations = model(CrmRotation.name);
     producerAssignments = model(ProducerAssignment.name);
     transfers = model(WorkTransfer.name);
+    reconciliationRuns = model(ReconciliationRun.name);
+    reconciliationRows = model(ReconciliationRow.name);
     roles = model(AgencyRole.name);
     roleAssignments = app.get(RoleAssignmentsService);
     crmAssignment = app.get(CrmAssignmentService);
@@ -216,6 +222,8 @@ describe('Work transfer scenarios (e2e)', () => {
         rotations,
         producerAssignments,
         transfers,
+        reconciliationRuns,
+        reconciliationRows,
       ].map((m) => (m as Model<unknown>).deleteMany({})),
     );
     await households.updateMany({}, { $unset: { assignedCrmId: 1 } });
@@ -698,6 +706,80 @@ describe('Work transfer scenarios (e2e)', () => {
 
       expect(await auditDealIds(producer2Token)).toContain(dealId);
       expect(await auditDealIds(producerToken)).not.toContain(dealId);
+    });
+
+    /**
+     * PAC-173. Seeded through the models — a real run needs an uploaded xlsx
+     * — but read back through the assignee's own page, which is gated on
+     * `leads:read`: no Producer holds `carrier_reconciliation:read`.
+     */
+    it('a transferred Dash row moves between the producers’ assigned pages', async () => {
+      const run = await reconciliationRuns.create({
+        agencyId: ctx.agencyId,
+        carrierId: new Types.ObjectId(),
+        status: 'ready',
+        file: { storageKey: 'unused', filename: 'dash.xlsx', size: 1 },
+        fileMeta: {
+          agentNumber: null,
+          agentName: null,
+          downloadedBy: null,
+          downloadedAt: null,
+          startDate: '2026-09-01',
+          endDate: '2026-09-30',
+          sheetName: 'Sheet1',
+          headerRowNumber: 1,
+          rowCount: 1,
+        },
+      });
+      const row = await reconciliationRows.create({
+        agencyId: ctx.agencyId,
+        runId: run._id,
+        rowKey: `sc-row-${++seq}`,
+        side: 'dash',
+        credit: { name: null, userId: null, via: 'none' },
+        producerKey: 'none',
+        needsReview: true,
+        review: {
+          status: 'open',
+          resolution: null,
+          note: null,
+          reviewedById: null,
+          reviewedAt: null,
+          carriedForwardFromRowId: null,
+        },
+        assignment: {
+          userId: producerId,
+          assignedById: null,
+          assignedAt: new Date(),
+          note: null,
+        },
+      });
+      const id = row._id.toString();
+      const assignedIds = async (token: string) =>
+        (
+          (
+            await api()
+              .get('/api/v1/carrier-reconciliation/assigned')
+              .set(authHeader(token))
+              .expect(200)
+          ).body as { items: { id: string }[] }
+        ).items.map((r) => r.id);
+      expect(await assignedIds(producerToken)).toContain(id);
+      expect(await assignedIds(producer2Token)).not.toContain(id);
+
+      await transfer(producerId, producer2Id).expect(201);
+
+      expect(await assignedIds(producer2Token)).toContain(id);
+      expect(await assignedIds(producerToken)).not.toContain(id);
+      // What the notification opens follows the row, too.
+      await api()
+        .get(`/api/v1/carrier-reconciliation/assigned/${id}`)
+        .set(authHeader(producer2Token))
+        .expect(200);
+      await api()
+        .get(`/api/v1/carrier-reconciliation/assigned/${id}`)
+        .set(authHeader(producerToken))
+        .expect(404);
     });
   });
 

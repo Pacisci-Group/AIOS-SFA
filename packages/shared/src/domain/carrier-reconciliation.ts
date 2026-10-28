@@ -23,17 +23,20 @@
  *   is serviced, never sold.
  * - `premium_mismatch` — matched, but the app's premium is not Dash's written
  *   premium to the cent. Any difference flags; the app is the source of truth.
- * - `producer_mismatch` — matched, but Dash credits a different producer than
- *   the app's deal does.
+ * - `producer_mismatch` — matched, but bound in Dash by someone other than the
+ *   app deal's producer.
  * - `matched` — in both.
  * - `ignored` — Dash lines that are not new policies (add-item endorsements,
  *   Motor Club), kept so the file's line count reconciles.
  *
- * Producer identity comes from the Allstate codes on each **user**
- * (`allstate-codes.ts`): a Bind ID (who bound the policy in the portal) and a
- * sub-producer code (who gets the credit). They are different on purpose —
- * producers bind for one another all the time — so the 1-800 test reads the
- * Bind ID only, and credit reads the sub-producer code first.
+ * The owner works the open rows, or hands one to a Producer or CSR
+ * (`assignment`), who is notified and sees it on their own page.
+ *
+ * Who a line belongs to is the user holding its **Bind ID** — the login that
+ * bound the policy, entered on the user (`allstate-codes.ts`). Dash's
+ * sub-producer column is not read (owner, 28 Oct 2026): grouping by it listed
+ * people twice whenever the code was not on their user, and it named the
+ * binder on nearly every sale anyway.
  */
 
 export const RECONCILIATION_RUN_STATUSES = [
@@ -152,7 +155,8 @@ export const RECONCILIATION_ISSUE_LABELS: Record<ReconciliationIssue, string> =
       'Allstate sold it directly, but the app has it on a sale — a 1-800 policy is serviced, never sold',
     premium_mismatch: 'Premium in the app differs from Dash',
     item_count_mismatch: 'Item count in the app differs from Dash',
-    producer_mismatch: 'Dash credits a different producer',
+    producer_mismatch: 'Bound in Dash by someone other than the app’s producer',
+    // Raised only on runs classified while sub-producer codes were read.
     unmapped_producer: 'Sub-producer code is not on any staff user',
     no_app_producer: 'App policy has no producer',
     number_format: 'Policy number looks mistyped',
@@ -255,12 +259,38 @@ export function reconciliationPremiumDelta(
 }
 
 /**
- * A per-producer summary key as a filter value: `user:<id>`,
- * `code:<sub-producer>`, `bind:<Bind ID>` or `none`. Shared so the rows
+ * A per-producer summary key as a filter value: `user:<id>`, `bind:<Bind ID>`
+ * or `none` — and `code:<sub-producer>` on a run classified before
+ * sub-producer codes were set aside, until it is re-checked. Shared so the rows
  * endpoint and the page's URL guard accept the same keys.
  */
 export const RECONCILIATION_PRODUCER_KEY_PATTERN =
   /^(user:[a-f0-9]{24}|code:[A-Z0-9-]{1,12}|bind:[A-Z0-9._-]{1,32}|none)$/i;
+
+/**
+ * The tab a row is filed under when one has to be named — in a notification,
+ * on the assignee's page: the first of its tabs in page order, so a matched
+ * row whose premium differs reads "Premium differs", not "Matched".
+ */
+export function primaryReconciliationTab(
+  tabs: readonly ReconciliationTab[],
+): ReconciliationTab | null {
+  return RECONCILIATION_TABS.find((tab) => tabs.includes(tab)) ?? null;
+}
+
+/**
+ * Who a row can be assigned to: the agency's active **Producers and CSRs** —
+ * users holding a role with one of these slugs (David, 27 Oct 2026). The
+ * owner assigns; the assignee works the row from their own page.
+ */
+export const RECONCILIATION_ASSIGNEE_ROLE_SLUGS = ['producer', 'csr'] as const;
+
+/**
+ * The rows endpoint's `assignee` filter: a user id, `me`, or `unassigned`.
+ * Shared so the API and the page's URL guard accept the same values.
+ */
+export const RECONCILIATION_ASSIGNEE_FILTER_PATTERN =
+  /^([a-f0-9]{24}|me|unassigned)$/i;
 
 /** Error codes the page maps to copy (`ApiError.body.code`). */
 export const RECONCILIATION_DUPLICATE_FILE = 'RECONCILIATION_DUPLICATE_FILE';
@@ -272,6 +302,9 @@ export const RECONCILIATION_UNREADABLE_FILE = 'RECONCILIATION_UNREADABLE_FILE';
 export const MAX_RECONCILIATION_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_RECONCILIATION_ROWS = 20_000;
 export const RECONCILIATION_FILE_EXTENSIONS = ['.xlsx'] as const;
+
+/** The note left with an assignment, so the form and the API refuse alike. */
+export const MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH = 1000;
 
 // ---------------------------------------------------------------------------
 // Views
@@ -309,12 +342,12 @@ export interface ReconciliationTotals {
 /** One producer's line in the run summary — the workbook's "By Carrier Producer". */
 export interface ReconciliationProducerSummary {
   /**
-   * `user:<id>`, `code:<sub-producer code>`, `bind:<Bind ID>` (a former
-   * employee Dash names, whose Bind ID is on no user) or `none`.
+   * `user:<id>`, `bind:<Bind ID>` (a former employee Dash names, whose Bind
+   * ID is on no user) or `none` (no Bind ID).
    */
   producerKey: string;
   userId: string | null;
-  /** The app user's name, else the name Dash prints, else the code. */
+  /** The app user's name, else the name Dash prints for the Bind ID. */
   name: string;
   dashSales: number;
   dashPremium: number;
@@ -358,6 +391,8 @@ export interface ReconciliationRunDetail extends ReconciliationRunView {
   byProducer: ReconciliationProducerSummary[];
   /** Rows per tab, and how many of those still need a decision. */
   tabCounts: Record<ReconciliationTab, { total: number; open: number }>;
+  /** Rows still waiting on a decision that are assigned to someone. */
+  assigned: number;
   /** Parser notes worth showing (a missing metadata row, a fallback window). */
   warnings: string[];
 }
@@ -453,15 +488,26 @@ export interface ReconciliationRowView {
   needsReview: boolean;
   dash: ReconciliationDashSide | null;
   app: ReconciliationAppSide | null;
-  /** Who Dash credits: the user holding the code, else the name it prints. */
+  /** Who the line belongs to: the user holding its Bind ID, else the name Dash prints. */
   credit: {
-    code: string | null;
     name: string | null;
     userId: string | null;
     userName: string | null;
   };
   suggestions: ReconciliationSuggestion[];
   review: ReconciliationReview;
+  /** The run the row belongs to. */
+  runId: string;
+  /** Who the owner handed the row to, if anyone. */
+  assignment: ReconciliationAssignment | null;
+}
+
+/** A row handed to a Producer or CSR to work. */
+export interface ReconciliationAssignment {
+  user: { id: string; name: string };
+  assignedBy: { id: string; name: string } | null;
+  assignedAt: string;
+  note: string | null;
 }
 
 export interface ReconciliationRowListResponse {
@@ -472,8 +518,36 @@ export interface ReconciliationRowListResponse {
   totalPages: number;
 }
 
+/** Someone a row can be assigned to. `roles` are the role slugs that qualify them. */
+export interface ReconciliationAssignee {
+  id: string;
+  name: string;
+  email: string;
+  roles: string[];
+}
+
 export interface ReconciliationOptionsResponse {
-  users: { id: string; name: string; isActive: boolean }[];
+  /** The agency's active Producers and CSRs, by name. */
+  assignees: ReconciliationAssignee[];
+}
+
+/** A row on the assignee's page, with the upload it came from. */
+export interface ReconciliationAssignedRow extends ReconciliationRowView {
+  assignment: ReconciliationAssignment;
+  run: {
+    id: string;
+    filename: string;
+    startDate: string | null;
+    endDate: string | null;
+  };
+}
+
+export interface ReconciliationAssignedListResponse {
+  items: ReconciliationAssignedRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 export interface ReconciliationPresignResponse {

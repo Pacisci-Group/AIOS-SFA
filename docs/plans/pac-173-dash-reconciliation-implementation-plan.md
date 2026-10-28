@@ -5,7 +5,7 @@ Ticket: https://linear.app/paciscigroup/issue/PAC-173 (sub-issue of PAC-152).
 Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 `web/` = `packages/web/src/`, `shared/` = `packages/shared/src/`.
 
-> **Changed since this was written (v2, PRs 1–2 — 27–28 Oct 2026).** The notes
+> **Changed since this was written (v2, PRs 1–3 — 27–28 Oct 2026).** The notes
 > below describe v1. Where they disagree with this box, this box wins; the full
 > as-built rewrite follows the last v2 PR.
 >
@@ -58,8 +58,51 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   median app/Dash 1.014), $9,340.69 apart in all. The 1-800 tab is still
 >   the same 7 rows, and the September subset still reproduces
 >   108 / 96 / 12 / 6 and $19,231.51.
-> - Still to come (v2 plan): assigning rows to Producers/CSRs, and the Sold /
->   Cancel-rewrite / Chargeback / Other / 1-800 service outcomes.
+> - **Rows are assigned to Producers and CSRs (PR 3).**
+>   - The owner hands a row still waiting on a decision to an active user
+>     holding the `producer` or `csr` role, with an optional note:
+>     `PATCH runs/:id/rows/:rowId/assignment`. `GET options` now returns that
+>     pool, through `permissions/role-holders.ts`, which the ticket picker
+>     shares.
+>   - The assignment is its own field on the row (`assignment`, string ids),
+>     so saving a decision never drops it. A decided row keeps its assignee
+>     but leaves their list.
+>   - A re-upload carries the assignment to a row that still says the same
+>     thing (`carriedAssignment`), without notifying again.
+>   - The assignee gets an in-app and push notification,
+>     `reconciliation.row_assigned` ("Dash policy assigned to you",
+>     `<policy> · <customer> · <tab>`). It opens
+>     `/reconciliation/assigned?row=<id>`. No email.
+>   - The assignee's side is a separate controller,
+>     `carrier-reconciliation/assigned`, gated on `leads:read` or
+>     `carrier_reconciliation:read`, because no Producer or CSR holds the
+>     report's permission. A Producer or CSR reads only rows assigned to them;
+>     someone holding `carrier_reconciliation:read` may read anyone's. An old
+>     notification link opens the row's current copy, if a re-upload has
+>     replaced its run.
+>   - The web has a page, `/reconciliation/assigned`, and a "Dash follow-ups"
+>     panel on the Producer Dashboard. Both are read-only until outcomes land.
+>   - On the owner's page, rows can be filtered by assignee, the table has an
+>     Assigned column, and the drawer has the assign form. The export gains
+>     `assigned_to`, and run detail gains `assigned`.
+>   - Work transfer moves, and removal releases, a person's open rows on
+>     current runs. The shared definition is
+>     `common/carrier-reconciliation/assignment-scope.ts`.
+> - **The sub-producer code is not read (owner, 28 Oct 2026).** A Dash line
+>   belongs to the user whose Bind ID bound it, under the name the app knows
+>   them by. Credit through the sub-producer code listed people twice
+>   ("JESSICA YATES (034)" for the code, "Jessica Yates" for the app's own
+>   policies) whenever the code was not on their user — and Smith Family
+>   Agency's users carry Bind IDs only. Producer mismatch now means "bound in
+>   Dash by someone other than the deal's producer"; `unmapped_producer` is no
+>   longer raised. On the Jul–Sep export the sub-producer named the binder on
+>   374 of 382 sales, and 40 matched policies are bound by someone other than
+>   the app's producer (39 bound by Sabrina Webb, recorded under David
+>   Howard). `allstateSubProducerCode` stays on users, unused here. A run
+>   classified earlier regroups on **Re-check**.
+> - Still to come (v2 plan): the Sold / Cancel-rewrite / Other outcomes the
+>   assignee records (PR 4), 1-800 service intake (PR 5), and Chargeback
+>   (PR 6).
 
 ## What it is
 
