@@ -60,6 +60,7 @@ import {
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { UserRole } from '../permissions/schemas/user-role.schema';
+import { activeRoleHolders } from '../permissions/role-holders';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   AddNoteDto,
@@ -155,59 +156,24 @@ export class ServiceTicketsService {
     if (!access.agencyId) {
       throw new ForbiddenException('Agency context required');
     }
-    const agencyId = new Types.ObjectId(access.agencyId);
-
-    const roles = await this.roleModel
-      .find({ agencyId, slug: { $in: ASSIGNABLE_ROLE_SLUGS } })
-      .select('slug')
-      .lean();
-    if (!roles.length) {
-      return [];
-    }
-    const slugById = new Map(roles.map((r) => [String(r._id), r.slug]));
-
-    // Who holds one of those roles, from the join. `user.roleIds` is gone —
-    // the assignment lives in `userRoles` so a role can be queried from either
-    // side, which is what cache invalidation needs.
-    const links = await this.userRoleModel
-      .find({ roleId: { $in: roles.map((r) => r._id) } })
-      .select({ userId: 1, roleId: 1 })
-      .lean();
-    if (!links.length) {
-      return [];
-    }
-    const roleSlugsByUser = new Map<string, string[]>();
-    for (const link of links) {
-      const slug = slugById.get(String(link.roleId));
-      if (!slug) continue;
-      const key = String(link.userId);
-      roleSlugsByUser.set(key, [...(roleSlugsByUser.get(key) ?? []), slug]);
-    }
-
-    const filter: FilterQuery<UserDocument> = {
-      agencyId,
-      isPlatformAdmin: { $ne: true },
-      isActive: { $ne: false },
-      _id: {
-        $in: [...roleSlugsByUser.keys()].map((id) => new Types.ObjectId(id)),
+    const holders = await activeRoleHolders(
+      {
+        roleModel: this.roleModel,
+        userRoleModel: this.userRoleModel,
+        userModel: this.userModel,
       },
-    };
-    // Agency-wide scopes see every CRM; narrower scopes stay inside the branch.
-    if (access.dataScope !== DataScope.Agency && access.branchId) {
-      filter.branchId = new Types.ObjectId(access.branchId);
-    }
-
-    const users = await this.userModel
-      .find(filter)
-      .select('firstName lastName email')
-      .sort({ firstName: 1, lastName: 1 })
-      .lean();
-
-    return users.map((user) => ({
+      access.agencyId,
+      ASSIGNABLE_ROLE_SLUGS,
+      // Agency-wide scopes see every CRM; narrower scopes stay inside the branch.
+      access.dataScope !== DataScope.Agency && access.branchId
+        ? { branchId: new Types.ObjectId(access.branchId) }
+        : {},
+    );
+    return holders.map((user) => ({
       id: String(user._id),
       name: userDisplayName(user),
       email: user.email ?? '',
-      roles: roleSlugsByUser.get(String(user._id)) ?? [],
+      roles: user.roles,
     }));
   }
 

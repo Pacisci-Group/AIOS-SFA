@@ -1,6 +1,8 @@
 import {
   DATA_EXPORT_FORMATS,
+  MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH,
   MAX_RECONCILIATION_FILE_BYTES,
+  RECONCILIATION_ASSIGNEE_FILTER_PATTERN,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_RESOLUTIONS,
   RECONCILIATION_REVIEW_STATUSES,
@@ -42,13 +44,20 @@ export type ListRunsDto = z.infer<typeof listRunsSchema>;
 
 export const rowsQuerySchema = z.object({
   tab: z.enum(RECONCILIATION_TABS).optional(),
-  /** A `producerKey`: `user:<id>`, `code:<sub-producer>`, `bind:<Bind ID>` or `none`. */
+  /** A `producerKey`: `user:<id>`, `bind:<Bind ID>` or `none` (`code:` on older runs). */
   producer: z
     .string()
     .trim()
     .regex(RECONCILIATION_PRODUCER_KEY_PATTERN)
     .optional(),
   reviewStatus: z.enum(RECONCILIATION_REVIEW_STATUSES).optional(),
+  /** A user id, `me`, or `unassigned`. */
+  assignee: z
+    .string()
+    .trim()
+    .regex(RECONCILIATION_ASSIGNEE_FILTER_PATTERN)
+    .transform((value) => value.toLowerCase())
+    .optional(),
   q: z.string().trim().max(80).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -71,6 +80,29 @@ export const reviewRowSchema = z
     }
   });
 export type ReviewRowDto = z.infer<typeof reviewRowSchema>;
+
+/**
+ * Hand a row to a Producer or CSR (`userId`), or take it back (`null`).
+ * Ids are lower-cased: rows store them as strings and compare them exactly.
+ */
+export const assignRowSchema = z.object({
+  userId: objectId.transform((value) => value.toLowerCase()).nullable(),
+  note: z
+    .string()
+    .trim()
+    .max(MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH)
+    .nullable()
+    .optional(),
+});
+export type AssignRowDto = z.infer<typeof assignRowSchema>;
+
+/** The assignee's list: their own rows, or — with `:read` — someone else's. */
+export const assignedQuerySchema = z.object({
+  userId: objectId.transform((value) => value.toLowerCase()).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type AssignedQueryDto = z.infer<typeof assignedQuerySchema>;
 
 export const exportQuerySchema = z.object({
   format: z.enum(DATA_EXPORT_FORMATS).default('xlsx'),

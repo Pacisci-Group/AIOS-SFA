@@ -32,6 +32,10 @@ tests {
     ]);
   });
 
+  test("counts the open rows that are with someone", function () {
+    expect(res.getBody().assigned).to.be.a("number");
+  });
+
   test("totals the premium differences", function () {
     const totals = res.getBody().totals;
     expect(totals.premiumMismatch).to.be.a("number");
@@ -53,6 +57,9 @@ docs {
   from Dash's, and `totals.premiumMismatchDelta` sums how far apart they are
   (`Σ |Dash − app|`, so an over and an under never cancel). A run classified
   before premiums were compared reads `0` for both until it is re-checked.
+
+  `assigned` counts the rows still waiting on a decision that the owner has
+  handed to a Producer or CSR.
 
   ## Errors
   - `400` — `:id` is not an ObjectId

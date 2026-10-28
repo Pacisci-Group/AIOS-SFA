@@ -10,6 +10,7 @@ import type {
   RetiredReconciliationResolution,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import type { RowAssignment } from '../../common/carrier-reconciliation/carry-forward';
 import type { DashRow } from '../../common/carrier-reconciliation/dash-file-reader';
 import type { DashCredit } from '../../common/carrier-reconciliation/producer-code-index';
 import type {
@@ -98,7 +99,7 @@ export class ReconciliationRow {
   @Prop({ type: Object, required: true })
   credit: DashCredit;
 
-  /** `user:<id>`, `code:<sub-producer>`, `bind:<Bind ID>` or `none` — the producer filter. */
+  /** `user:<id>`, `bind:<Bind ID>` or `none` — the producer filter. */
   @Prop({ required: true })
   producerKey: string;
 
@@ -113,6 +114,15 @@ export class ReconciliationRow {
 
   @Prop({ type: Object, required: true })
   review: StoredReview;
+
+  /**
+   * Who the owner handed the row to (a Producer or CSR), or `null`. Its own
+   * field rather than part of `review`, so saving a decision — which replaces
+   * `review` whole — can never drop it. `userId` is a string, like every id in
+   * these snapshots; queries must compare it as one.
+   */
+  @Prop({ type: Object, default: null })
+  assignment: RowAssignment | null;
 
   /** Lower-cased policy numbers and names, for the search box. */
   @Prop({ default: '' })
@@ -142,5 +152,15 @@ ReconciliationRowSchema.index({
   agencyId: 1,
   runId: 1,
   needsReview: 1,
+  'review.status': 1,
+});
+/**
+ * A person's assigned rows — their page, the dashboard panel, work transfer.
+ * Not partial: a `$type` filter is one an equality query on the user id does
+ * not prove, so the planner would never pick it.
+ */
+ReconciliationRowSchema.index({
+  agencyId: 1,
+  'assignment.userId': 1,
   'review.status': 1,
 });

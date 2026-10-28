@@ -229,11 +229,13 @@ temperature/aging that aren't first-class in legacy payloads. See
   an Allstate login that is on no staff user **and** has no Bind ID Name in
   Dash — a named login on no user is a former employee, never 1-800) and
   credit mismatches.
-  Producer identity is two fields on the **user** — `allstateBindId` (who bound
-  it) and `allstateSubProducerCode` (who gets credit; `000` means none) —
-  entered at invite / accept-invite, editable on the profile and by the owner
-  (`PATCH /users/:userId/details`), unique per agency, normalised by
-  `@sfa/shared`'s `allstate-codes.ts`. There is no code registry. The engine
+  A Dash line belongs to the user whose **`allstateBindId`** (who bound it)
+  it carries — Dash's sub-producer column is not read (owner, 28 Oct 2026; it
+  listed people twice). The Bind ID and `allstateSubProducerCode` are fields
+  on the **user**, entered at invite / accept-invite, editable on the profile
+  and by the owner (`PATCH /users/:userId/details`), unique per agency,
+  normalised by `@sfa/shared`'s `allstate-codes.ts`. There is no code
+  registry. The engine
   lives in `packages/api/src/common/carrier-reconciliation/` and splits
   matching from classification, so setting someone's code re-classifies a
   stored run without re-reading the file. Agency-wide by design: data scope is

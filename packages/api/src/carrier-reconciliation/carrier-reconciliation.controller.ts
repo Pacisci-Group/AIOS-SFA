@@ -29,6 +29,7 @@ import {
 import { Access } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
+  assignRowSchema,
   createRunSchema,
   exportQuerySchema,
   listRunsSchema,
@@ -36,6 +37,7 @@ import {
   reconciliationIdSchema,
   reviewRowSchema,
   rowsQuerySchema,
+  type AssignRowDto,
   type CreateRunDto,
   type ExportQueryDto,
   type ListRunsDto,
@@ -43,6 +45,7 @@ import {
   type ReviewRowDto,
   type RowsQueryDto,
 } from './dto/carrier-reconciliation.dto';
+import { ReconciliationAssignmentsService } from './reconciliation-assignments.service';
 import { ReconciliationRunsService } from './reconciliation-runs.service';
 
 const Id = () => new ZodValidationPipe(reconciliationIdSchema);
@@ -68,14 +71,17 @@ const Id = () => new ZodValidationPipe(reconciliationIdSchema);
 @RequireModule(ModuleKey.CarrierReconciliation)
 @RequirePermissions(modulePermission(ModuleKey.CarrierReconciliation, 'read'))
 export class CarrierReconciliationController {
-  constructor(private readonly runs: ReconciliationRunsService) {}
+  constructor(
+    private readonly runs: ReconciliationRunsService,
+    private readonly assignments: ReconciliationAssignmentsService,
+  ) {}
 
-  /** Agency users, for the page's user pickers. */
+  /** The assignee picker: the agency's active Producers and CSRs. */
   @Get('options')
   options(
     @Access() access: AccessContext,
   ): Promise<ReconciliationOptionsResponse> {
-    return this.runs.options(access);
+    return this.assignments.options(access);
   }
 
   // --- Runs ----------------------------------------------------------------
@@ -161,5 +167,23 @@ export class CarrierReconciliationController {
     @Body(new ZodValidationPipe(reviewRowSchema)) body: ReviewRowDto,
   ): Promise<ReconciliationRowView> {
     return this.runs.review(access, id, rowId, body);
+  }
+
+  /**
+   * Hand a row to a Producer or CSR, change its note, or take it back
+   * (`userId: null`); the new assignee is notified. 400 for someone who is
+   * not an active Producer/CSR here; 409 for a row already decided, an
+   * unfinished run, a run a re-upload replaced (taking a row back there
+   * too), or a concurrent change.
+   */
+  @Patch('runs/:id/rows/:rowId/assignment')
+  @RequireWrite(ModuleKey.CarrierReconciliation)
+  assign(
+    @Access() access: AccessContext,
+    @Param('id', Id()) id: string,
+    @Param('rowId', Id()) rowId: string,
+    @Body(new ZodValidationPipe(assignRowSchema)) body: AssignRowDto,
+  ): Promise<ReconciliationRowView> {
+    return this.assignments.assign(access, id, rowId, body);
   }
 }

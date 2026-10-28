@@ -24,7 +24,6 @@ import {
   type AccessContext,
   type DataExportColumnDescriptor,
   type ReclassifyRunResponse,
-  type ReconciliationOptionsResponse,
   type ReconciliationPresignResponse,
   type ReconciliationRowListResponse,
   type ReconciliationRowView,
@@ -42,6 +41,7 @@ import {
 } from '../carriers/schemas/carrier.schema';
 import { clientAgencyId } from '../common/access/client-scope';
 import {
+  carriedAssignment,
   carriedReview,
   type PreviousRowReview,
 } from '../common/carrier-reconciliation/carry-forward';
@@ -70,7 +70,7 @@ import {
   RECONCILIATION_PURPOSE,
 } from '../common/carrier-reconciliation/reconciliation-file-types';
 import { createExportWriter } from '../common/data-export/writers/export-writer';
-import { displayName, displayNamesFor } from '../common/domain/user-names';
+import { displayNamesFor } from '../common/domain/user-names';
 import { isDuplicateKeyError } from '../common/mongo/duplicate-key';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
@@ -88,10 +88,9 @@ import type {
 } from './dto/carrier-reconciliation.dto';
 import {
   isStale,
-  rowUserIds,
   STALE_RUN_MINUTES,
   toProducerSummary,
-  toRowView,
+  resolveRowViews,
   toRunView,
   type LeanRow,
   type LeanRun,
@@ -365,10 +364,12 @@ export class ReconciliationRunsService {
     );
     const rows = bases.map((base) => {
       const derived = deriveRow(base, index);
-      const carried = carriedReview(
-        { rowKey: base.rowKey, match: base.match, issues: derived.issues },
-        previousReviews,
-      );
+      const sameRow = {
+        rowKey: base.rowKey,
+        match: base.match,
+        issues: derived.issues,
+      };
+      const carried = carriedReview(sameRow, previousReviews);
       return {
         _id: ids.get(base.rowKey)!,
         agencyId,
@@ -396,6 +397,7 @@ export class ReconciliationRunsService {
               carriedForwardFromRowId: carried.rowId,
             } satisfies StoredReview)
           : openReview(),
+        assignment: carriedAssignment(sameRow, previousReviews),
         searchText: searchText(base),
       };
     });
@@ -436,11 +438,22 @@ export class ReconciliationRunsService {
   ): Promise<Map<string, PreviousRowReview>> {
     const rows = await this.rowModel
       .find(
-        { agencyId, runId, 'review.status': { $ne: 'open' } },
-        { rowKey: 1, match: 1, issues: 1, review: 1 },
+        {
+          agencyId,
+          runId,
+          // A decision, or a person the row is with — either carries.
+          $or: [
+            { 'review.status': { $ne: 'open' } },
+            { 'assignment.userId': { $type: 'string' } },
+          ],
+        },
+        { rowKey: 1, match: 1, issues: 1, review: 1, assignment: 1 },
       )
       .lean<
-        Pick<LeanRow, '_id' | 'rowKey' | 'match' | 'issues' | 'review'>[]
+        Pick<
+          LeanRow,
+          '_id' | 'rowKey' | 'match' | 'issues' | 'review' | 'assignment'
+        >[]
       >();
     return new Map(
       rows.map((row) => [
@@ -454,6 +467,7 @@ export class ReconciliationRunsService {
           note: row.review.note,
           reviewedById: row.review.reviewedById,
           reviewedAt: row.review.reviewedAt,
+          assignment: row.assignment ?? null,
         },
       ]),
     );
@@ -530,9 +544,16 @@ export class ReconciliationRunsService {
   ): Promise<ReconciliationRunDetail> {
     const agencyId = clientAgencyId(access);
     const run = await this.loadRun(agencyId, runId);
-    const [tabCounts, open] = await Promise.all([
+    const [tabCounts, open, assigned] = await Promise.all([
       this.tabCounts(agencyId, run._id),
       this.openCounts(agencyId, [run._id]),
+      this.rowModel.countDocuments({
+        agencyId,
+        runId: run._id,
+        needsReview: true,
+        'review.status': 'open',
+        'assignment.userId': { $type: 'string' },
+      }),
     ]);
     const names = await displayNamesFor(this.userModel, [
       ...(run.createdBy ? [String(run.createdBy)] : []),
@@ -546,6 +567,7 @@ export class ReconciliationRunsService {
         toProducerSummary(entry, names),
       ),
       tabCounts,
+      assigned,
       warnings: run.warnings ?? [],
     };
   }
@@ -564,6 +586,13 @@ export class ReconciliationRunsService {
     if (query.reviewStatus) {
       filter.needsReview = true;
       filter['review.status'] = query.reviewStatus;
+    }
+    if (query.assignee === 'unassigned') {
+      // Matches a row assigned to nobody and one stored before assignment.
+      filter['assignment.userId'] = { $exists: false };
+    } else if (query.assignee) {
+      filter['assignment.userId'] =
+        query.assignee === 'me' ? access.userId : query.assignee;
     }
     if (query.q) {
       filter.searchText = {
@@ -749,45 +778,6 @@ export class ReconciliationRunsService {
   }
 
   // -------------------------------------------------------------------------
-  // Options
-  // -------------------------------------------------------------------------
-
-  /** Every person in the agency, active first, for the page's user pickers. */
-  async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
-    const users = await this.userModel
-      .find(
-        // `users.agencyId` is an ObjectId, unlike every TenantRecord.
-        {
-          agencyId: new Types.ObjectId(clientAgencyId(access)),
-          isPlatformAdmin: { $ne: true },
-        },
-        { firstName: 1, lastName: 1, email: 1, isActive: 1 },
-      )
-      .lean<
-        {
-          _id: Types.ObjectId;
-          firstName?: string;
-          lastName?: string;
-          email: string;
-          isActive?: boolean;
-        }[]
-      >();
-    return {
-      users: users
-        .map((user) => ({
-          id: String(user._id),
-          name: displayName(user),
-          isActive: user.isActive !== false,
-        }))
-        .sort(
-          (a, b) =>
-            Number(b.isActive) - Number(a.isActive) ||
-            a.name.localeCompare(b.name),
-        ),
-    };
-  }
-
-  // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
 
@@ -799,11 +789,8 @@ export class ReconciliationRunsService {
     return run;
   }
 
-  private async toRowViews(rows: LeanRow[]): Promise<ReconciliationRowView[]> {
-    const names = await displayNamesFor(this.userModel, [
-      ...new Set(rows.flatMap(rowUserIds)),
-    ]);
-    return rows.map((row) => toRowView(row, names));
+  private toRowViews(rows: LeanRow[]): Promise<ReconciliationRowView[]> {
+    return resolveRowViews(this.userModel, rows);
   }
 
   private async openCounts(
@@ -969,7 +956,6 @@ function searchText(base: RowBase): string {
     .toLowerCase();
 }
 
-/** `user:` ids are lower-case hex; a sub-producer code is upper-case. */
 /**
  * A producer filter as stored: the DTO accepts any case, so the prefix is
  * lower-cased before it is read; codes and Bind IDs are stored upper-case,
@@ -1178,6 +1164,12 @@ const EXPORT_COLUMNS: ExportColumn[] = [
     type: 'number',
     description: 'Item count in Dash.',
     pick: (r) => r.dash?.itemCount ?? null,
+  },
+  {
+    key: 'assigned_to',
+    type: 'string',
+    description: 'Who the row is assigned to.',
+    pick: (r) => r.assignment?.user.name ?? null,
   },
   {
     key: 'issues',

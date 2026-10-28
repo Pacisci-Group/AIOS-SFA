@@ -26,6 +26,7 @@ tests {
     expect(body).to.have.property("householdsUnassigned");
     expect(body).to.have.property("leadsUnassigned");
     expect(body).to.have.property("rotationsDeactivated");
+    expect(body).to.have.property("reconciliationRowsUnassigned");
   });
 }
 
@@ -41,7 +42,8 @@ docs {
 
   **Response `200`** — `{ ticketsUnassigned, rotationsDeactivated,
   onboardingsUnassigned, renewalCyclesUnassigned, householdsUnassigned,
-  leadsUnassigned }`. See **Deactivate User** for what each release does.
+  leadsUnassigned, reconciliationRowsUnassigned }`. See **Deactivate User**
+  for what each release does.
 
   **Errors** — `403` caller lacks `agency:users:write`.
 }

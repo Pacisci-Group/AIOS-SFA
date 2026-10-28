@@ -48,6 +48,27 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
       href: '/admin/bugs',
     };
   },
+  'reconciliation.row_assigned': (data) => {
+    const rowId =
+      typeof data.rowId === 'string' && /^[a-f0-9]{24}$/.test(data.rowId)
+        ? data.rowId
+        : null;
+    const details = [
+      text(data.policyNumber),
+      text(data.customerName),
+      text(data.tabLabel),
+    ].filter((part): part is string => part !== null);
+    return {
+      title: 'Dash policy assigned to you',
+      body: details.length
+        ? details.join(' · ')
+        : 'A line from the Dash report needs you.',
+      // The assignee's page opens the row named in `row`.
+      href: rowId
+        ? `/reconciliation/assigned?row=${rowId}`
+        : '/reconciliation/assigned',
+    };
+  },
 };
 
 /**

@@ -7,6 +7,18 @@ import {
   type RetiredReconciliationResolution,
 } from '@sfa/shared';
 
+/**
+ * Who a row was handed to. Ids are strings, like the review's: it is a
+ * snapshot read back whole, and queried by `assignment.userId` as a string.
+ */
+export interface RowAssignment {
+  userId: string;
+  /** Who handed it over — the owner, or whoever ran a work transfer. */
+  assignedById: string | null;
+  assignedAt: Date;
+  note: string | null;
+}
+
 /** What a superseded run's row carries forward. */
 export interface PreviousRowReview {
   rowId: string;
@@ -17,6 +29,7 @@ export interface PreviousRowReview {
   note: string | null;
   reviewedById: string | null;
   reviewedAt: Date | null;
+  assignment: RowAssignment | null;
 }
 
 /**
@@ -38,9 +51,39 @@ export function carriedReview(
   },
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): PreviousRowReview | null {
-  const before = previous.get(row.rowKey);
+  const before = sameRowBefore(row, previous);
   if (!before || before.status === 'open') return null;
   if (isRetired(before.resolution)) return null;
+  return before;
+}
+
+/**
+ * The assignment carries on the same terms as a decision: only to a row that
+ * still says the same thing. A row whose classification changed starts with
+ * nobody on it, because the person was handed a different problem. It is the
+ * same hand-off, so nobody is notified again.
+ */
+export function carriedAssignment(
+  row: {
+    rowKey: string;
+    match: ReconciliationMatch | null;
+    issues: readonly ReconciliationIssue[];
+  },
+  previous: ReadonlyMap<string, PreviousRowReview>,
+): RowAssignment | null {
+  return sameRowBefore(row, previous)?.assignment ?? null;
+}
+
+function sameRowBefore(
+  row: {
+    rowKey: string;
+    match: ReconciliationMatch | null;
+    issues: readonly ReconciliationIssue[];
+  },
+  previous: ReadonlyMap<string, PreviousRowReview>,
+): PreviousRowReview | null {
+  const before = previous.get(row.rowKey);
+  if (!before) return null;
   if (before.match !== row.match) return null;
   if (issueSignature(before.issues) !== issueSignature(row.issues)) return null;
   return before;

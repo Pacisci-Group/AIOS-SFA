@@ -19,26 +19,36 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("lists the agency's people", function () {
-    const users = res.getBody().users;
-    expect(users).to.be.an("array").that.is.not.empty;
-    expect(users[0]).to.have.keys(["id", "name", "isActive"]);
+  test("lists the Producers and CSRs a row can be assigned to", function () {
+    const assignees = res.getBody().assignees;
+    expect(assignees).to.be.an("array").that.is.not.empty;
+    expect(assignees[0]).to.have.keys(["id", "name", "email", "roles"]);
+    for (const person of assignees) {
+      expect(person.roles.some((role) => ["producer", "csr"].includes(role))).to.equal(true);
+    }
+    // Auth/Login's producer is in the pool; the owner is not.
+    const ids = assignees.map((person) => person.id);
+    expect(ids).to.include(bru.getVar("currentUserId"));
+    expect(ids).to.not.include(bru.getVar("reconOwnerId"));
   });
 }
 
 docs {
-  # GET /carrier-reconciliation/options — the agency's people, for pickers
+  # GET /carrier-reconciliation/options — who a row can be assigned to
 
   - **Module:** `carrier_reconciliation`
   - **Permission:** `carrier_reconciliation:read`
   - **Data scope:** none — the page is agency-wide by design.
 
-  Every user of the caller's agency (platform admins excluded), active first,
-  for the page's user pickers.
+  The assignee picker: the agency's **active Producers and CSRs** — users
+  holding a role with slug `producer` or `csr` — by first, then last name.
+  Pending invites, deactivated users and platform admins are left out. The
+  same pool is what `Assign Row` accepts.
 
   ## Response `200`
 
   ```json
-  { "users": [{ "id": "6a95…", "name": "Pat Producer", "isActive": true }] }
+  { "assignees": [{ "id": "6a95…", "name": "Pat Producer",
+      "email": "producer@demoagency.local", "roles": ["producer"] }] }
   ```
 }

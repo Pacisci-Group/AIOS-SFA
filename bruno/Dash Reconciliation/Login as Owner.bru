@@ -25,6 +25,8 @@ script:post-response {
   if (res.getStatus() === 201 || res.getStatus() === 200) {
     bru.setVar("reconToken", res.getBody().accessToken);
     bru.setVar("reconAgencyId", res.getBody().user.agencyId);
+    // The owner is not a Producer or CSR: the "not eligible" assignment case.
+    bru.setVar("reconOwnerId", res.getBody().user.id);
   }
 }
 

@@ -28,6 +28,9 @@ const AnalyticsPage = lazy(() => import('@/features/analytics/AnalyticsPage'));
 const ReconciliationPage = lazy(
   () => import('@/features/reconciliation/ReconciliationPage'),
 );
+const AssignedRowsPage = lazy(
+  () => import('@/features/reconciliation/AssignedRowsPage'),
+);
 const DataExportPage = lazy(
   () => import('@/features/data-export/DataExportPage'),
 );
@@ -406,6 +409,33 @@ export function App() {
                   element={
                     <LazyPage>
                       <ReconciliationPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The rows of it handed to someone (PAC-173), where the
+                  `reconciliation.row_assigned` notification lands. Outside the
+                  gate above: the Producers and CSRs it is for hold no
+                  reconciliation permission, so `leads:read` admits them too,
+                  mirroring `GET /carrier-reconciliation/assigned`. No nav
+                  item — the notification and the Producer Dashboard panel
+                  link here. */}
+              <Route
+                element={
+                  <RequirePermission
+                    anyOf={[
+                      `${ModuleKey.CarrierReconciliation}:read`,
+                      `${ModuleKey.Leads}:read`,
+                    ]}
+                  />
+                }
+              >
+                <Route
+                  path="/reconciliation/assigned"
+                  element={
+                    <LazyPage>
+                      <AssignedRowsPage />
                     </LazyPage>
                   }
                 />

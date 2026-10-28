@@ -5,6 +5,8 @@ import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Activity } from '../src/activities/schemas/activity.schema';
+import { ReconciliationRow } from '../src/carrier-reconciliation/schemas/reconciliation-row.schema';
+import { ReconciliationRun } from '../src/carrier-reconciliation/schemas/reconciliation-run.schema';
 import { Onboarding } from '../src/crm/schemas/onboarding.schema';
 import { RenewalCycle } from '../src/crm/schemas/renewal-cycle.schema';
 import { ServiceTicket } from '../src/crm/schemas/service-ticket.schema';
@@ -39,6 +41,8 @@ describe('User removal (e2e)', () => {
   let activities: Model<Activity>;
   let rotations: Model<CrmRotation>;
   let deals: Model<Deal>;
+  let reconciliationRuns: Model<ReconciliationRun>;
+  let reconciliationRows: Model<ReconciliationRow>;
   let roleAssignments: RoleAssignmentsService;
   let producerId: string;
 
@@ -56,6 +60,12 @@ describe('User removal (e2e)', () => {
     activities = app.get<Model<Activity>>(getModelToken(Activity.name));
     rotations = app.get<Model<CrmRotation>>(getModelToken(CrmRotation.name));
     deals = app.get<Model<Deal>>(getModelToken(Deal.name));
+    reconciliationRuns = app.get<Model<ReconciliationRun>>(
+      getModelToken(ReconciliationRun.name),
+    );
+    reconciliationRows = app.get<Model<ReconciliationRow>>(
+      getModelToken(ReconciliationRow.name),
+    );
     roleAssignments = app.get(RoleAssignmentsService);
 
     // Suites share one database, and not every suite drops it when it
@@ -93,6 +103,8 @@ describe('User removal (e2e)', () => {
       onboardings.deleteMany({}),
       cycles.deleteMany({}),
       leads.deleteMany({}),
+      reconciliationRuns.deleteMany({}),
+      reconciliationRows.deleteMany({}),
     ]);
   });
 
@@ -359,6 +371,104 @@ describe('User removal (e2e)', () => {
         .findOne({ leadId: open._id, type: 'lead_reassigned' })
         .lean();
       expect(note?.summary).toContain('unclaimed pool');
+    });
+
+    /**
+     * PAC-173: a Dash Reconciliation row the owner handed them goes back to
+     * the owner's list, assigned to nobody. A decided row, a row on a run a
+     * re-upload replaced, and one that needs no decision keep the name — the
+     * same set work transfer leaves behind, so the preview is the same count.
+     */
+    it('hands their open Dash rows back unassigned, leaving decided and replaced ones', async () => {
+      const runFields = {
+        agencyId: ctx.agencyId,
+        carrierId: new Types.ObjectId(),
+        status: 'ready' as const,
+        file: { storageKey: 'unused', filename: 'dash.xlsx', size: 1 },
+        fileMeta: {
+          agentNumber: null,
+          agentName: null,
+          downloadedBy: null,
+          downloadedAt: null,
+          startDate: '2026-09-01',
+          endDate: '2026-09-30',
+          sheetName: 'Sheet1',
+          headerRowNumber: 1,
+          rowCount: 1,
+        },
+      };
+      const current = await reconciliationRuns.create(runFields);
+      const replaced = await reconciliationRuns.create({
+        ...runFields,
+        supersededByRunId: current._id,
+      });
+      const openReview = {
+        status: 'open' as const,
+        resolution: null,
+        note: null,
+        reviewedById: null,
+        reviewedAt: null,
+        carriedForwardFromRowId: null,
+      };
+      let rowSeq = 0;
+      // `assignment.userId` is a string on these rows, never an ObjectId.
+      const seedRow = async (
+        runId: Types.ObjectId,
+        extra: Partial<ReconciliationRow> = {},
+      ) =>
+        (
+          await reconciliationRows.create({
+            agencyId: ctx.agencyId,
+            runId,
+            rowKey: `release-${++rowSeq}`,
+            side: 'dash',
+            credit: { name: null, userId: null, via: 'none' },
+            producerKey: 'none',
+            needsReview: true,
+            review: openReview,
+            assignment: {
+              userId: producerId,
+              assignedById: null,
+              assignedAt: new Date(),
+              note: null,
+            },
+            ...extra,
+          })
+        )._id;
+      const open = await seedRow(current._id);
+      const untouched = [
+        await seedRow(current._id, {
+          review: {
+            ...openReview,
+            status: 'resolved',
+            resolution: 'entered_in_app',
+            reviewedById: producerId,
+            reviewedAt: new Date(),
+          },
+        }),
+        await seedRow(replaced._id),
+        await seedRow(current._id, { needsReview: false }),
+      ];
+
+      const preview = await api()
+        .get(`/api/v1/users/${producerId}/work-release/preview`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(preview.body).toMatchObject({ reconciliationRowsUnassigned: 1 });
+
+      const res = await api()
+        .delete(`/api/v1/users/${producerId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(res.body).toMatchObject({ reconciliationRowsUnassigned: 1 });
+
+      expect((await reconciliationRows.findById(open).lean())?.assignment).toBe(
+        null,
+      );
+      for (const id of untouched) {
+        const row = await reconciliationRows.findById(id).lean();
+        expect(row?.assignment?.userId).toBe(producerId);
+      }
     });
 
     it('never touches attribution on deals', async () => {
