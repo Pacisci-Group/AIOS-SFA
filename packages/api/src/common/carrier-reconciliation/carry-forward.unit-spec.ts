@@ -46,6 +46,15 @@ describe('carriedReview', () => {
     ).toBeNull();
   });
 
+  it('reopens a row decided with a resolution no longer offered', () => {
+    expect(
+      carriedReview(
+        { ...row, issues: [...row.issues] },
+        previous({ resolution: 'confirmed_1800' }),
+      ),
+    ).toBeNull();
+  });
+
   it('never carries an open row', () => {
     expect(
       carriedReview(

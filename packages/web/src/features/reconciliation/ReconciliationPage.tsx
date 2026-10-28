@@ -288,9 +288,15 @@ function defaultTab(
   counts: Record<ReconciliationTab, { total: number; open: number }> | undefined,
 ): ReconciliationTab {
   if (!counts) return "missing_from_app";
-  const waiting = (["missing_from_app", "review_1800", "not_in_dash", "producer_mismatch"] as const).find(
-    (tab) => counts[tab].open > 0,
-  );
+  const waiting = (
+    [
+      "missing_from_app",
+      "review_1800",
+      "not_in_dash",
+      "premium_mismatch",
+      "producer_mismatch",
+    ] as const
+  ).find((tab) => counts[tab].open > 0);
   return waiting ?? "matched";
 }
 

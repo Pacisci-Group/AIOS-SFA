@@ -22,7 +22,7 @@ body:json {
   {
     "storageKey": "{{reconUploadKey}}",
     "uploadedFilename": "dash-new-business-demo.xlsx",
-    "size": 24069
+    "size": 24072
   }
 }
 
@@ -54,6 +54,10 @@ tests {
     // OSCVANJ, the fixture's unnamed login. Named lines never land here, even
     // when the demo producers carry no Allstate codes.
     expect(run.tabCounts.review_1800.total).to.be.at.least(1);
+    // 900200000: Dash says $1,928.01, the app $1,928.00. A cent is enough.
+    expect(run.tabCounts.premium_mismatch.total).to.be.at.least(1);
+    expect(run.totals.premiumMismatch).to.equal(run.tabCounts.premium_mismatch.total);
+    expect(run.totals.premiumMismatchDelta).to.be.at.least(0.01);
     expect(run.warnings.join(" ")).to.contain("agent number");
   });
 }
@@ -75,6 +79,14 @@ docs {
   no user that Dash *names* ⇒ a former employee (`bindIdStatus:
   "former_staff"`), never 1-800; sub-producer code, else Bind ID ⇒ who Dash
   credits.
+
+  A matched policy is then checked against the app's, which is the source of
+  truth: a premium that differs **by any amount, even a cent**
+  (`premium_mismatch` tab; `totals.premiumMismatch` and
+  `totals.premiumMismatchDelta`), a different producer (`producer_mismatch`
+  tab), a different item count (context only), and a 1-800 policy the app has
+  on a deal (`direct_recorded_as_sale`, in the 1-800 tab — a 1-800 policy is
+  serviced, never sold).
 
   Uploading the same period again **supersedes** the earlier run and carries
   its review decisions to rows that still say the same thing.

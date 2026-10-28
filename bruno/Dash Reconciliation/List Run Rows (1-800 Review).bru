@@ -47,7 +47,8 @@ docs {
 
   ## Query
   - `tab` — `missing_from_app` | `not_in_dash` | `review_1800` |
-    `producer_mismatch` | `matched` | `ignored` (omitted: every row)
+    `premium_mismatch` | `producer_mismatch` | `matched` | `ignored`
+    (omitted: every row)
   - `producer` — a summary row's `producerKey`: `user:<id>`, `code:<nnn>`,
     `bind:<Bind ID>` (a former employee Dash names), `none`
   - `reviewStatus` — `open` | `resolved` | `dismissed` (rows needing review only)
@@ -61,4 +62,8 @@ docs {
   `issues`, `tabs`, `needsReview`, `credit` (who Dash credits), `suggestions`
   (likely counterparts of an unmatched row — usually a mistyped number) and
   `review`.
+
+  A matched row in the 1-800 tab also carries `direct_recorded_as_sale` when
+  the app has the policy on a deal: a 1-800 policy is serviced, never sold. A
+  Bind ID Dash names (`former_staff`) never raises it.
 }

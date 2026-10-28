@@ -18,7 +18,11 @@
  *   staff user **and** that Dash prints no Bind ID Name for (on a new policy,
  *   or any line through the 1-800 / allstate.com channel): business Allstate
  *   sold directly and assigned to the agency to service. A login Dash *does*
- *   name is a former employee's, never 1-800 (David, 27 Oct 2026).
+ *   name is a former employee's, never 1-800 (David, 27 Oct 2026). A 1-800
+ *   policy the app has on a deal is here too (`direct_recorded_as_sale`): it
+ *   is serviced, never sold.
+ * - `premium_mismatch` — matched, but the app's premium is not Dash's written
+ *   premium to the cent. Any difference flags; the app is the source of truth.
  * - `producer_mismatch` — matched, but Dash credits a different producer than
  *   the app's deal does.
  * - `matched` — in both.
@@ -52,6 +56,7 @@ export const RECONCILIATION_TABS = [
   'missing_from_app',
   'not_in_dash',
   'review_1800',
+  'premium_mismatch',
   'producer_mismatch',
   'matched',
   'ignored',
@@ -62,6 +67,7 @@ export const RECONCILIATION_TAB_LABELS: Record<ReconciliationTab, string> = {
   missing_from_app: 'Missing from app',
   not_in_dash: 'Not in Dash',
   review_1800: '1-800 review',
+  premium_mismatch: 'Premium differs',
   producer_mismatch: 'Producer mismatch',
   matched: 'Matched',
   ignored: 'Not new business',
@@ -111,14 +117,19 @@ export type BindIdStatus = (typeof BIND_ID_STATUSES)[number];
 
 /**
  * Everything worth pointing out on a row. Some put the row in a tab
- * (`not_staff_bind_id`, `direct_channel`, `producer_mismatch`); the rest are
- * context shown beside it.
+ * (`not_staff_bind_id`, `direct_channel`, `premium_mismatch`,
+ * `producer_mismatch`); the rest are context shown beside it.
+ * `direct_recorded_as_sale` says why a matched row is in 1-800 review, and
+ * `item_count_mismatch` is context only.
  */
 export const RECONCILIATION_ISSUES = [
   'not_staff_bind_id',
   'former_staff_bind_id',
   'no_bind_id',
   'direct_channel',
+  'direct_recorded_as_sale',
+  'premium_mismatch',
+  'item_count_mismatch',
   'producer_mismatch',
   'unmapped_producer',
   'no_app_producer',
@@ -137,6 +148,10 @@ export const RECONCILIATION_ISSUE_LABELS: Record<ReconciliationIssue, string> =
       'Bind ID on no user, but named in Dash (a former employee, or a code not entered yet)',
     no_bind_id: 'No Bind ID in Dash',
     direct_channel: 'Sold through 1-800 / allstate.com',
+    direct_recorded_as_sale:
+      'Allstate sold it directly, but the app has it on a sale — a 1-800 policy is serviced, never sold',
+    premium_mismatch: 'Premium in the app differs from Dash',
+    item_count_mismatch: 'Item count in the app differs from Dash',
     producer_mismatch: 'Dash credits a different producer',
     unmapped_producer: 'Sub-producer code is not on any staff user',
     no_app_producer: 'App policy has no producer',
@@ -164,12 +179,17 @@ export const RECONCILIATION_REVIEW_STATUS_LABELS: Record<
   dismissed: 'Dismissed',
 };
 
-/** What the reviewer concluded. Free text goes in the note. */
+/**
+ * What the reviewer concluded — the values a review may set. Free text goes in
+ * the note.
+ */
 export const RECONCILIATION_RESOLUTIONS = [
   'entered_in_app',
   'number_corrected',
   'credit_corrected',
-  'confirmed_1800',
+  'premium_corrected',
+  'carrier_figure_wrong',
+  'service_set_up',
   'timing',
   'not_ours',
   'duplicate',
@@ -178,13 +198,27 @@ export const RECONCILIATION_RESOLUTIONS = [
 export type ReconciliationResolution =
   (typeof RECONCILIATION_RESOLUTIONS)[number];
 
+/**
+ * Resolutions no longer offered that a stored row may still hold.
+ * `confirmed_1800` ("yes, Allstate sold it", with nothing done) went with v2:
+ * a 1-800 policy is now set up for service, or it is not the agency's. Read
+ * paths label it; a review can no longer set it, and a re-upload does not
+ * carry it forward.
+ */
+export const RETIRED_RECONCILIATION_RESOLUTIONS = ['confirmed_1800'] as const;
+export type RetiredReconciliationResolution =
+  (typeof RETIRED_RECONCILIATION_RESOLUTIONS)[number];
+
 export const RECONCILIATION_RESOLUTION_LABELS: Record<
-  ReconciliationResolution,
+  ReconciliationResolution | RetiredReconciliationResolution,
   string
 > = {
   entered_in_app: 'Deal entered in the app',
   number_corrected: 'Policy number corrected',
   credit_corrected: 'Producer credit corrected',
+  premium_corrected: 'Premium corrected in the app',
+  carrier_figure_wrong: 'Dash’s figure is wrong — the app is right',
+  service_set_up: 'Set up for service',
   confirmed_1800: 'Confirmed 1-800 policy',
   timing: 'Timing — recheck next month',
   not_ours: 'Not this agency’s business',
@@ -199,11 +233,26 @@ export const RECONCILIATION_RESOLUTIONS_BY_TAB: Record<
 > = {
   missing_from_app: ['entered_in_app', 'number_corrected', 'not_ours', 'other'],
   not_in_dash: ['number_corrected', 'timing', 'not_ours', 'duplicate', 'other'],
-  review_1800: ['confirmed_1800', 'entered_in_app', 'not_ours', 'other'],
+  review_1800: ['service_set_up', 'not_ours', 'other'],
+  premium_mismatch: ['premium_corrected', 'carrier_figure_wrong', 'other'],
   producer_mismatch: ['credit_corrected', 'other'],
   matched: ['other'],
   ignored: ['other'],
 };
+
+/**
+ * App premium minus Dash's written premium, to the cent; `null` unless both
+ * sides have one. Compared in whole cents, so `1234.5` and `1234.50` agree and
+ * float noise never reads as a difference. Any non-zero result is a
+ * `premium_mismatch`: any difference at all flags (David, 27 Oct 2026).
+ */
+export function reconciliationPremiumDelta(
+  dashPremium: number | null | undefined,
+  appPremium: number | null | undefined,
+): number | null {
+  if (dashPremium == null || appPremium == null) return null;
+  return (Math.round(appPremium * 100) - Math.round(dashPremium * 100)) / 100;
+}
 
 /**
  * A per-producer summary key as a filter value: `user:<id>`,
@@ -238,6 +287,7 @@ export interface ReconciliationTotals {
   missing: number;
   appOnly: number;
   review1800: number;
+  premiumMismatch: number;
   producerMismatch: number;
   /** Written premium of every new-policy line. */
   dashPremium: number;
@@ -246,6 +296,12 @@ export interface ReconciliationTotals {
   appOnlyPremium: number;
   /** Written premium of 1-800 new policies. */
   review1800Premium: number;
+  /**
+   * How far apart the premiums are on the `premium_mismatch` rows, summed as
+   * absolute differences (`Σ |Dash − app|`), so a policy over and one under
+   * never cancel out.
+   */
+  premiumMismatchDelta: number;
   /** `matched / (matched + missing)`; `null` with nothing to divide. */
   captureRate: number | null;
 }
@@ -376,7 +432,8 @@ export interface ReconciliationSuggestion {
 
 export interface ReconciliationReview {
   status: ReconciliationReviewStatus;
-  resolution: ReconciliationResolution | null;
+  /** A retired value only on a row decided before it was retired. */
+  resolution: ReconciliationResolution | RetiredReconciliationResolution | null;
   note: string | null;
   reviewedBy: { id: string; name: string } | null;
   reviewedAt: string | null;

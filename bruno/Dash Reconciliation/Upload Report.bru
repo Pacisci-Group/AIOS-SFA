@@ -35,7 +35,8 @@ docs {
 
   | Line | What it exercises |
   |---|---|
-  | 900200000, 900200002 | matched, credited to the producer who sold it |
+  | 900200000 | matched and credited to the producer who sold it, but Dash says $1,928.01 where the app has $1,928.00: Premium differs |
+  | 900200002 | matched, credited to the producer who sold it |
   | 900200004 | matched, but Dash credits Pat where the app credits Morgan |
   | 900299990 | in Dash, not in the app |
   | 900299991 (Bind ID `OSCVANJ`, 1-800) | 1-800 review |
@@ -46,6 +47,6 @@ docs {
   the demo agency a new random Allstate code every run, so a fixed number
   would be refused as another agency's report. The run warns instead.
 
-  ⚠ `Presign Upload` and `Create Run` declare the file's size (**24069**
+  ⚠ `Presign Upload` and `Create Run` declare the file's size (**24072**
   bytes). Regenerating the fixture means updating both.
 }

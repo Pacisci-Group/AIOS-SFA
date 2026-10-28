@@ -273,6 +273,18 @@ describe('matchRows + deriveRow', () => {
     expect(row.tabs).toEqual(['matched']);
   });
 
+  it('checks the premium and the producer independently', () => {
+    const [row] = run(
+      [dashRow({ subProducerCode: '025', writtenPremium: 990 })],
+      [appPolicy()],
+    );
+    expect(row.tabs.sort()).toEqual([
+      'matched',
+      'premium_mismatch',
+      'producer_mismatch',
+    ]);
+  });
+
   it('notes a sub-producer code on no user without reviewing the row', () => {
     const [row] = run([dashRow({ subProducerCode: '002' })], [appPolicy()]);
     expect(row.issues).toContain('unmapped_producer');
@@ -325,6 +337,123 @@ describe('matchRows + deriveRow', () => {
   });
 });
 
+describe('matched-row checks', () => {
+  // `1234.5` and `1234.50` are one number in JS; these differ as floats but
+  // agree in whole cents, so only a cents comparison leaves them clean.
+  it.each([
+    [1234.5, 1234.501],
+    [0.1 + 0.2, 0.3],
+    [1928.0000000000002, 1928],
+  ])('compares in whole cents: Dash %p and the app %p agree', (dash, app) => {
+    const [row] = run(
+      [dashRow({ writtenPremium: dash })],
+      [appPolicy({ premium: app })],
+    );
+    expect(row).toMatchObject({
+      tabs: ['matched'],
+      issues: [],
+      needsReview: false,
+    });
+  });
+
+  it('flags a premium a single cent apart', () => {
+    const [row] = run(
+      [dashRow({ writtenPremium: 1234.5 })],
+      [appPolicy({ premium: 1234.51 })],
+    );
+    expect(row.tabs.sort()).toEqual(['matched', 'premium_mismatch']);
+    expect(row.issues).toEqual(['premium_mismatch']);
+    expect(row.needsReview).toBe(true);
+  });
+
+  it('flags a difference either way', () => {
+    const [row] = run(
+      [dashRow({ writtenPremium: 1200 })],
+      [appPolicy({ premium: 1000 })],
+    );
+    expect(row.tabs).toContain('premium_mismatch');
+  });
+
+  it('does not flag a premium Dash left blank', () => {
+    const [row] = run([dashRow({ writtenPremium: null })], [appPolicy()]);
+    expect(row.tabs).toEqual(['matched']);
+    expect(row.issues).not.toContain('premium_mismatch');
+  });
+
+  it('flags an app policy with no premium entered', () => {
+    const [row] = run([dashRow()], [appPolicy({ premium: 0 })]);
+    expect(row.tabs).toContain('premium_mismatch');
+  });
+
+  it('never checks the premium of a row that did not match', () => {
+    const [missing] = run([dashRow({ writtenPremium: 1 })]);
+    expect(missing.issues).not.toContain('premium_mismatch');
+    const [appOnly] = run([], [appPolicy({ premium: 1 })]);
+    expect(appOnly.issues).not.toContain('premium_mismatch');
+  });
+
+  it('notes a different item count without asking for a decision', () => {
+    const [row] = run([dashRow({ itemCount: 2 })], [appPolicy({ items: 1 })]);
+    expect(row).toMatchObject({
+      tabs: ['matched'],
+      issues: ['item_count_mismatch'],
+      needsReview: false,
+    });
+  });
+
+  it('ignores an item count Dash left blank', () => {
+    const [row] = run([dashRow({ itemCount: null })], [appPolicy()]);
+    expect(row.issues).toEqual([]);
+  });
+
+  describe('a 1-800 policy recorded as a sale', () => {
+    const direct = {
+      bindId: 'OSCVANJ',
+      bindIdKey: 'OSCVANJ',
+      bindIdName: null,
+    };
+
+    it('flags a matched policy on a deal whose Bind ID is unnamed and on no user', () => {
+      const [row] = run([dashRow(direct)], [appPolicy()]);
+      expect(row.tabs.sort()).toEqual(['matched', 'review_1800']);
+      expect(row.issues).toEqual(
+        expect.arrayContaining([
+          'direct_recorded_as_sale',
+          'not_staff_bind_id',
+        ]),
+      );
+      expect(row.needsReview).toBe(true);
+    });
+
+    it('never flags a Bind ID Dash names: that is a former employee’s sale', () => {
+      const [row] = run(
+        [dashRow({ ...direct, bindIdName: 'BRIAN CARTER' })],
+        [appPolicy()],
+      );
+      expect(row.bindIdStatus).toBe('former_staff');
+      expect(row.tabs).toEqual(['matched']);
+      expect(row.issues).not.toContain('direct_recorded_as_sale');
+    });
+
+    it('never flags a staff Bind ID', () => {
+      const [row] = run([dashRow()], [appPolicy()]);
+      expect(row.issues).not.toContain('direct_recorded_as_sale');
+    });
+
+    it('does not call a policy on no deal a sale, though it is still 1-800', () => {
+      const [row] = run([dashRow(direct)], [appPolicy({ dealId: null })]);
+      expect(row.tabs.sort()).toEqual(['matched', 'review_1800']);
+      expect(row.issues).not.toContain('direct_recorded_as_sale');
+    });
+
+    it('is never raised on a 1-800 line the app does not have', () => {
+      const [row] = run([dashRow(direct)]);
+      expect(row.tabs).toEqual(['review_1800']);
+      expect(row.issues).not.toContain('direct_recorded_as_sale');
+    });
+  });
+});
+
 describe('summarize', () => {
   it('reproduces the scrubber summary: capture rate, missing premium, per producer', () => {
     const rows = run(
@@ -371,6 +500,7 @@ describe('summarize', () => {
           policyNumber: '900000003',
           policyKey: '900000003',
           producerId: 'u-sam',
+          premium: 400,
         }),
         appPolicy({
           policyId: 'p9',
@@ -389,12 +519,14 @@ describe('summarize', () => {
       missing: 1,
       appOnly: 1,
       review1800: 1,
+      premiumMismatch: 0,
       producerMismatch: 0,
       dashPremium: 2443.58,
       matchedPremium: 1400,
       missingPremium: 250.5,
       appOnlyPremium: 600,
       review1800Premium: 793.08,
+      premiumMismatchDelta: 0,
       captureRate: 2 / 3,
     });
     expect(
@@ -410,6 +542,51 @@ describe('summarize', () => {
       ['user:u-sam', 1, 1, 0, 0],
     ]);
     expect(byProducer[0].captureRate).toBe(0.5);
+  });
+
+  it('counts premium differences and sums them as absolute amounts', () => {
+    const rows = run(
+      [
+        dashRow({ writtenPremium: 1000 }),
+        dashRow({
+          policyNumber: '900000002',
+          policyKey: '900000002',
+          writtenPremium: 500,
+        }),
+        dashRow({
+          policyNumber: '900000003',
+          policyKey: '900000003',
+          writtenPremium: 300,
+        }),
+        // Not matched: its premium is nobody's to compare.
+        dashRow({
+          policyNumber: '900000004',
+          policyKey: '900000004',
+          writtenPremium: 50,
+        }),
+      ],
+      [
+        appPolicy({ premium: 1012.5 }),
+        appPolicy({
+          policyId: 'p2',
+          policyNumber: '900000002',
+          policyKey: '900000002',
+          premium: 499.99,
+        }),
+        appPolicy({
+          policyId: 'p3',
+          policyNumber: '900000003',
+          policyKey: '900000003',
+          premium: 300,
+        }),
+      ],
+    );
+    const { totals } = summarize(rows);
+    expect(totals.matched).toBe(3);
+    expect(totals.premiumMismatch).toBe(2);
+    // 12.50 over and 0.01 under: 12.51 apart, not 12.49.
+    expect(totals.premiumMismatchDelta).toBe(12.51);
+    expect(totals.producerMismatch).toBe(0);
   });
 
   it('gives a former employee a line of their own, apart from lines that name nobody', () => {
