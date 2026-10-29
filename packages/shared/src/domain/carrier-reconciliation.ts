@@ -30,7 +30,10 @@
  *   Motor Club), kept so the file's line count reconciles.
  *
  * The owner works the open rows, or hands one to a Producer or CSR
- * (`assignment`), who is notified and sees it on their own page.
+ * (`assignment`), who is notified and sees it on their own page and records
+ * what became of it (`outcome`): **Sold** (entered as a sale), **Cancel
+ * rewrite** (entered, then rewritten through the normal replacement chain) or
+ * **Other** (a note). Finishing one resolves the row.
  *
  * Who a line belongs to is the user holding its **Bind ID** — the login that
  * bound the policy, entered on the user (`allstate-codes.ts`). Dash's
@@ -38,6 +41,10 @@
  * people twice whenever the code was not on their user, and it named the
  * binder on nearly every sale anyway.
  */
+
+import { ModuleKey } from '../enums/module-key.enum';
+import { modulePermission } from '../permissions/permission.constants';
+import type { PolicyType } from './policy-type';
 
 export const RECONCILIATION_RUN_STATUSES = [
   'processing',
@@ -213,8 +220,27 @@ export const RETIRED_RECONCILIATION_RESOLUTIONS = ['confirmed_1800'] as const;
 export type RetiredReconciliationResolution =
   (typeof RETIRED_RECONCILIATION_RESOLUTIONS)[number];
 
+/**
+ * What an assignee's finished outcome resolves the row with, so the owner's
+ * tabs read the same. Never picked by hand — the owner's review refuses them —
+ * but read paths label them and a re-upload carries them like any decision.
+ */
+export const RECONCILIATION_OUTCOME_RESOLUTIONS = [
+  'sold_recorded',
+  'cancel_rewrite_recorded',
+  'other_recorded',
+] as const;
+export type ReconciliationOutcomeResolution =
+  (typeof RECONCILIATION_OUTCOME_RESOLUTIONS)[number];
+
+/** Any resolution a stored row may hold. */
+export type StoredReconciliationResolution =
+  | ReconciliationResolution
+  | RetiredReconciliationResolution
+  | ReconciliationOutcomeResolution;
+
 export const RECONCILIATION_RESOLUTION_LABELS: Record<
-  ReconciliationResolution | RetiredReconciliationResolution,
+  StoredReconciliationResolution,
   string
 > = {
   entered_in_app: 'Deal entered in the app',
@@ -228,6 +254,9 @@ export const RECONCILIATION_RESOLUTION_LABELS: Record<
   not_ours: 'Not this agency’s business',
   duplicate: 'Duplicate',
   other: 'Other',
+  sold_recorded: 'Sold recorded',
+  cancel_rewrite_recorded: 'Cancel rewrite recorded',
+  other_recorded: 'Other recorded',
 };
 
 /** The resolutions that make sense on a row in each tab, in display order. */
@@ -305,6 +334,126 @@ export const RECONCILIATION_FILE_EXTENSIONS = ['.xlsx'] as const;
 
 /** The note left with an assignment, so the form and the API refuse alike. */
 export const MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH = 1000;
+
+// ---------------------------------------------------------------------------
+// Outcomes — what the assignee records on a row (PAC-173 v2, PR 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * - `sold` — the policy was the agency's sale: enter it (New Lead, then Sold,
+ *   prefilled from the Dash line).
+ * - `cancel_rewrite` — it was sold and later rewritten: enter it as `sold`
+ *   does, then write its replacement through the normal cancel-rewrite chain,
+ *   so the trail and the chargeback exist.
+ * - `other` — anything else, in a note. Done at once.
+ */
+export const RECONCILIATION_OUTCOME_KINDS = [
+  'sold',
+  'cancel_rewrite',
+  'other',
+] as const;
+export type ReconciliationOutcomeKind =
+  (typeof RECONCILIATION_OUTCOME_KINDS)[number];
+
+export const RECONCILIATION_OUTCOME_KIND_LABELS: Record<
+  ReconciliationOutcomeKind,
+  string
+> = {
+  sold: 'Sold',
+  cancel_rewrite: 'Cancel rewrite',
+  other: 'Other',
+};
+
+/** The resolution each kind leaves on the row once it is done. */
+export const RECONCILIATION_OUTCOME_RESOLUTION: Record<
+  ReconciliationOutcomeKind,
+  ReconciliationOutcomeResolution
+> = {
+  sold: 'sold_recorded',
+  cancel_rewrite: 'cancel_rewrite_recorded',
+  other: 'other_recorded',
+};
+
+export const RECONCILIATION_OUTCOME_STATUSES = ['in_progress', 'done'] as const;
+export type ReconciliationOutcomeStatus =
+  (typeof RECONCILIATION_OUTCOME_STATUSES)[number];
+
+/**
+ * Where an unfinished outcome stands: `record_sale` until the sale is booked,
+ * then — for a cancel rewrite — `write_replacement` until its replacement is.
+ */
+export const RECONCILIATION_OUTCOME_STEPS = [
+  'record_sale',
+  'write_replacement',
+] as const;
+export type ReconciliationOutcomeStep =
+  (typeof RECONCILIATION_OUTCOME_STEPS)[number];
+
+export const RECONCILIATION_OUTCOME_STEP_LABELS: Record<
+  ReconciliationOutcomeStep,
+  string
+> = {
+  record_sale: 'Recording the sale',
+  write_replacement: 'Writing the replacement',
+};
+
+/** The kinds that book a sale, and so need the caller to be able to. */
+export const RECONCILIATION_SALE_OUTCOME_KINDS = [
+  'sold',
+  'cancel_rewrite',
+] as const satisfies readonly ReconciliationOutcomeKind[];
+
+/**
+ * The outcomes a row can take, by its tabs: a Dash sale missing from the app
+ * can be Sold, a Cancel rewrite or Other; anything else only Other (1-800
+ * service intake comes with its own outcome).
+ */
+export function reconciliationOutcomeKinds(
+  tabs: readonly ReconciliationTab[],
+): readonly ReconciliationOutcomeKind[] {
+  return tabs.includes('missing_from_app')
+    ? RECONCILIATION_OUTCOME_KINDS
+    : ['other'];
+}
+
+/**
+ * Whether someone holding these permissions can book a sale: a lead, then the
+ * sale on it. Recording Sold or a Cancel rewrite takes both, and only people
+ * who can are given a `missing_from_app` row (owner, 28 Oct 2026) — checked by
+ * permission, not role, so a CSR an agency lets sell qualifies.
+ */
+export function canRecordReconciliationSale(
+  permissions: readonly string[],
+): boolean {
+  return (
+    permissions.includes(modulePermission(ModuleKey.Leads, 'write')) &&
+    permissions.includes(modulePermission(ModuleKey.DealAudits, 'write'))
+  );
+}
+
+/**
+ * The rows endpoint's `outcome` filter: by status (`in_progress`, `done`) or
+ * by kind.
+ */
+export const RECONCILIATION_OUTCOME_FILTERS = [
+  'in_progress',
+  'done',
+  ...RECONCILIATION_OUTCOME_KINDS,
+] as const;
+export type ReconciliationOutcomeFilter =
+  (typeof RECONCILIATION_OUTCOME_FILTERS)[number];
+
+/** The note an outcome carries, so the form and the API refuse alike. */
+export const MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH = 2000;
+
+/** Error codes for outcomes and the assignment rule they bring. */
+export const RECONCILIATION_ASSIGNEE_CANNOT_SELL =
+  'RECONCILIATION_ASSIGNEE_CANNOT_SELL';
+export const RECONCILIATION_OUTCOME_NOT_ALLOWED =
+  'RECONCILIATION_OUTCOME_NOT_ALLOWED';
+export const RECONCILIATION_OUTCOME_FORBIDDEN =
+  'RECONCILIATION_OUTCOME_FORBIDDEN';
+export const RECONCILIATION_OUTCOME_LOCKED = 'RECONCILIATION_OUTCOME_LOCKED';
 
 // ---------------------------------------------------------------------------
 // Views
@@ -393,6 +542,8 @@ export interface ReconciliationRunDetail extends ReconciliationRunView {
   tabCounts: Record<ReconciliationTab, { total: number; open: number }>;
   /** Rows still waiting on a decision that are assigned to someone. */
   assigned: number;
+  /** Of those, the ones whose assignee has an outcome under way. */
+  inProgress: number;
   /** Parser notes worth showing (a missing metadata row, a fallback window). */
   warnings: string[];
 }
@@ -467,8 +618,11 @@ export interface ReconciliationSuggestion {
 
 export interface ReconciliationReview {
   status: ReconciliationReviewStatus;
-  /** A retired value only on a row decided before it was retired. */
-  resolution: ReconciliationResolution | RetiredReconciliationResolution | null;
+  /**
+   * A retired value only on a row decided before it was retired; an outcome
+   * resolution only when an assignee's outcome finished it.
+   */
+  resolution: StoredReconciliationResolution | null;
   note: string | null;
   reviewedBy: { id: string; name: string } | null;
   reviewedAt: string | null;
@@ -500,6 +654,31 @@ export interface ReconciliationRowView {
   runId: string;
   /** Who the owner handed the row to, if anyone. */
   assignment: ReconciliationAssignment | null;
+  /** What the assignee recorded, or is recording. */
+  outcome: ReconciliationOutcome | null;
+}
+
+/**
+ * An assignee's outcome. The ids link what it created: the lead and deal of
+ * the sale, the policy that is the Dash line, and — for a cancel rewrite — the
+ * replacement policy and the chargeback the rewrite wrote.
+ */
+export interface ReconciliationOutcome {
+  kind: ReconciliationOutcomeKind;
+  status: ReconciliationOutcomeStatus;
+  /** `null` once done, and for `other`. */
+  step: ReconciliationOutcomeStep | null;
+  note: string | null;
+  leadId: string | null;
+  dealId: string | null;
+  policyId: string | null;
+  householdId: string | null;
+  replacementPolicyId: string | null;
+  chargebackId: string | null;
+  startedBy: { id: string; name: string } | null;
+  startedAt: string;
+  completedBy: { id: string; name: string } | null;
+  completedAt: string | null;
 }
 
 /** A row handed to a Producer or CSR to work. */
@@ -524,6 +703,11 @@ export interface ReconciliationAssignee {
   name: string;
   email: string;
   roles: string[];
+  /**
+   * Whether they can book a sale (`canRecordReconciliationSale`). Only they
+   * can be given a `missing_from_app` row.
+   */
+  canRecordSale: boolean;
 }
 
 export interface ReconciliationOptionsResponse {
@@ -540,6 +724,49 @@ export interface ReconciliationAssignedRow extends ReconciliationRowView {
     startDate: string | null;
     endDate: string | null;
   };
+}
+
+/**
+ * The Dash line as the New Lead and Sold forms want it, so the assignee
+ * confirms rather than retypes. Calendar dates are `YYYY-MM-DD`.
+ */
+export interface ReconciliationPrefill {
+  /** From Dash's `FIRST LAST` customer name; `null` without one. */
+  lead: {
+    firstName: string;
+    lastName: string;
+    /**
+     * The lead's date: the day Dash says the policy was written. A sale may
+     * not predate its lead, so a lead dated today could not carry the Dash
+     * sold date.
+     */
+    createdDate: string | null;
+  } | null;
+  policy: {
+    policyNumber: string | null;
+    /** `null` when Dash's product maps to no app policy type — the form asks. */
+    policyType: PolicyType | null;
+    /** The carrier the run was uploaded for, by its catalog name. */
+    carrier: string | null;
+    premium: number | null;
+    itemCount: number;
+    effectiveDate: string | null;
+    soldDate: string | null;
+  };
+}
+
+/** `GET carrier-reconciliation/assigned/:rowId`. */
+export interface ReconciliationAssignedRowDetail
+  extends ReconciliationAssignedRow {
+  /** `null` on a row with no Dash line. */
+  prefill: ReconciliationPrefill | null;
+}
+
+/** `PATCH carrier-reconciliation/assigned/:rowId/outcome`. */
+export interface RecordReconciliationOutcomeInput {
+  kind: ReconciliationOutcomeKind;
+  /** Required for `other`. */
+  note?: string | null;
 }
 
 export interface ReconciliationAssignedListResponse {

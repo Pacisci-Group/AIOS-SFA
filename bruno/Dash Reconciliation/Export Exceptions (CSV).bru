@@ -31,6 +31,10 @@ tests {
     expect(String(res.getBody())).to.contain("policy_number");
     expect(String(res.getBody())).to.contain("premium_delta");
   });
+
+  test("what the assignee recorded, beside who has the row", function () {
+    expect(String(res.getBody())).to.contain("assigned_to,outcome,outcome_note");
+  });
 }
 
 docs {
@@ -46,7 +50,13 @@ docs {
   policy number, Dash customer and app client, Dash producer, sub-producer
   code, Bind ID, app producer, product, transaction, channel, dates, premiums,
   `premium_delta` (app minus Dash, to the cent, on a matched row), items,
-  `assigned_to` (who the owner handed the row to), issues, deal id.
+  `assigned_to` (who the owner handed the row to), `outcome` and
+  `outcome_note` (what the assignee recorded — PAC-173 PR 4), issues, deal id.
+
+  `outcome` reads `<Kind> — done` or `<Kind> — <step>`: `Sold — done`,
+  `Sold — recording the sale`, `Cancel rewrite — recording the sale`,
+  `Cancel rewrite — writing the replacement`, `Cancel rewrite — done`,
+  `Other — done`; blank with no outcome.
 
   ## Query
   - `format` — `csv` | `xlsx` (default `xlsx`)

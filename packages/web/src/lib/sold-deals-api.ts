@@ -133,7 +133,12 @@ export async function uploadSoldDocument(
   };
 }
 
-/** `POST /sold-deals` — books the sale. Totals are derived server-side. */
+/**
+ * `POST /sold-deals` — books the sale. Totals are derived server-side.
+ *
+ * `reconciliationRowId` (PAC-173) names the Dash row the sale records; the row
+ * is moved on after the sale commits, best-effort, so it never fails a booking.
+ */
 export function createSoldDeal(
   input: CreateSoldDealInput,
 ): Promise<CreateSoldDealResponse> {

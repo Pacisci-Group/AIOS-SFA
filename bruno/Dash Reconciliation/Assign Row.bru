@@ -57,6 +57,16 @@ docs {
   - Only a row **still waiting on a decision** (`needsReview`, review
     `open`), on a finished run nobody re-uploaded, can be assigned. Taking a
     row back always works.
+  - A row **missing from the app** goes only to someone who can book a sale
+    — `canRecordSale` on `Get Options` (`leads:write` + `deal_audits:write`,
+    by effective permission, never role name). Anyone else is a `400`
+    `RECONCILIATION_ASSIGNEE_CANNOT_SELL` (PAC-173 PR 4, owner 28 Oct 2026):
+    the assignee records it as Sold or a Cancel rewrite by entering the lead
+    and the sale. A standard CSR still takes rows in every other tab.
+  - Handing the row to someone else, or taking it back, **clears an outcome
+    under way** in the same write: the new person starts over, because the
+    first one's lead stays in their own pipeline. A note change for the same
+    person keeps it; a finished outcome is kept either way.
   - The same person again only changes the note: no new notification.
   - Nobody is notified when the owner assigns a row to themselves, or on an
     unassign.
@@ -78,8 +88,10 @@ docs {
 
   ## Errors
   - `400` — not an active Producer or CSR of this agency; validation
+  - `400` `RECONCILIATION_ASSIGNEE_CANNOT_SELL` — a row missing from the app,
+    to someone who cannot book a sale (checked only for a new assignee)
   - `404` — no such run or row in the agency
   - `409` — the row is already decided or needs no decision; the run was
     replaced by a newer upload or did not finish; someone else changed the
-    assignment at the same moment
+    assignment, or the assignee's outcome, at the same moment
 }

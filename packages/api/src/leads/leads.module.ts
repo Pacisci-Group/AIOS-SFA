@@ -5,6 +5,7 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import { CarrierReconciliationModule } from '../carrier-reconciliation/carrier-reconciliation.module';
 import { ContactsModule } from '../contacts/contacts.module';
 import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
@@ -98,6 +99,15 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
      * scope rule lives in that service and must not be reimplemented here.
      */
     PoliciesModule,
+    /*
+     * `ReconciliationOutcomesService.linkLead` — a lead created to record a
+     * Dash row is stamped on it (PAC-173 PR 4).
+     *
+     * Acyclic: `CarrierReconciliationModule` registers the schemas it reads
+     * and imports only `PermissionsModule`, never this module or anything
+     * that imports it.
+     */
+    CarrierReconciliationModule,
   ],
   controllers: [LeadsController],
   providers: [

@@ -36,6 +36,12 @@ tests {
     expect(res.getBody().assigned).to.be.a("number");
   });
 
+  test("and of those, the ones with an outcome under way", function () {
+    const run = res.getBody();
+    expect(run.inProgress).to.be.a("number");
+    expect(run.inProgress).to.be.at.most(run.assigned);
+  });
+
   test("totals the premium differences", function () {
     const totals = res.getBody().totals;
     expect(totals.premiumMismatch).to.be.a("number");
@@ -59,7 +65,10 @@ docs {
   before premiums were compared reads `0` for both until it is re-checked.
 
   `assigned` counts the rows still waiting on a decision that the owner has
-  handed to a Producer or CSR.
+  handed to a Producer or CSR; `inProgress` (PAC-173 PR 4) counts those whose
+  assignee has an outcome under way — a Sold or Cancel rewrite started and
+  not yet booked (see `Record Outcome (Sold)`). A finished outcome decides
+  its row, so it is in neither.
 
   ## Errors
   - `400` — `:id` is not an ObjectId

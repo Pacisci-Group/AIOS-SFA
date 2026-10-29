@@ -1,15 +1,24 @@
-import type {
-  ReconciliationAppSide,
-  ReconciliationAssignment,
-  ReconciliationDashSide,
-  ReconciliationProducerSummary,
-  ReconciliationRowView,
-  ReconciliationRunStatus,
-  ReconciliationRunView,
+import {
+  RECONCILIATION_OUTCOME_KIND_LABELS,
+  RECONCILIATION_OUTCOME_STEP_LABELS,
+  type ReconciliationAppSide,
+  type ReconciliationAssignment,
+  type ReconciliationDashSide,
+  type ReconciliationOutcome,
+  type ReconciliationPrefill,
+  type ReconciliationProducerSummary,
+  type ReconciliationRowView,
+  type ReconciliationRunStatus,
+  type ReconciliationRunView,
 } from '@sfa/shared';
 import type { Model, Types } from 'mongoose';
-import type { RowAssignment } from '../common/carrier-reconciliation/carry-forward';
+import type {
+  RowAssignment,
+  RowOutcome,
+} from '../common/carrier-reconciliation/carry-forward';
+import { splitDashCustomerName } from '../common/carrier-reconciliation/dash-customer-name';
 import type { DashRow } from '../common/carrier-reconciliation/dash-file-reader';
+import { dashProductPolicyType } from '../common/carrier-reconciliation/dash-product-map';
 import { displayNamesFor } from '../common/domain/user-names';
 import type { UserDocument } from '../users/schemas/user.schema';
 import type {
@@ -129,6 +138,8 @@ export function rowUserIds(row: LeanRow): string[] {
     row.review?.reviewedById,
     row.assignment?.userId,
     row.assignment?.assignedById,
+    row.outcome?.startedById,
+    row.outcome?.completedById,
   ].filter((id): id is string => typeof id === 'string' && id.length === 24);
 }
 
@@ -194,6 +205,83 @@ export function toRowView(
     runId: String(row.runId),
     // A row stored before assignment existed has no field at all.
     assignment: row.assignment ? assignmentView(row.assignment, names) : null,
+    // Nor one stored before outcomes did.
+    outcome: row.outcome ? outcomeView(row.outcome, names) : null,
+  };
+}
+
+export function outcomeView(
+  outcome: RowOutcome,
+  names: ReadonlyMap<string, string>,
+): ReconciliationOutcome {
+  const person = (id: string | null) =>
+    id ? { id, name: names.get(id) ?? 'Former user' } : null;
+  return {
+    kind: outcome.kind,
+    status: outcome.status,
+    step: outcome.step,
+    note: outcome.note,
+    leadId: outcome.leadId,
+    dealId: outcome.dealId,
+    policyId: outcome.policyId,
+    householdId: outcome.householdId,
+    replacementPolicyId: outcome.replacementPolicyId,
+    chargebackId: outcome.chargebackId,
+    startedBy: person(outcome.startedById),
+    startedAt: new Date(outcome.startedAt).toISOString(),
+    completedBy: person(outcome.completedById),
+    completedAt: outcome.completedAt
+      ? new Date(outcome.completedAt).toISOString()
+      : null,
+  };
+}
+
+/**
+ * An outcome in one phrase, for the export: `Sold — done`, `Cancel rewrite —
+ * writing the replacement`.
+ */
+export function outcomeLabel(
+  outcome: Pick<ReconciliationOutcome, 'kind' | 'status' | 'step'> | null,
+): string | null {
+  if (!outcome) return null;
+  const kind = RECONCILIATION_OUTCOME_KIND_LABELS[outcome.kind];
+  if (outcome.status === 'done' || !outcome.step) return `${kind} — done`;
+  return `${kind} — ${RECONCILIATION_OUTCOME_STEP_LABELS[outcome.step].toLowerCase()}`;
+}
+
+/**
+ * The Dash line as the New Lead and Sold forms want it (PAC-173 PR 4), so the
+ * assignee confirms what Dash says rather than retyping it. `null` without a
+ * Dash line — an app policy Dash does not show has nothing to enter.
+ *
+ * - **Sold date** is the day Dash says the policy was written, else issued;
+ *   the **effective date** the day it was issued, else written.
+ * - The lead is dated the sold date: a sale may not predate its lead
+ *   (`assertSoldDateAllowed`), so a lead dated today could not carry it.
+ * - **Carrier** is the catalog name of the carrier the run was uploaded for —
+ *   the one the report is from — which the Sold form's carrier list carries.
+ *
+ * Tolerant of a `dash` snapshot missing fields (one stored by hand, or by an
+ * older reader): anything absent reads as unknown.
+ */
+export function reconciliationPrefill(
+  dash: Partial<DashRow> | null,
+  carrierName: string | null,
+): ReconciliationPrefill | null {
+  if (!dash) return null;
+  const soldDate = dash.dateWritten ?? dash.issuedDate ?? null;
+  const name = splitDashCustomerName(dash.customerName);
+  return {
+    lead: name ? { ...name, createdDate: soldDate } : null,
+    policy: {
+      policyNumber: dash.policyNumber ?? null,
+      policyType: dashProductPolicyType(dash.product, dash.productDescription),
+      carrier: carrierName,
+      premium: dash.writtenPremium ?? null,
+      itemCount: Math.max(1, dash.itemCount ?? 1),
+      effectiveDate: dash.issuedDate ?? dash.dateWritten ?? null,
+      soldDate,
+    },
   };
 }
 

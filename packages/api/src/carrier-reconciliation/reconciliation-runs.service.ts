@@ -42,6 +42,7 @@ import {
 import { clientAgencyId } from '../common/access/client-scope';
 import {
   carriedAssignment,
+  carriedOutcome,
   carriedReview,
   type PreviousRowReview,
 } from '../common/carrier-reconciliation/carry-forward';
@@ -86,8 +87,10 @@ import type {
   ReviewRowDto,
   RowsQueryDto,
 } from './dto/carrier-reconciliation.dto';
+import { outcomeAsRead } from './outcome-filters';
 import {
   isStale,
+  outcomeLabel,
   STALE_RUN_MINUTES,
   toProducerSummary,
   resolveRowViews,
@@ -398,6 +401,7 @@ export class ReconciliationRunsService {
             } satisfies StoredReview)
           : openReview(),
         assignment: carriedAssignment(sameRow, previousReviews),
+        outcome: carriedOutcome(sameRow, previousReviews),
         searchText: searchText(base),
       };
     });
@@ -441,18 +445,33 @@ export class ReconciliationRunsService {
         {
           agencyId,
           runId,
-          // A decision, or a person the row is with — either carries.
+          // A decision, a person the row is with, or what they recorded on
+          // it — any of them carries.
           $or: [
             { 'review.status': { $ne: 'open' } },
             { 'assignment.userId': { $type: 'string' } },
+            { outcome: { $ne: null } },
           ],
         },
-        { rowKey: 1, match: 1, issues: 1, review: 1, assignment: 1 },
+        {
+          rowKey: 1,
+          match: 1,
+          issues: 1,
+          review: 1,
+          assignment: 1,
+          outcome: 1,
+        },
       )
       .lean<
         Pick<
           LeanRow,
-          '_id' | 'rowKey' | 'match' | 'issues' | 'review' | 'assignment'
+          | '_id'
+          | 'rowKey'
+          | 'match'
+          | 'issues'
+          | 'review'
+          | 'assignment'
+          | 'outcome'
         >[]
       >();
     return new Map(
@@ -468,6 +487,7 @@ export class ReconciliationRunsService {
           reviewedById: row.review.reviewedById,
           reviewedAt: row.review.reviewedAt,
           assignment: row.assignment ?? null,
+          outcome: row.outcome ?? null,
         },
       ]),
     );
@@ -544,15 +564,20 @@ export class ReconciliationRunsService {
   ): Promise<ReconciliationRunDetail> {
     const agencyId = clientAgencyId(access);
     const run = await this.loadRun(agencyId, runId);
-    const [tabCounts, open, assigned] = await Promise.all([
+    const assignedOpen = {
+      agencyId,
+      runId: run._id,
+      needsReview: true,
+      'review.status': 'open',
+      'assignment.userId': { $type: 'string' },
+    };
+    const [tabCounts, open, assigned, inProgress] = await Promise.all([
       this.tabCounts(agencyId, run._id),
       this.openCounts(agencyId, [run._id]),
+      this.rowModel.countDocuments(assignedOpen),
       this.rowModel.countDocuments({
-        agencyId,
-        runId: run._id,
-        needsReview: true,
-        'review.status': 'open',
-        'assignment.userId': { $type: 'string' },
+        ...assignedOpen,
+        'outcome.status': 'in_progress',
       }),
     ]);
     const names = await displayNamesFor(this.userModel, [
@@ -568,6 +593,7 @@ export class ReconciliationRunsService {
       ),
       tabCounts,
       assigned,
+      inProgress,
       warnings: run.warnings ?? [],
     };
   }
@@ -593,6 +619,11 @@ export class ReconciliationRunsService {
     } else if (query.assignee) {
       filter['assignment.userId'] =
         query.assignee === 'me' ? access.userId : query.assignee;
+    }
+    if (query.outcome === 'in_progress' || query.outcome === 'done') {
+      filter['outcome.status'] = query.outcome;
+    } else if (query.outcome) {
+      filter['outcome.kind'] = query.outcome;
     }
     if (query.q) {
       filter.searchText = {
@@ -621,6 +652,20 @@ export class ReconciliationRunsService {
   // Review
   // -------------------------------------------------------------------------
 
+  /**
+   * The owner's decision on a row: resolve, dismiss, or reopen.
+   *
+   * It settles an assignee's outcome too (PAC-173 PR 4). **Reopening** clears
+   * the outcome, finished or not: the row is asking again, and a decision the
+   * assignee's outcome wrote is the decision being taken back. **Deciding by
+   * hand** while an outcome is still in progress clears it, so a sale booked
+   * on it later changes nothing here. A finished outcome is otherwise left as
+   * the record of what was done, whatever the owner now resolves it as. A
+   * deal it booked stays booked either way.
+   *
+   * Compare-and-swap on the outcome as read, so an outcome the assignee
+   * finishes meanwhile is not silently cleared or overwritten.
+   */
   async review(
     access: AccessContext,
     runId: string,
@@ -643,14 +688,20 @@ export class ReconciliationRunsService {
       reviewedAt: open ? null : new Date(),
       carriedForwardFromRowId: null,
     };
+    const clearsOutcome = open || row.outcome?.status === 'in_progress';
     const updated = await this.rowModel
       .findOneAndUpdate(
-        { _id: row._id, agencyId },
-        { $set: { review } },
+        { _id: row._id, agencyId, ...outcomeAsRead(row.outcome) },
+        { $set: clearsOutcome ? { review, outcome: null } : { review } },
         { new: true },
       )
       .lean<LeanRow>();
-    const [view] = await this.toRowViews([updated!]);
+    if (!updated) {
+      throw new ConflictException(
+        'The person this row is with just recorded something on it. Reload it and try again.',
+      );
+    }
+    const [view] = await this.toRowViews([updated]);
     return view;
   }
 
@@ -1170,6 +1221,19 @@ const EXPORT_COLUMNS: ExportColumn[] = [
     type: 'string',
     description: 'Who the row is assigned to.',
     pick: (r) => r.assignment?.user.name ?? null,
+  },
+  {
+    key: 'outcome',
+    type: 'string',
+    description:
+      'What the assignee recorded, and where it stands (e.g. "Sold — done").',
+    pick: (r) => outcomeLabel(r.outcome),
+  },
+  {
+    key: 'outcome_note',
+    type: 'string',
+    description: "The assignee's note on it.",
+    pick: (r) => r.outcome?.note ?? null,
   },
   {
     key: 'issues',

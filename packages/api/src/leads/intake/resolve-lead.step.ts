@@ -209,8 +209,16 @@ export class ResolveLeadStep {
      * actually matters: `LeadsService.findReplacementLead` keys the resume on
      * the **intent**, not the address, so asking twice for the same policy
      * resumes the first lead rather than opening a second.
+     *
+     * **Skipped for a Dash Reconciliation row too** (PAC-173 PR 4), for the
+     * same kind of reason. The assignee is entering a sale Dash already shows,
+     * on a lead dated the day Dash says it was written; an open lead at that
+     * address could be a colleague's (the Sold form would 404 on it) or dated
+     * after the sale (which the sold-date rule then refuses). Their own fresh
+     * lead is the only safe one. The row stamps it, so resuming the row reuses
+     * it rather than opening a second.
      */
-    if (addressKey && !input.replacementIntent) {
+    if (addressKey && !input.replacementIntent && !input.reconciliationRowId) {
       const cutoff = new Date(
         Date.now() - ADDRESS_DEDUPE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
       );

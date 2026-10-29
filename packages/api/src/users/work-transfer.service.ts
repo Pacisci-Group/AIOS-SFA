@@ -134,7 +134,12 @@ type Plan = WorkTransferTouched;
  *   the name — `resolvedById` records who actually cleared them.
  * - `reconciliationRows.assignment` on Dash rows still waiting on a decision,
  *   on current runs (PAC-173). The hand-over stamps `assignedById` /
- *   `assignedAt`; a decided row keeps the name of whoever worked it.
+ *   `assignedAt`; a decided row keeps the name of whoever worked it. An
+ *   outcome under way on one (PAC-173 PR 4) is **kept**: its lead moves to the
+ *   successor with the open leads above, so they resume it where it stood —
+ *   unlike a release, which clears it along with the lead's owner. Its
+ *   `startedById` stays the person who started it (attribution); whoever
+ *   finishes it is `completedById`.
  *
  * **Seeds** — not tasks themselves, but the fields the system reads when it
  * mints the *next* task. Moving the tickets without these undoes itself: the

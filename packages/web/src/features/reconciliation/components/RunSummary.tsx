@@ -17,10 +17,21 @@ import {
   formatRate,
 } from "../reconciliation-format";
 
-/** The run's headline figures — the data team's "Summary" tab, as cards. */
+/**
+ * The run's headline figures — the data team's "Summary" tab, as cards. The
+ * last card also counts the open rows handed to someone, and of those, the
+ * ones whose assignee has an outcome under way (PAC-173 PR 4).
+ */
 export function RunKpis({ run }: { run: ReconciliationRunDetail }) {
   const totals = run.totals;
   if (!totals) return null;
+  // "12 rows still need a decision · 5 assigned, 2 under way".
+  const assigned =
+    run.assigned > 0
+      ? ` · ${formatCount(run.assigned)} assigned${
+          run.inProgress > 0 ? `, ${formatCount(run.inProgress)} under way` : ""
+        }`
+      : "";
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
       <KpiCard
@@ -50,9 +61,7 @@ export function RunKpis({ run }: { run: ReconciliationRunDetail }) {
       <KpiCard
         label="1-800 to review"
         value={formatCount(totals.review1800)}
-        caption={`${formatCount(run.openReviews)} rows still need a decision${
-          run.assigned > 0 ? ` · ${formatCount(run.assigned)} assigned` : ""
-        }`}
+        caption={`${formatCount(run.openReviews)} rows still need a decision${assigned}`}
         isPending={false}
         className="col-span-2 lg:col-span-1"
       />

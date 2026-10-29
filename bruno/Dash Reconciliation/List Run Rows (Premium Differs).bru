@@ -19,6 +19,14 @@ params:query {
   pageSize: 25
 }
 
+script:post-response {
+  // The fixture's 900200000, a cent apart: a row that is not missing from
+  // the app, which the outcome requests below use as the one that only takes
+  // Other.
+  const row = (res.getBody().items || []).find((item) => item.dash.policyNumber === "900200000");
+  if (row) bru.setVar("reconPremiumRowId", row.id);
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);
@@ -61,4 +69,5 @@ docs {
   `totals.premiumMismatchDelta` sums the absolute differences.
 
   Query, paging and the row shape are as in `List Run Rows (1-800 Review)`.
+  Captures `900200000` as `reconPremiumRowId` for the outcome requests.
 }

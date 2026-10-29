@@ -1,12 +1,18 @@
 import {
+  CARRIER_OTHER,
+  carrierSlug,
   isSoldLeadStatus,
   POLICY_REPLACEMENT_REASON_LABELS,
+  type CarrierOption,
+  type ReconciliationPrefill,
 } from "@sfa/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useHeldAssignedRow } from "@/features/reconciliation/useHeldAssignedRow";
 import { celebrate } from "@/lib/celebrate";
+import { reconciliationKey } from "@/lib/carrier-reconciliation-api";
 import {
   createSoldDeal,
   getSoldDealContext,
@@ -14,7 +20,12 @@ import {
   soldStaffKey,
 } from "@/lib/sold-deals-api";
 import { newSubmissionToken } from "@/lib/submission-token";
-import { toPolicyInput } from "../components/sold-deal-schema";
+import {
+  emptyPolicy,
+  toPolicyInput,
+  type SoldPolicyFormValues,
+  type WizardVariant,
+} from "../components/sold-deal-schema";
 import {
   carrierError,
   OBJECT_ID,
@@ -26,6 +37,8 @@ import {
 interface SaleModeArgs {
   leadId: string;
   quoteRecapId: string;
+  /** The Dash Reconciliation row this sale records, or `""` (PAC-173). */
+  reconciliationRowId: string;
   enabled: boolean;
 }
 
@@ -36,10 +49,33 @@ interface SaleModeArgs {
  * lead, so a producer can never book a sale against a household they do not own.
  * `quoteRecapId` rides along when present — not every sale has a recorded quote,
  * so it is optional end to end.
+ *
+ * ## A Dash row's sale (PAC-173)
+ *
+ * `reconciliationRowId` names the caller's Dash Reconciliation row whose Sold or
+ * Cancel rewrite outcome this sale records. The row is read through the same
+ * query key as its drawer, and it changes four things:
+ *
+ * 1. **The no-quote block is waived** while the outcome is under way. A policy
+ *    Dash says the agency sold was sold whether or not its quote was recorded,
+ *    and the whole point of the row is to get it into the app.
+ * 2. **The sold date and the first policy are prefilled** from the Dash line —
+ *    at the outcome's `record_sale` step only. The replacement a Cancel rewrite
+ *    writes next is a new policy Dash does not describe. The New Business
+ *    Application is still required: it is a document, not something Dash has.
+ * 3. **The id is sent with the sale.** The API moves the outcome on after the
+ *    sale commits, best-effort, so a hiccup there never costs the booking; the
+ *    drawer's Continue picks a stranded one up.
+ * 4. **It returns to the row**, whose drawer then shows what the sale did.
+ *
+ * A row that is no longer the caller's (404 — reassigned or taken back) does
+ * not refuse the sale. It books as an ordinary one, and the page says the row
+ * will not be completed by it.
  */
 export function useSaleMode({
   leadId,
   quoteRecapId,
+  reconciliationRowId,
   enabled,
 }: SaleModeArgs): SoldFlow {
   const navigate = useNavigate();
@@ -76,6 +112,26 @@ export function useSaleMode({
 
   const context = contextQuery.data;
 
+  const rowId = OBJECT_ID.test(reconciliationRowId)
+    ? reconciliationRowId
+    : "";
+  /*
+   * Held for the session, so a row that changes under the wizard — decided by
+   * the owner while the rep hunts for the PDF — cannot flip the waiver below
+   * and unmount a half-entered sale. See `useHeldAssignedRow`.
+   */
+  const heldRow = useHeldAssignedRow(rowId, usable);
+  const dashRow = heldRow.row;
+  const rowGone = heldRow.gone;
+  /*
+   * Settled once the row is in or known to be gone. Until then the wizard
+   * waits: mounted early it would miss the prefill (its values are read once),
+   * and the no-quote block would show for a sale the row waives it on.
+   */
+  const rowSettled = !rowId || dashRow !== null || rowGone;
+  const outcome =
+    dashRow?.outcome?.status === "in_progress" ? dashRow.outcome : null;
+
   /*
    * A replacement runs this same mode — it is an ordinary sale as far as the
    * wizard is concerned, and the server applies the retirement, the linking and
@@ -83,6 +139,11 @@ export function useSaleMode({
    * "Mark as sold" is not what a rep cancelling a policy thinks they are doing.
    */
   const replacementReason = context?.replacementReason ?? null;
+
+  /** Entering the policy a Dash line shows — not writing a replacement for it. */
+  const recordingDashSale =
+    outcome?.step === "record_sale" && !replacementReason;
+  const dashPrefill = recordingDashSale ? (dashRow?.prefill ?? null) : null;
 
   const mutation = useMutation({
     mutationFn: (values: Parameters<SoldFlow["onSubmit"]>[0]) =>
@@ -92,6 +153,9 @@ export function useSaleMode({
         quoteRecapId: OBJECT_ID.test(quoteRecapId) ? quoteRecapId : undefined,
         policies: values.policies.map(toPolicyInput),
         submissionToken: submissionToken.current,
+        // Not for a row known to be someone else's now: there is nothing for
+        // the sale to complete.
+        reconciliationRowId: rowId && !rowGone ? rowId : undefined,
       }),
     onSuccess: (deal) => {
       /*
@@ -116,6 +180,10 @@ export function useSaleMode({
       ]) {
         void queryClient.invalidateQueries({ queryKey: [key] });
       }
+      // The row the sale recorded, its run's counts and the assignee's lists.
+      if (rowId) {
+        void queryClient.invalidateQueries({ queryKey: reconciliationKey });
+      }
 
       const count = `${deal.policyCount} ${
         deal.policyCount === 1 ? "policy" : "policies"
@@ -131,6 +199,12 @@ export function useSaleMode({
       } else if (replacementReason === "cancel_rewrite") {
         toast.success(
           `Policy rewritten — ${count}. The old policy is retired and any chargeback recorded.`,
+        );
+      } else if (recordingDashSale && outcome?.kind === "cancel_rewrite") {
+        // The sale a rewrite later replaced: booked late, and only half the
+        // job. No confetti, for the same reason a rewrite gets none.
+        toast.success(
+          `Sale booked — ${count}. Next, write its replacement from the Dash row.`,
         );
       } else {
         toast.success(`Sale booked — ${count}`);
@@ -149,6 +223,16 @@ export function useSaleMode({
       }
 
       /*
+       * A Dash row's sale returns to the row (PAC-173): that is where the rep
+       * started, and its drawer shows what the sale did to the outcome — done,
+       * or a Cancel rewrite's next step.
+       */
+      if (rowId && !rowGone) {
+        navigate(`/reconciliation/assigned?row=${rowId}`, { replace: true });
+        return;
+      }
+
+      /*
        * A replacement returns to the household it was done for — that is where
        * the rep started (the policy card or the policy page) and where the
        * result is visible: the old policy retired, the new one beside it. The
@@ -164,7 +248,10 @@ export function useSaleMode({
     onError: (err: Error) => setError(err.message),
   });
 
-  const backTo = `/leads/${leadId}`;
+  const fromDashRow = Boolean(rowId) && !rowGone;
+  const backTo = fromDashRow
+    ? `/reconciliation/assigned?row=${rowId}`
+    : `/leads/${leadId}`;
 
   /*
    * Every block below is reachable only by a typed or stale URL — the Lead
@@ -188,12 +275,18 @@ export function useSaleMode({
      */
     blocked = {
       title: "This lead is already sold.",
-      detail: "Its deal is on the lead page, where the sale can be edited.",
+      detail: fromDashRow
+        ? "Its deal is on the lead page. If it is this Dash row's sale, go back to the row and press Continue — it picks the sale up."
+        : "Its deal is on the lead page, where the sale can be edited.",
     };
   } else if (
     context?.householdId &&
     !context.hasQuoteRecap &&
-    !context.replacementReason
+    !context.replacementReason &&
+    // Waived for a Dash row's outcome (PAC-173) — see the docblock. Not
+    // judged until the row is in, or it would flash before the waiver lands.
+    rowSettled &&
+    !outcome
   ) {
     /*
      * **Waived for a replacement** (PAC-126). A Cancel Rewrite or Company
@@ -213,6 +306,29 @@ export function useSaleMode({
     };
   }
 
+  const variant: WizardVariant = replacementReason ? "replacement" : "sale";
+
+  const notice =
+    [
+      rowGone
+        ? "This Dash row is no longer assigned to you, so booking here won't complete it."
+        : dashRow && !outcome
+          ? "This Dash row isn't waiting on a sale any more, so booking here won't complete it."
+          : null,
+      dashPrefill
+        ? `Prefilled from Dash${dashRow?.dash ? ` line ${dashRow.dash.rowNumber}` : ""} — check each card against the application, which is still required.${
+            outcome?.kind === "cancel_rewrite"
+              ? " Once this is booked, its replacement is written from the Dash row."
+              : ""
+          }`
+        : null,
+      replacementReason
+        ? "Nothing is cancelled until you submit. The old policy is retired, the replacement is written and any chargeback is recorded together."
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
+
   return {
     /*
      * The `replacement` variant drops two cards the sale asks for. Prior
@@ -223,17 +339,26 @@ export function useSaleMode({
      * on the lead and the server injects it. Known at mount: the wizard only
      * renders once the context has loaded.
      */
-    variant: replacementReason ? "replacement" : "sale",
+    variant,
     title: replacementReason
       ? `${POLICY_REPLACEMENT_REASON_LABELS[replacementReason]} — step 2 of 2`
-      : "Mark as sold",
+      : recordingDashSale
+        ? "Record the Dash sale — step 2 of 2"
+        : "Mark as sold",
     subtitle: replacementReason
       ? "The replacement policy"
-      : "Record the closed sale",
+      : recordingDashSale
+        ? "The policy Dash shows"
+        : "Record the closed sale",
     backTo,
-    backLabel: "Back to lead",
+    backLabel: fromDashRow ? "Back to the Dash row" : "Back to lead",
     redirect: OBJECT_ID.test(leadId) ? null : "/leads",
-    loading: contextQuery.isPending || carriersQuery.isPending ? "Loading lead…" : null,
+    loading:
+      contextQuery.isPending ||
+      carriersQuery.isPending ||
+      heldRow.loading
+        ? "Loading lead…"
+        : null,
     errors: [
       ...(contextQuery.isError
         ? [
@@ -245,17 +370,32 @@ export function useSaleMode({
           ]
         : []),
       ...carrierError(carriersQuery),
+      ...(heldRow.error
+        ? [
+            {
+              title: "Couldn't load the Dash row.",
+              detail: heldRow.error.message,
+              retry: heldRow.retry,
+            },
+          ]
+        : []),
     ],
     blocked,
     ready:
-      !blocked && context?.householdId && carriersQuery.data
+      !blocked && rowSettled && context?.householdId && carriersQuery.data
         ? {
             context,
             carriers: carriersQuery.data,
             staff: staffQuery.data ?? [],
             uploadScope: { kind: "lead", leadId },
-            notice: replacementReason
-              ? "Nothing is cancelled until you submit. The old policy is retired, the replacement is written and any chargeback is recorded together."
+            notice,
+            initialSoldDate: dashPrefill?.policy.soldDate ?? undefined,
+            initialDraft: dashPrefill
+              ? policyDraftFromDash(
+                  dashPrefill.policy,
+                  carriersQuery.data,
+                  variant,
+                )
               : undefined,
           }
         : null,
@@ -265,5 +405,39 @@ export function useSaleMode({
       setError(null);
       mutation.mutate(values);
     },
+  };
+}
+
+/**
+ * The first policy as the Dash line describes it, over the wizard's blank one
+ * (PAC-173).
+ *
+ * The carrier is the run's, by its catalog name when the catalog lists it —
+ * matched by slug, as the schema matches carriers — and otherwise "Other" with
+ * the name typed in: the run knows the carrier, so it is never dropped. A
+ * product Dash's map does not know leaves the blank policy's type for the
+ * first card to ask.
+ */
+function policyDraftFromDash(
+  policy: ReconciliationPrefill["policy"],
+  carriers: readonly CarrierOption[],
+  variant: WizardVariant,
+): SoldPolicyFormValues {
+  const blank = emptyPolicy(variant);
+  const named = policy.carrier;
+  const listed = named
+    ? carriers.find(
+        (carrier) => carrierSlug(carrier.name) === carrierSlug(named),
+      )
+    : undefined;
+  return {
+    ...blank,
+    policyType: policy.policyType ?? blank.policyType,
+    carrier: listed ? listed.name : named ? CARRIER_OTHER : "",
+    carrierOther: !listed && named ? named : "",
+    policyNumber: policy.policyNumber ?? "",
+    premium: policy.premium != null ? String(policy.premium) : "",
+    itemCount: String(policy.itemCount),
+    effectiveDate: policy.effectiveDate ?? "",
   };
 }

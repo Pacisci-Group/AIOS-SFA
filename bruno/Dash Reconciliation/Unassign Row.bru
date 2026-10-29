@@ -1,7 +1,7 @@
 meta {
   name: Unassign Row
   type: http
-  seq: 34
+  seq: 48
 }
 
 patch {
@@ -32,6 +32,12 @@ tests {
   test("the row is with nobody", function () {
     expect(res.getBody().assignment).to.equal(null);
   });
+
+  test("and keeps the outcome that finished it", function () {
+    // Only an outcome still under way goes with the assignment.
+    expect(res.getBody().outcome.status).to.equal("done");
+    expect(res.getBody().review.resolution).to.equal("sold_recorded");
+  });
 }
 
 docs {
@@ -40,4 +46,9 @@ docs {
   The row returns to the owner, assigned to nobody, and leaves the former
   assignee's list. Nobody is notified. With `Review Row (Reopen Missing)`
   before the assignment requests, a re-run starts from the same state.
+
+  Taking a row back works whatever its state. An outcome still **under way**
+  is cleared with the assignment (PAC-173 PR 4) — the next person starts
+  over; this row's outcome is **done** (`Create Sold Deal (Dash Row)`), the
+  record of what was done, so it stays.
 }

@@ -1,7 +1,9 @@
 import {
   carriedAssignment,
+  carriedOutcome,
   carriedReview,
   type PreviousRowReview,
+  type RowOutcome,
 } from './carry-forward';
 
 const previous = (overrides: Partial<PreviousRowReview> = {}) =>
@@ -18,6 +20,7 @@ const previous = (overrides: Partial<PreviousRowReview> = {}) =>
         reviewedById: 'u-owner',
         reviewedAt: new Date('2026-10-02T12:00:00Z'),
         assignment: null,
+        outcome: null,
         ...overrides,
       },
     ],
@@ -105,6 +108,101 @@ describe('carriedAssignment', () => {
   it('is null when the row was never assigned', () => {
     expect(
       carriedAssignment({ ...row, issues: [...row.issues] }, previous()),
+    ).toBeNull();
+  });
+});
+
+describe('carriedOutcome', () => {
+  const assignment = {
+    userId: 'u-pat',
+    assignedById: 'u-owner',
+    assignedAt: new Date('2026-10-03T09:00:00Z'),
+    note: null,
+  };
+  const outcome = (overrides: Partial<RowOutcome> = {}): RowOutcome => ({
+    kind: 'sold',
+    status: 'in_progress',
+    step: 'record_sale',
+    note: null,
+    leadId: 'l1',
+    dealId: null,
+    policyId: null,
+    householdId: null,
+    replacementPolicyId: null,
+    chargebackId: null,
+    startedById: 'u-pat',
+    startedAt: new Date('2026-10-04T09:00:00Z'),
+    completedById: null,
+    completedAt: null,
+    ...overrides,
+  });
+
+  it('keeps an unfinished outcome with its assignee, so they resume where they were', () => {
+    const inProgress = outcome();
+    expect(
+      carriedOutcome(
+        { ...row, issues: [...row.issues] },
+        previous({
+          status: 'open',
+          resolution: null,
+          assignment,
+          outcome: inProgress,
+        }),
+      ),
+    ).toEqual(inProgress);
+  });
+
+  it('carries a finished outcome with the decision it resolved the row with', () => {
+    const done = outcome({
+      kind: 'other',
+      status: 'done',
+      step: null,
+      note: 'Client cancelled before issue',
+      leadId: null,
+      completedById: 'u-pat',
+      completedAt: new Date('2026-10-04T10:00:00Z'),
+    });
+    const before = previous({
+      resolution: 'other_recorded',
+      reviewedById: 'u-pat',
+      assignment,
+      outcome: done,
+    });
+    const same = { ...row, issues: [...row.issues] };
+
+    expect(carriedOutcome(same, before)).toEqual(done);
+    // An outcome resolution is not retired: the decision carries alongside.
+    expect(carriedReview(same, before)?.resolution).toBe('other_recorded');
+  });
+
+  it('starts a row whose classification changed with no outcome', () => {
+    expect(
+      carriedOutcome(
+        { ...row, match: 'matched', issues: [...row.issues] },
+        previous({
+          status: 'open',
+          resolution: null,
+          assignment,
+          outcome: outcome(),
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      carriedOutcome(
+        { ...row, issues: ['no_bind_id'] },
+        previous({
+          status: 'open',
+          resolution: null,
+          assignment,
+          outcome: outcome(),
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('is null when nobody recorded one', () => {
+    expect(
+      carriedOutcome({ ...row, issues: [...row.issues] }, previous()),
     ).toBeNull();
   });
 });

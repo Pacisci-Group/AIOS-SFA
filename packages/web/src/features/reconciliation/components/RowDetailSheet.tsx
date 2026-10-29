@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -6,7 +7,9 @@ import {
   AgencyPermission,
   MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH,
   ModuleKey,
+  RECONCILIATION_ASSIGNEE_CANNOT_SELL,
   RECONCILIATION_IGNORED_REASON_LABELS,
+  RECONCILIATION_OUTCOME_KIND_LABELS,
   RECONCILIATION_RESOLUTION_LABELS,
   RECONCILIATION_RESOLUTIONS,
   RECONCILIATION_RESOLUTIONS_BY_TAB,
@@ -16,6 +19,16 @@ import {
   type ReconciliationResolution,
 } from "@sfa/shared";
 import { DataRow, SectionLabel } from "@/components/common/DetailCard";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -31,6 +44,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import {
   assignReconciliationRow,
   reconciliationKey,
+  reconciliationOptionsKey,
   reviewReconciliationRow,
   type BindIdStatus,
   type ReconciliationAssignment,
@@ -39,10 +53,12 @@ import {
 } from "@/lib/carrier-reconciliation-api";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 import {
+  apiErrorCode,
   apiErrorMessage,
   formatDay,
   formatInstant,
   formatPremium,
+  isOutcomeResolution,
   issueLabel,
   REVIEW_BADGE,
   rowPolicyNumber,
@@ -51,6 +67,7 @@ import {
   assigneeRoleLabel,
   useReconciliationAssignees,
 } from "../useReconciliationAssignees";
+import { RowOutcomeSection } from "./RowOutcome";
 
 const BIND_STATUS_LABELS: Record<BindIdStatus, string> = {
   staff: "A staff member's Bind ID",
@@ -69,12 +86,16 @@ const SUGGESTION_REASONS: Record<ReconciliationSuggestion["reasons"][number], st
 
 /**
  * One row in full: what Dash says beside what the app says, why it is
- * flagged, likely counterparts, who it is assigned to, and the decision on it.
+ * flagged, likely counterparts, who it is assigned to, what the assignee
+ * recorded of it, and the decision on it.
  *
  * Opened from the owner's page and from an assignee's (PAC-173), so every
  * action in it is gated on its own permission: a Producer or CSR holds no
- * `carrier_reconciliation` permission and reads the row without the forms,
- * and a link shows only to a viewer whose page it opens would admit them.
+ * `carrier_reconciliation` permission and reads the row without the owner's
+ * forms, and a link shows only to a viewer whose page it opens would admit
+ * them. The one thing gated on *who* rather than a permission is the Outcome
+ * section's buttons: only the row's assignee records an outcome (owner, 28 Oct
+ * 2026) — see `RowOutcomeSection`.
  */
 export function RowDetailSheet({
   runId,
@@ -135,6 +156,9 @@ function RowDetail({
   const { dash, app } = row;
   const showAppLinks =
     canOpenRecords || (canEditSale && app?.dealId != null);
+  // Decided by the assignee's outcome: reopened, never re-decided by hand —
+  // the owner's form cannot offer that resolution back.
+  const outcomeDecided = isOutcomeResolution(row.review.resolution);
 
   return (
     <>
@@ -317,8 +341,10 @@ function RowDetail({
               <AssignmentSummary assignment={row.assignment} />
             ) : (
               <p className="text-sm text-muted-foreground">
-                Not assigned. Hand it to a Producer or CSR — they are notified
-                and see it on their own page.
+                {row.tabs.includes("missing_from_app")
+                  ? "Not assigned. Hand it to someone who can book the sale"
+                  : "Not assigned. Hand it to a Producer or CSR"}{" "}
+                — they are notified and see it on their own page.
               </p>
             )}
             {canAssign && (
@@ -326,6 +352,12 @@ function RowDetail({
             )}
           </section>
         )}
+
+        <RowOutcomeSection
+          row={row}
+          canOpenRecords={canOpenRecords}
+          onRowChanged={onRowChanged}
+        />
 
         {row.needsReview || row.review.status !== "open" ? (
           <section className="space-y-3">
@@ -344,10 +376,22 @@ function RowDetail({
                 {row.review.carriedForward ? " (carried from the earlier upload)" : ""}
               </p>
             )}
-            {canWrite ? (
+            {canWrite && !outcomeDecided ? (
               <ReviewForm runId={runId} row={row} onSaved={onRowChanged} />
             ) : (
-              row.review.note && <p className="text-sm">{row.review.note}</p>
+              // An outcome's note is the review's too, and already shows
+              // under Outcome.
+              row.review.note &&
+              row.review.note !== row.outcome?.note && (
+                <p className="text-sm whitespace-pre-line">{row.review.note}</p>
+              )
+            )}
+            {canWrite && outcomeDecided && (
+              <ReopenOutcomeDecision
+                runId={runId}
+                row={row}
+                onSaved={onRowChanged}
+              />
             )}
           </section>
         ) : null}
@@ -396,6 +440,105 @@ function UnknownCodesHint({ row }: { row: ReconciliationRowView }) {
         </Link>
       )}
     </section>
+  );
+}
+
+/**
+ * A row an assignee's outcome decided (PAC-173): the owner's only move is to
+ * reopen it. That clears the outcome, so the row waits on a decision again —
+ * to be decided by hand, or handed back to someone — and anything the outcome
+ * booked (the lead, the sale, a replacement) stays where it is.
+ */
+function ReopenOutcomeDecision({
+  runId,
+  row,
+  onSaved,
+}: {
+  runId: string;
+  row: ReconciliationRowView;
+  onSaved: (row: ReconciliationRowView) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const reopen = useMutation({
+    // The note goes with the outcome it came from: left on an open row it
+    // reads as the decision's, to the next person handed the row too.
+    mutationFn: () =>
+      reviewReconciliationRow(runId, row.id, {
+        status: "open",
+        resolution: null,
+        note: null,
+      }),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: reconciliationKey });
+      toast.success("Reopened. The row waits on a decision again.");
+      onSaved(updated);
+    },
+    onError: (error) =>
+      toast.error(apiErrorMessage(error, "The row could not be reopened.")),
+  });
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <p className="text-sm text-muted-foreground">
+        Decided by the assignee's outcome.
+      </p>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={reopen.isPending}
+        onClick={() => setConfirming(true)}
+      >
+        {reopen.isPending ? "Reopening…" : "Reopen"}
+      </Button>
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reopen this row?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The assignee's outcome is cleared, so the row waits on a decision
+              again. Anything it booked — the lead, the sale, a replacement —
+              stays.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirming(false);
+                reopen.mutate();
+              }}
+            >
+              Reopen
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+/**
+ * The line under the owner's assignment and decision forms while the
+ * assignee has an outcome under way: saving either stops it (PR 4's rules).
+ */
+function OutcomeStopsHint({
+  row,
+  action,
+}: {
+  row: ReconciliationRowView;
+  action: string;
+}) {
+  const outcome = row.outcome;
+  if (outcome?.status !== "in_progress") return null;
+  const who =
+    outcome.startedBy?.name ?? row.assignment?.user.name ?? "the assignee";
+  return (
+    <p className="text-sm text-destructive">
+      {action} stops {who}'s{" "}
+      {RECONCILIATION_OUTCOME_KIND_LABELS[outcome.kind]} outcome, which is under
+      way. Anything already booked stays.
+    </p>
   );
 }
 
@@ -449,6 +592,12 @@ function assignmentSavedMessage(
  * Hand the row to a Producer or CSR, change who has it, or take it back
  * (PAC-173). A new assignee is notified; saving the same person again only
  * updates the note, and notifies no one. The note goes only with an assignee.
+ *
+ * A line missing from the app is worked by entering it as a sale, so only
+ * people who can book one may take it (owner, 28 Oct 2026). The others stay in
+ * the list, disabled, saying why — a name that silently vanished would read as
+ * a bug. Handing an assigned row to someone else, or taking it back, stops an
+ * outcome under way: the next person starts over.
  */
 function AssignmentForm({
   runId,
@@ -477,11 +626,19 @@ function AssignmentForm({
       toast.success(assignmentSavedMessage(current, updated.assignment));
       onSaved(updated);
     },
-    onError: (error) =>
-      toast.error(apiErrorMessage(error, "The assignment could not be saved.")),
+    onError: (error) => {
+      toast.error(apiErrorMessage(error, "The assignment could not be saved."));
+      // Someone's permissions changed since the list was read.
+      if (apiErrorCode(error) === RECONCILIATION_ASSIGNEE_CANNOT_SELL) {
+        void queryClient.invalidateQueries({
+          queryKey: reconciliationOptionsKey,
+        });
+      }
+    },
   });
 
   const people = assignees.data ?? [];
+  const needsSeller = row.tabs.includes("missing_from_app");
   const options = [
     { value: UNASSIGNED, label: "Unassigned" },
     // Someone who stopped qualifying (deactivated, or no longer a Producer or
@@ -497,18 +654,24 @@ function AssignmentForm({
           },
         ]
       : []),
-    ...people.map((person) => ({
-      value: person.id,
-      label: (
-        <span className="flex items-baseline gap-2">
-          {person.name}
-          <span className="text-xs text-muted-foreground">
-            {assigneeRoleLabel(person)}
+    ...people.map((person) => {
+      const cannotSell = needsSeller && !person.canRecordSale;
+      return {
+        value: person.id,
+        label: (
+          <span className="flex items-baseline gap-2">
+            {person.name}
+            <span className="text-xs text-muted-foreground">
+              {cannotSell
+                ? `${assigneeRoleLabel(person)} · Can't book a sale`
+                : assigneeRoleLabel(person)}
+            </span>
           </span>
-        </span>
-      ),
-      triggerLabel: person.name,
-    })),
+        ),
+        triggerLabel: person.name,
+        disabled: cannotSell,
+      };
+    }),
   ];
 
   const isUnchanged = (values: AssignmentValues) =>
@@ -545,7 +708,9 @@ function AssignmentForm({
                   ? "Could not load who can be assigned. Close the row and open it again to retry."
                   : assignees.isSuccess && people.length === 0
                     ? "The agency has no active Producers or CSRs to assign to."
-                    : undefined
+                    : needsSeller
+                      ? "A line missing from the app goes to someone who can book the sale."
+                      : undefined
               }
             />
           )}
@@ -567,16 +732,22 @@ function AssignmentForm({
         </form.Subscribe>
         <form.Subscribe selector={(state) => state.values}>
           {(values) => (
-            <div className="flex justify-end">
-              <Button
-                type="submit"
-                size="sm"
-                variant="outline"
-                disabled={save.isPending || isUnchanged(values)}
-              >
-                {save.isPending ? "Saving…" : "Save assignment"}
-              </Button>
-            </div>
+            <>
+              {/* Only a change of person stops it; a note change keeps it. */}
+              {values.userId !== current?.user.id && (
+                <OutcomeStopsHint row={row} action="Saving this" />
+              )}
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="outline"
+                  disabled={save.isPending || isUnchanged(values)}
+                >
+                  {save.isPending ? "Saving…" : "Save assignment"}
+                </Button>
+              </div>
+            </>
           )}
         </form.Subscribe>
       </form>
@@ -702,6 +873,7 @@ function ReviewForm({
             />
           )}
         </form.AppField>
+        <OutcomeStopsHint row={row} action="Saving a decision" />
         <div className="flex justify-end">
           <Button type="submit" size="sm" disabled={save.isPending}>
             {save.isPending ? "Saving…" : "Save decision"}

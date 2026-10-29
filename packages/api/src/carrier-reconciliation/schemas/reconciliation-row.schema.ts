@@ -4,13 +4,15 @@ import type {
   ReconciliationIgnoredReason,
   ReconciliationIssue,
   ReconciliationMatch,
-  ReconciliationResolution,
   ReconciliationReviewStatus,
   ReconciliationTab,
-  RetiredReconciliationResolution,
+  StoredReconciliationResolution,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
-import type { RowAssignment } from '../../common/carrier-reconciliation/carry-forward';
+import type {
+  RowAssignment,
+  RowOutcome,
+} from '../../common/carrier-reconciliation/carry-forward';
 import type { DashRow } from '../../common/carrier-reconciliation/dash-file-reader';
 import type { DashCredit } from '../../common/carrier-reconciliation/producer-code-index';
 import type {
@@ -32,8 +34,12 @@ export type StoredSuggestion = Omit<SuggestionRaw, 'rowKey'> & {
  */
 export interface StoredReview {
   status: ReconciliationReviewStatus;
-  /** A retired value only on a row decided before it was retired. */
-  resolution: ReconciliationResolution | RetiredReconciliationResolution | null;
+  /**
+   * A retired value only on a row decided before it was retired; an outcome
+   * resolution (`sold_recorded`, …) only when the assignee's outcome finished
+   * the row.
+   */
+  resolution: StoredReconciliationResolution | null;
   note: string | null;
   reviewedById: string | null;
   reviewedAt: Date | null;
@@ -123,6 +129,17 @@ export class ReconciliationRow {
    */
   @Prop({ type: Object, default: null })
   assignment: RowAssignment | null;
+
+  /**
+   * What the assignee recorded, or is recording: Sold, Cancel rewrite or
+   * Other (PAC-173 PR 4). Beside `assignment` rather than inside it, so taking
+   * a row back and handing it on are separate decisions about the outcome —
+   * see `ReconciliationOutcomesService` for the rules between the three
+   * fields. A row stored before outcomes existed has no field at all, which
+   * `{ outcome: null }` matches too.
+   */
+  @Prop({ type: Object, default: null })
+  outcome: RowOutcome | null;
 
   /** Lower-cased policy numbers and names, for the search box. */
   @Prop({ default: '' })

@@ -1,0 +1,38 @@
+meta {
+  name: List Lead Sources (Dash Row)
+  type: http
+  seq: 41
+}
+
+get {
+  url: {{baseUrl}}/lead-sources
+  body: none
+  auth: inherit
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const source = (res.getBody().leadSources || []).find((s) => s.slug === "other");
+    if (source) bru.setVar("reconLeadSourceId", source.id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("has the source the Dash lead is filed under", function () {
+    expect(bru.getVar("reconLeadSourceId")).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /lead-sources — a lead source for the Dash row's lead
+
+  `POST /leads` needs a `leadSourceId`, and ids differ per database. The
+  `Lead Sources` folder captures them too, but it sorts **after** this one,
+  so a full run would not have them here yet — this folder looks its own up
+  (`other` → `reconLeadSourceId`). The endpoint is documented on
+  `Lead Sources/List Lead Sources`.
+}

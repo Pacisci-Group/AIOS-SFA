@@ -2,8 +2,9 @@ import type {
   DataExportFormat,
   ReclassifyRunResponse,
   ReconciliationAssignedListResponse,
-  ReconciliationAssignedRow,
+  ReconciliationAssignedRowDetail,
   ReconciliationOptionsResponse,
+  ReconciliationOutcomeFilter,
   ReconciliationPresignResponse,
   ReconciliationResolution,
   ReconciliationReviewStatus,
@@ -12,6 +13,7 @@ import type {
   ReconciliationRunDetail,
   ReconciliationRunListResponse,
   ReconciliationTab,
+  RecordReconciliationOutcomeInput,
 } from "@sfa/shared";
 import { apiFetch, apiFetchBlob } from "./api-client";
 import { uploadToPresignedUrl } from "./presigned-upload";
@@ -20,9 +22,13 @@ export type {
   BindIdStatus,
   ReconciliationAssignedListResponse,
   ReconciliationAssignedRow,
+  ReconciliationAssignedRowDetail,
   ReconciliationAssignee,
   ReconciliationAssignment,
   ReconciliationIssue,
+  ReconciliationOutcome,
+  ReconciliationOutcomeFilter,
+  ReconciliationPrefill,
   ReconciliationProducerSummary,
   ReconciliationResolution,
   ReconciliationReviewStatus,
@@ -32,6 +38,7 @@ export type {
   ReconciliationSuggestion,
   ReconciliationTab,
   ReconciliationTotals,
+  RecordReconciliationOutcomeInput,
 } from "@sfa/shared";
 
 /** Query-key root: a new run, a review or a re-check invalidates everything under it. */
@@ -72,6 +79,8 @@ export interface RowsParams {
   reviewStatus?: ReconciliationReviewStatus;
   /** A user id, `me` or `unassigned`. */
   assignee?: string;
+  /** By the assignee's outcome: its status, or its kind. */
+  outcome?: ReconciliationOutcomeFilter;
   q?: string;
   page: number;
   pageSize: number;
@@ -83,6 +92,7 @@ export function getReconciliationRows(runId: string, params: RowsParams) {
   if (params.producer) search.set("producer", params.producer);
   if (params.reviewStatus) search.set("reviewStatus", params.reviewStatus);
   if (params.assignee) search.set("assignee", params.assignee);
+  if (params.outcome) search.set("outcome", params.outcome);
   if (params.q) search.set("q", params.q);
   search.set("page", String(params.page));
   search.set("pageSize", String(params.pageSize));
@@ -147,6 +157,11 @@ export interface AssignmentBody {
 /**
  * Hand a row that waits on a decision to a Producer or CSR (PAC-173). A new
  * assignee is notified; re-saving the same one only updates the note.
+ *
+ * A `missing_from_app` row goes only to someone who can book a sale (owner,
+ * 28 Oct 2026): anyone else is 400 `RECONCILIATION_ASSIGNEE_CANNOT_SELL`.
+ * Handing the row to someone else, or taking it back, stops the outcome its
+ * assignee had under way.
  */
 export function assignReconciliationRow(
   runId: string,
@@ -183,9 +198,39 @@ export function getAssignedReconciliationRows(params: AssignedRowsParams) {
 /**
  * One of the caller's assigned rows by id — even once it has been decided, so
  * an old notification still opens it. 404 once it is someone else's.
+ *
+ * Carries `prefill` (PAC-173 PR 4): the Dash line as the New Lead and Sold
+ * forms want it, so recording a Sold outcome confirms what Dash says rather
+ * than retyping it. Both forms read it through this same key.
  */
 export function getAssignedReconciliationRow(rowId: string) {
-  return apiFetch<ReconciliationAssignedRow>(`${BASE}/assigned/${rowId}`);
+  return apiFetch<ReconciliationAssignedRowDetail>(`${BASE}/assigned/${rowId}`);
+}
+
+/**
+ * Record what became of an assigned row, as its assignee (PAC-173 PR 4).
+ *
+ * - `other` takes a note and is done at once: the row is resolved.
+ * - `sold` and `cancel_rewrite` start an outcome that the New Lead and Sold
+ *   forms finish (they carry `reconciliationRowId`). They need the caller to
+ *   be able to book a sale — `RECONCILIATION_OUTCOME_FORBIDDEN` (403) — and a
+ *   row Dash lists that the app is missing — `RECONCILIATION_OUTCOME_NOT_ALLOWED`
+ *   (400).
+ * - The kind already under way **resumes** it, and first picks up anything
+ *   booked since: a sale or replacement whose follow-up failed completes the
+ *   outcome here. The web's Continue sends exactly that.
+ * - Another kind is accepted only while nothing is booked
+ *   (`RECONCILIATION_OUTCOME_LOCKED`, 409). A decided row, or one on a
+ *   replaced run, is also 409; a row no longer the caller's is 404.
+ */
+export function recordReconciliationOutcome(
+  rowId: string,
+  body: RecordReconciliationOutcomeInput,
+) {
+  return apiFetch<ReconciliationAssignedRowDetail>(
+    `${BASE}/assigned/${rowId}/outcome`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
 }
 
 /**
@@ -224,7 +269,10 @@ export async function downloadReconciliationExport(
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-/** Who a row can be assigned to: the agency's active Producers and CSRs. */
+/**
+ * Who a row can be assigned to: the agency's active Producers and CSRs, each
+ * marked `canRecordSale` — only they can take a `missing_from_app` row.
+ */
 export function getReconciliationOptions() {
   return apiFetch<ReconciliationOptionsResponse>(`${BASE}/options`);
 }

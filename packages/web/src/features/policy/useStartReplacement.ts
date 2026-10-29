@@ -27,12 +27,22 @@ import { getReplacementLead } from "@/lib/lead-intake-api";
  *     created lead is stamped with what it is for and redirects onward itself.
  *
  * A `<Link>` cannot express that, which is why these are buttons.
+ *
+ * ## From a Dash row (PAC-173)
+ *
+ * A Cancel rewrite outcome on a Dash Reconciliation row ends by writing the
+ * replacement of the sale it recorded. `reconciliationRowId` rides along both
+ * routes — the New Lead form passes it on to the Sold form, which sends it with
+ * the sale — so the row is completed by the replacement and the rep returns to
+ * it. The chain is otherwise exactly this one.
  */
 export function useStartReplacement(
   policyId: string,
   reason: PolicyReplacementReason,
+  opts: { reconciliationRowId?: string } = {},
 ) {
   const navigate = useNavigate();
+  const { reconciliationRowId } = opts;
 
   const mutation = useMutation({
     mutationFn: () => getReplacementLead(policyId, reason),
@@ -51,7 +61,11 @@ export function useStartReplacement(
 
       if (lookup.leadId) {
         toast.info("Picking up where you left off — the lead is already open.");
-        navigate(`/sold/new?leadId=${lookup.leadId}`);
+        const params = new URLSearchParams({ leadId: lookup.leadId });
+        if (reconciliationRowId) {
+          params.set("reconciliationRowId", reconciliationRowId);
+        }
+        navigate(`/sold/new?${params.toString()}`);
         return;
       }
 
@@ -59,6 +73,9 @@ export function useStartReplacement(
         replacePolicyId: policyId,
         reason,
       });
+      if (reconciliationRowId) {
+        params.set("reconciliationRowId", reconciliationRowId);
+      }
       navigate(`/leads/new?${params.toString()}`);
     },
     onError: (error: Error) => toast.error(error.message),

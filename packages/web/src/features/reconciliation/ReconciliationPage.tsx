@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RECONCILIATION_ASSIGNEE_FILTER_PATTERN,
+  RECONCILIATION_OUTCOME_FILTERS,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_TABS,
 } from "@sfa/shared";
@@ -29,6 +30,7 @@ import {
   reconciliationKey,
   reconciliationRunKey,
   reconciliationRunsKey,
+  type ReconciliationOutcomeFilter,
   type ReconciliationRowView,
   type ReconciliationTab,
 } from "@/lib/carrier-reconciliation-api";
@@ -49,6 +51,7 @@ const URL_DEFAULTS = {
   tab: "",
   producer: "",
   assignee: "",
+  outcome: "",
   q: "",
   page: "",
 };
@@ -58,6 +61,7 @@ const URL_ALLOWED = {
   tab: RECONCILIATION_TABS,
   producer: (value: string) => RECONCILIATION_PRODUCER_KEY_PATTERN.test(value),
   assignee: (value: string) => RECONCILIATION_ASSIGNEE_FILTER_PATTERN.test(value),
+  outcome: RECONCILIATION_OUTCOME_FILTERS,
   page: (value: string) => /^[1-9]\d{0,4}$/.test(value),
 } as const;
 
@@ -76,7 +80,9 @@ const URL_ALLOWED = {
  * re-applies the codes to the stored run without re-uploading the file.
  *
  * A row waiting on a decision can be handed to a Producer or CSR from its
- * drawer; they work it from `/reconciliation/assigned` (`AssignedRowsPage`).
+ * drawer; they work it from `/reconciliation/assigned` (`AssignedRowsPage`) and
+ * record what became of it there (PAC-173 PR 4). Their outcome shows on the
+ * row, and the rows can be filtered by it.
  */
 export default function ReconciliationPage() {
   const { can } = usePermissions();
@@ -118,6 +124,8 @@ export default function ReconciliationPage() {
     tab: (values.tab || defaultTab(run.data?.tabCounts)) as ReconciliationTab,
     producer: values.producer,
     assignee: values.assignee,
+    // Narrowed by `URL_ALLOWED`, which drops anything else.
+    outcome: values.outcome as ReconciliationOutcomeFilter | "",
     q: values.q,
     page: Number(values.page || 1),
   };
@@ -126,6 +134,7 @@ export default function ReconciliationPage() {
       ...(patch.tab !== undefined ? { tab: patch.tab } : {}),
       ...(patch.producer !== undefined ? { producer: patch.producer } : {}),
       ...(patch.assignee !== undefined ? { assignee: patch.assignee } : {}),
+      ...(patch.outcome !== undefined ? { outcome: patch.outcome } : {}),
       ...(patch.q !== undefined ? { q: patch.q } : {}),
       ...(patch.page !== undefined ? { page: patch.page > 1 ? String(patch.page) : "" } : {}),
     });
@@ -184,7 +193,15 @@ export default function ReconciliationPage() {
                 <Select
                   value={runId}
                   onValueChange={(next) =>
-                    setValues({ run: next, tab: "", producer: "", assignee: "", q: "", page: "" })
+                    setValues({
+                      run: next,
+                      tab: "",
+                      producer: "",
+                      assignee: "",
+                      outcome: "",
+                      q: "",
+                      page: "",
+                    })
                   }
                 >
                   <SelectTrigger className="w-full bg-card sm:w-96" aria-label="Report">
@@ -276,7 +293,15 @@ export default function ReconciliationPage() {
         onOpenChange={setUploadOpen}
         onUploaded={(id) => {
           setUploadOpen(false);
-          setValues({ run: id, tab: "", producer: "", assignee: "", q: "", page: "" });
+          setValues({
+            run: id,
+            tab: "",
+            producer: "",
+            assignee: "",
+            outcome: "",
+            q: "",
+            page: "",
+          });
         }}
       />
       {runId && (

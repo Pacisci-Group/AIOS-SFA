@@ -1,0 +1,63 @@
+meta {
+  name: Assign Row (Cannot Sell)
+  type: http
+  seq: 29
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{reconCsrId}}"
+  }
+}
+
+script:pre-request {
+  // `Get Options` found no CSR who cannot book a sale — an agency that lets
+  // its CSRs sell has nobody to refuse.
+  if (!bru.getVar("reconCsrId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("because a row missing from the app needs someone who can book a sale", function () {
+    expect(res.getBody().code).to.equal("RECONCILIATION_ASSIGNEE_CANNOT_SELL");
+  });
+}
+
+docs {
+  # PATCH …/assignment — a row missing from the app, to a CSR (400)
+
+  The fixture's `900299990` is missing from the app, so whoever takes it
+  records it as Sold or a Cancel rewrite by entering the lead and the sale —
+  which needs `leads:write` **and** `deal_audits:write`. The demo's CSRs hold
+  the CSR template, which has no `deal_audits:write` (`canRecordSale: false`
+  on `Get Options`), so the row cannot go to them (owner, 28 Oct 2026).
+
+  Checked by effective permission, never by role: a CSR the agency granted
+  `deal_audits:write` qualifies. Only a **new** assignee is checked — a note
+  change for the person who has the row is not. The same CSR can still be
+  given a row in any other tab, which only ever takes Other.
+
+  Skipped when `Get Options` found no such CSR (`reconCsrId` unset).
+
+  ```json
+  { "code": "RECONCILIATION_ASSIGNEE_CANNOT_SELL",
+    "message": "A Dash sale missing from the app can be given only to someone who can book a sale (create leads and record sales)." }
+  ```
+}

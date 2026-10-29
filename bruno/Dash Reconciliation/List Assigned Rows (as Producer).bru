@@ -1,7 +1,7 @@
 meta {
   name: List Assigned Rows (as Producer)
   type: http
-  seq: 30
+  seq: 31
 }
 
 get {
@@ -47,7 +47,9 @@ docs {
   The caller's rows still waiting on a decision, on the agency's current
   runs (finished, not replaced by a re-upload), oldest hand-off first — what
   `/reconciliation/assigned` and the Producer Dashboard's "Dash follow-ups"
-  panel list. A row leaves the list once it is decided.
+  panel list. A row leaves the list once it is decided — by the owner, or by
+  the outcome the caller finished on it (PAC-173 PR 4). A Sold or Cancel
+  rewrite still under way keeps it on the list, with its `outcome`.
 
   ## Query
   - `page`, `pageSize` (≤ 100, default 25)
