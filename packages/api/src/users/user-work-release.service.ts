@@ -220,9 +220,12 @@ export class UserWorkReleaseService {
         : { modifiedCount: 0 },
 
       // Back to the owner's list as unassigned. A decided row keeps its
-      // assignee: that is the record of who worked it, not open work.
+      // assignee: that is the record of who worked it, not open work. An
+      // outcome they had under way goes too (PAC-173 PR 4): its lead just went
+      // back to the pool above, so whoever takes the row next starts over.
+      // Open rows hold no finished outcome — finishing one decides the row.
       this.reconciliationRowModel.updateMany(f.reconciliationRows, {
-        $set: { assignment: null },
+        $set: { assignment: null, outcome: null },
       }),
     ]);
 

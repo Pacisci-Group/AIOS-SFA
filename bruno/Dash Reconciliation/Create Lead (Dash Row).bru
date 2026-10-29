@@ -1,0 +1,80 @@
+meta {
+  name: Create Lead (Dash Row)
+  type: http
+  seq: 42
+}
+
+post {
+  url: {{baseUrl}}/leads
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "createdDate": "2026-10-12",
+    "primaryContact": {
+      "firstName": "Avery",
+      "lastName": "Quinn",
+      "dateOfBirth": "1984-03-09",
+      "phone": "(555) 299-9900",
+      "email": "avery.quinn@example.com"
+    },
+    "address": {
+      "street": "12 Quinn Court",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74101"
+    },
+    "members": [],
+    "leadSourceId": "{{reconLeadSourceId}}",
+    "reconciliationRowId": "{{reconAssignRowId}}",
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) bru.setVar("reconLeadId", res.getBody().id);
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("answers as any lead does: just its id", function () {
+    expect(Object.keys(res.getBody())).to.deep.equal(["id"]);
+  });
+}
+
+docs {
+  # POST /leads with `reconciliationRowId` — step 1 of recording a Dash sale
+
+  The New Lead form an assignee opens from **Record as sold** (or **Cancel
+  rewrite**), seeded from `prefill`: the name Dash prints, and the lead dated
+  the day Dash says the policy was written (`2026-10-12`), because a sale may
+  not predate its lead. The endpoint is `Leads/Create Lead`; what
+  `reconciliationRowId` adds (PAC-173 PR 4):
+
+  - **No address dedupe.** The assignee always gets a fresh lead of their
+    own, as for a `replacementIntent`: an open lead at the address could be a
+    colleague's (the Sold form would 404 on it) or dated after the Dash sale.
+    The submission-token and mailer signals still apply.
+  - **The lead is stamped on the row** (`outcome.leadId`) after it is
+    created, so resuming the outcome goes on to the Sold form with this lead
+    rather than making another — only while the row is the caller's, with a
+    Sold or Cancel rewrite at `record_sale` and no lead yet. On a cancel
+    rewrite's replacement lead (`write_replacement`) nothing is stamped: the
+    outcome keeps the sale's lead.
+  - **Best-effort.** The lead is created and the response is the same
+    `{ id }` whether or not the row could be stamped; nothing about the row
+    ever fails this request.
+
+  Every run of the folder books the Dash line again — `Review Row (Reopen
+  Missing)` reopened it — so Avery Quinn's household collects a lead and a
+  deal per run.
+}

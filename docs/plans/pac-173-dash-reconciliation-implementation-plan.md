@@ -5,7 +5,7 @@ Ticket: https://linear.app/paciscigroup/issue/PAC-173 (sub-issue of PAC-152).
 Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 `web/` = `packages/web/src/`, `shared/` = `packages/shared/src/`.
 
-> **Changed since this was written (v2, PRs 1–3 — 27–28 Oct 2026).** The notes
+> **Changed since this was written (v2, PRs 1–4 — 27–28 Oct 2026).** The notes
 > below describe v1. Where they disagree with this box, this box wins; the full
 > as-built rewrite follows the last v2 PR.
 >
@@ -81,7 +81,8 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >     notification link opens the row's current copy, if a re-upload has
 >     replaced its run.
 >   - The web has a page, `/reconciliation/assigned`, and a "Dash follow-ups"
->     panel on the Producer Dashboard. Both are read-only until outcomes land.
+>     panel on the Producer Dashboard. The assignee records outcomes from
+>     there (PR 4, below).
 >   - On the owner's page, rows can be filtered by assignee, the table has an
 >     Assigned column, and the drawer has the assign form. The export gains
 >     `assigned_to`, and run detail gains `assigned`.
@@ -100,8 +101,62 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   the app's producer (39 bound by Sabrina Webb, recorded under David
 >   Howard). `allstateSubProducerCode` stays on users, unused here. A run
 >   classified earlier regroups on **Re-check**.
-> - Still to come (v2 plan): the Sold / Cancel-rewrite / Other outcomes the
->   assignee records (PR 4), 1-800 service intake (PR 5), and Chargeback
+> - **The assignee records what became of a row (PR 4).**
+>   - `outcome` is its own field on the row, beside `assignment`: kind
+>     (`sold` / `cancel_rewrite` / `other`), status (`in_progress` / `done`),
+>     step (`record_sale`, then `write_replacement` for a cancel rewrite), note,
+>     and the ids it links (lead, deal, policy, household, replacement policy,
+>     chargeback). Finishing one resolves the row with `sold_recorded`,
+>     `cancel_rewrite_recorded` or `other_recorded`. Those three are kept out of
+>     `RECONCILIATION_RESOLUTIONS`, so the owner's review refuses them.
+>   - A Missing-from-app row can be Sold, a Cancel rewrite or Other. Every
+>     other tab takes Other only, until 1-800 service intake (PR 5).
+>   - **Only the assignee records** (owner, 28 Oct 2026):
+>     `PATCH carrier-reconciliation/assigned/:rowId/outcome`. The owner's
+>     drawer shows the outcome read-only and keeps assign, reassign and deciding
+>     by hand. Credit goes to whoever books the sale, which is the assignee.
+>   - **A Missing-from-app row goes only to someone who can book a sale**
+>     (owner, 28 Oct 2026). Assigning one to a person without `leads:write` +
+>     `deal_audits:write` is a 400 `RECONCILIATION_ASSIGNEE_CANNOT_SELL`. That is
+>     judged on effective permissions, not the role, so a standard CSR (no Deal
+>     Audits) is refused. `GET options` marks `canRecordSale`, and the picker
+>     disables the rest. The outcome endpoint checks the caller's permission
+>     again on every call.
+>   - Other needs a note and is done at once.
+>   - Sold starts at `record_sale`. The web goes `/leads/new?reconciliationRowId=`
+>     → `/sold/new?leadId=&reconciliationRowId=`, both prefilled from the Dash
+>     line (`GET assigned/:rowId` → `prefill`). The name is split from Dash's
+>     `FIRST LAST` (`dash-customer-name.ts`). The product maps to a policy type
+>     (`dash-product-map.ts`; an unknown product is `null`, so the form asks).
+>     The carrier is the run's catalog name, and the sold and lead dates are the
+>     date written. The quote gate is waived while the outcome is under way. The
+>     NBA PDF stays required.
+>   - `POST /leads` with `reconciliationRowId` skips the address dedupe, so the
+>     assignee always gets a lead of their own. It stamps `outcome.leadId`,
+>     which lets a half-done Sold resume on the same lead.
+>   - `POST /sold-deals` with `reconciliationRowId` completes the outcome after
+>     the commit, best-effort and on the replay path too, beside the audit and
+>     CRM hand-off. It checks the agency, the module, the assignee, the run and
+>     the row; it is idempotent on the deal; it never fails the sale.
+>   - A cancel rewrite then moves to `write_replacement`. "Write the
+>     replacement" runs the normal PAC-126 chain (`useStartReplacement` with the
+>     row id threaded through). That sale stamps `replacementPolicyId` and the
+>     `cancel_rewrite` chargeback, and the outcome is done.
+>   - **Continue self-heals.** Resuming an outcome re-checks what it links, so a
+>     sale whose hook failed after the commit is picked up rather than
+>     stranded.
+>   - The owner reopening a row clears its outcome; the deal it booked stays.
+>     Deciding by hand, reassigning or unassigning while an outcome is under way
+>     also clears it. Work transfer keeps an outcome under way, and its lead
+>     moves with it, so the successor resumes. Release clears it. A re-upload
+>     carries the outcome when the row still says the same thing. Booking the
+>     Dash policy re-matches the row, so an unfinished cancel rewrite does not
+>     carry across a re-upload of that period (a known edge).
+>   - The owner's page has an Outcome column and filter (`outcome=` on the rows
+>     endpoint), and run detail has `inProgress`. The export adds `outcome` and
+>     `outcome_note`. The assigned page and the Dash follow-ups panel show
+>     where each row stands.
+> - Still to come (v2 plan): 1-800 service intake (PR 5) and Chargeback
 >   (PR 6).
 
 ## What it is

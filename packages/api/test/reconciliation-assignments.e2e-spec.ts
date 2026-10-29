@@ -226,6 +226,8 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
         .expect(200);
       const { assignees } = res.body as ReconciliationOptionsResponse;
 
+      // `canRecordSale` (PAC-173 PR 4): only a Producer's template books a
+      // sale, so only they can be given a row missing from the app.
       expect(assignees).toEqual(
         expect.arrayContaining([
           {
@@ -233,12 +235,14 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
             name: 'Test Producer',
             email: ctx.producerEmail,
             roles: ['producer'],
+            canRecordSale: true,
           },
           {
             id: csrId,
             name: 'Test Csr',
             email: ctx.csrEmail,
             roles: ['csr'],
+            canRecordSale: false,
           },
         ]),
       );
@@ -373,7 +377,10 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
     });
 
     it('reassigns to a CSR, who is notified, and moves the row between their pages', async () => {
-      const row = await seedRow();
+      // A 1-800 line: a row missing from the app goes only to someone who
+      // can book a sale (PAC-173 PR 4), which a standard CSR cannot — that
+      // rule is `reconciliation-outcomes.e2e-spec.ts`'s.
+      const row = await seedRow(undefined, { tabs: ['review_1800'] });
       await assign(row, { userId: producerId }).expect(200);
       expect((await assigned(producerToken)).total).toBe(1);
       inngest.sent.length = 0;

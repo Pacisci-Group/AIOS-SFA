@@ -1,7 +1,11 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { AgencyPermission, DataScope } from '@sfa/shared';
+import {
+  AgencyPermission,
+  DataScope,
+  type ReconciliationAssignedRowDetail,
+} from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -9,6 +13,7 @@ import { Activity } from '../src/activities/schemas/activity.schema';
 import { Branch } from '../src/branches/schemas/branch.schema';
 import { ReconciliationRow } from '../src/carrier-reconciliation/schemas/reconciliation-row.schema';
 import { ReconciliationRun } from '../src/carrier-reconciliation/schemas/reconciliation-run.schema';
+import type { RowOutcome } from '../src/common/carrier-reconciliation/carry-forward';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { Onboarding } from '../src/crm/schemas/onboarding.schema';
@@ -564,6 +569,68 @@ describe('Work transfer (e2e)', () => {
           userId: fromId,
           assignedById: firstAssignerId,
           assignedAt: handedOverAt,
+        });
+      });
+
+      /**
+       * PAC-173 PR 4: an outcome the departing person had under way stays on
+       * the row, and its lead moves with their other open leads — so the
+       * successor resumes it where it stood, unlike a release, which clears
+       * it. Who started it stays as attribution.
+       */
+      it('keeps an outcome under way on the row, and the successor resumes it with the lead', async () => {
+        const lead = await leads.create({
+          ...tenant(),
+          status: 'New',
+          producerId: oid(fromId),
+        });
+        const outcome: RowOutcome = {
+          kind: 'sold',
+          status: 'in_progress',
+          step: 'record_sale',
+          note: 'Booking it Monday',
+          leadId: lead._id.toString(),
+          dealId: null,
+          policyId: null,
+          householdId: null,
+          replacementPolicyId: null,
+          chargebackId: null,
+          startedById: fromId,
+          startedAt: handedOverAt,
+          completedById: null,
+          completedAt: null,
+        };
+        const open = await seedRow(await seedRun(), { outcome });
+
+        const res = await transfer().expect(201);
+        expect(res.body).toMatchObject({ reconciliationRows: 1, leads: 1 });
+
+        const row = await reconciliationRows.findById(open).lean();
+        expect(row?.assignment?.userId).toBe(toId);
+        expect(row?.outcome).toEqual(outcome);
+        expect(
+          (await leads.findById(lead._id).lean())?.producerId?.toString(),
+        ).toBe(toId);
+
+        // The successor carries on: the same outcome, resumed, not restarted.
+        const token = (await login(app, SUCCESSOR_EMAIL, TEST_PASSWORD))
+          .accessToken;
+        const resumed = await api()
+          .patch(
+            `/api/v1/carrier-reconciliation/assigned/${open.toString()}/outcome`,
+          )
+          .set(authHeader(token))
+          .send({ kind: 'sold' })
+          .expect(200);
+        expect(
+          (resumed.body as ReconciliationAssignedRowDetail).outcome,
+        ).toMatchObject({
+          kind: 'sold',
+          status: 'in_progress',
+          step: 'record_sale',
+          leadId: lead._id.toString(),
+          startedBy: { id: fromId },
+          startedAt: handedOverAt.toISOString(),
         });
       });
 

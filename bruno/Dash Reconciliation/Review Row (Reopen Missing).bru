@@ -33,6 +33,11 @@ tests {
     expect(res.getBody().review.status).to.equal("open");
     expect(res.getBody().review.resolution).to.equal(null);
   });
+
+  test("with nothing recorded on it", function () {
+    // The last run left it Sold — done (`Create Sold Deal (Dash Row)`).
+    expect(res.getBody().outcome).to.equal(null);
+  });
 }
 
 docs {
@@ -40,8 +45,14 @@ docs {
 
   Only a row still waiting on a decision can be assigned, and on a database
   that already reconciled the fixture (`Create Run` → 409) the row keeps
-  whatever someone last did to it — decided on the page, say. Reopening it
-  first lets the assignment requests that follow run from the same state
-  every time. Reopening clears the resolution and the reviewer; it never
-  touches the assignment.
+  whatever someone last did to it — decided on the page, say, or recorded
+  **Sold — done** by the previous run of this folder. Reopening it first lets
+  the assignment and outcome requests that follow run from the same state
+  every time: it is this folder's per-run reset.
+
+  Reopening clears the resolution and the reviewer, and **the assignee's
+  outcome**, finished or not (PAC-173 PR 4) — the decision an outcome wrote
+  is the one being taken back. It never touches the assignment, and a deal
+  the outcome booked stays booked: every run of this folder books the Dash
+  line once more, as a new lead and deal on the same household.
 }

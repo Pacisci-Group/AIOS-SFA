@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   apiErrorStatus,
+  outcomeBadgeVariant,
+  outcomeNextStep,
   rowCustomer,
   rowPolicyNumber,
 } from "@/features/reconciliation/reconciliation-format";
@@ -30,7 +32,7 @@ const PANEL_PARAMS = { page: 1, pageSize: 5 };
  * readable columns instead of three cramped ones.
  */
 const GRID =
-  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_9rem]";
+  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_11rem]";
 
 /**
  * Dash follow-ups (PAC-173): the Dash Reconciliation rows assigned to the
@@ -46,6 +48,10 @@ const GRID =
  *
  * Its own block between the scorecards and the 60/40 workspace grid rather
  * than a third child of that grid, whose two panels size each other.
+ *
+ * A row whose outcome is under way (PAC-173 PR 4) carries a second badge under
+ * its reason — "Sold — in progress", "Write the replacement" — so a half-done
+ * one reads as the next thing to pick up.
  */
 export function DashFollowUpsPanel() {
   const { canAny } = usePermissions();
@@ -132,7 +138,7 @@ export function DashFollowUpsPanel() {
                 <span className="hidden truncate text-sm sm:block">
                   {rowCustomer(row)}
                 </span>
-                <span className="justify-self-end sm:justify-self-start">
+                <span className="flex flex-col items-end gap-1 justify-self-end sm:items-start sm:justify-self-start">
                   {tab ? (
                     <Badge variant="secondary" size="sm">
                       {RECONCILIATION_TAB_LABELS[tab]}
@@ -141,6 +147,14 @@ export function DashFollowUpsPanel() {
                     <span className="text-xs text-muted-foreground">
                       {NOT_AVAILABLE}
                     </span>
+                  )}
+                  {row.outcome && (
+                    <Badge
+                      variant={outcomeBadgeVariant(row.outcome)}
+                      size="sm"
+                    >
+                      {outcomeNextStep(row.outcome)}
+                    </Badge>
                   )}
                 </span>
               </div>

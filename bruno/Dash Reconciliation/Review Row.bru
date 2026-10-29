@@ -61,13 +61,30 @@ docs {
     `confirmed_1800` is retired (a 1-800 policy is now set up for service):
     a review can no longer set it, a row decided with it still reads back with
     its label, and a re-upload reopens that row instead of carrying it.
+
+    `sold_recorded`, `cancel_rewrite_recorded` and `other_recorded` are
+    refused too (`400`): only an assignee's finished outcome writes them
+    (PAC-173 PR 4), and a row decided that way reads back with them.
   - `note` — optional, ≤ 2000 characters; omitted keeps the current note
 
   Reopening (`open`) clears the resolution and the reviewer. A decision on a
   superseded run's row is carried to the new run only if the row still has
   the same match and issues.
 
+  ## The assignee's outcome (PAC-173 PR 4)
+  - **Reopening** clears the outcome, finished or not: the row asks again,
+    and the decision an outcome wrote is the one being taken back. A deal it
+    booked stays booked.
+  - **Deciding by hand** (`resolved` / `dismissed`) while an outcome is
+    still under way clears it, so a sale booked on it later changes nothing
+    here.
+  - A **finished** outcome is otherwise left as the record of what was done,
+    whatever the row is now decided as.
+
   ## Errors
-  - `400` — validation, or `resolved` without a `resolution`
+  - `400` — validation (an outcome resolution included), or `resolved`
+    without a `resolution`
   - `404` — no such run or row in the agency
+  - `409` — the assignee recorded something on the row at the same moment;
+    reload and decide again
 }

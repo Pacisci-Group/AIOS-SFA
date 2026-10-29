@@ -67,6 +67,7 @@ import {
   type LeadDocument,
 } from '../leads/schemas/lead.schema';
 import { PolicyRewritesService } from '../policies/policy-rewrites.service';
+import { ReconciliationOutcomesService } from '../carrier-reconciliation/reconciliation-outcomes.service';
 import type {
   CreateSoldDealDto,
   SoldDealContextDto,
@@ -150,6 +151,8 @@ export class SoldDealsService {
      * deal's own transaction (PAC-126).
      */
     private readonly replacements: PolicyRewritesService,
+    /** Moves on the Dash row a sale was entered for (PAC-173 PR 4). */
+    private readonly reconciliationOutcomes: ReconciliationOutcomesService,
   ) {}
 
   /**
@@ -500,6 +503,26 @@ export class SoldDealsService {
       householdId: ctx.householdId,
       producerId: ctx.producerId,
     });
+
+    /*
+     * The Dash row this sale was entered for, if any (PAC-173 PR 4): the
+     * assignee's Sold outcome is done, a Cancel rewrite moves on to its
+     * replacement — or, booked through the replacement's own lead, is done.
+     *
+     * Post-commit and best-effort like the hand-off above: `recordSale` never
+     * throws, and validates the row rather than trusting the id. Deliberately
+     * run on the replay path too — it is idempotent on the deal — so a request
+     * that booked the sale and died before this ran finishes the row on retry.
+     * If no retry comes, the assignee's next Continue on the row finds the
+     * sale and finishes it there.
+     */
+    if (dto.reconciliationRowId) {
+      await this.reconciliationOutcomes.recordSale(access, {
+        rowId: dto.reconciliationRowId,
+        dealId: outcome.dealId.toString(),
+        leadId: lead._id.toString(),
+      });
+    }
 
     return {
       id: outcome.dealId.toString(),

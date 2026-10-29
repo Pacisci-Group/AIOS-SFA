@@ -7,6 +7,7 @@ import { App } from 'supertest/types';
 import { Activity } from '../src/activities/schemas/activity.schema';
 import { ReconciliationRow } from '../src/carrier-reconciliation/schemas/reconciliation-row.schema';
 import { ReconciliationRun } from '../src/carrier-reconciliation/schemas/reconciliation-run.schema';
+import type { RowOutcome } from '../src/common/carrier-reconciliation/carry-forward';
 import { Onboarding } from '../src/crm/schemas/onboarding.schema';
 import { RenewalCycle } from '../src/crm/schemas/renewal-cycle.schema';
 import { ServiceTicket } from '../src/crm/schemas/service-ticket.schema';
@@ -469,6 +470,104 @@ describe('User removal (e2e)', () => {
         const row = await reconciliationRows.findById(id).lean();
         expect(row?.assignment?.userId).toBe(producerId);
       }
+    });
+
+    /**
+     * PAC-173 PR 4: an outcome they had under way on an open row goes with
+     * the assignment — its lead just went back to the pool, so whoever takes
+     * the row next starts over. A finished outcome decided its row, which
+     * keeps the name and the record of what was done.
+     */
+    it('clears an outcome under way on the Dash rows it hands back, and leaves a finished one alone', async () => {
+      const run = await reconciliationRuns.create({
+        agencyId: ctx.agencyId,
+        carrierId: new Types.ObjectId(),
+        status: 'ready',
+        file: { storageKey: 'unused', filename: 'dash.xlsx', size: 1 },
+        fileMeta: {
+          agentNumber: null,
+          agentName: null,
+          downloadedBy: null,
+          downloadedAt: null,
+          startDate: '2026-09-01',
+          endDate: '2026-09-30',
+          sheetName: 'Sheet1',
+          headerRowNumber: 1,
+          rowCount: 1,
+        },
+      });
+      const startedAt = new Date('2026-09-02T15:00:00.000Z');
+      const outcome = (status: 'in_progress' | 'done'): RowOutcome => ({
+        kind: 'sold',
+        status,
+        step: status === 'done' ? null : 'record_sale',
+        note: null,
+        leadId: new Types.ObjectId().toHexString(),
+        dealId: status === 'done' ? new Types.ObjectId().toHexString() : null,
+        policyId: null,
+        householdId: null,
+        replacementPolicyId: null,
+        chargebackId: null,
+        startedById: producerId,
+        startedAt,
+        completedById: status === 'done' ? producerId : null,
+        completedAt: status === 'done' ? startedAt : null,
+      });
+      let rowSeq = 0;
+      const seedRow = async (extra: Partial<ReconciliationRow>) =>
+        (
+          await reconciliationRows.create({
+            agencyId: ctx.agencyId,
+            runId: run._id,
+            rowKey: `release-outcome-${++rowSeq}`,
+            side: 'dash',
+            credit: { name: null, userId: null, via: 'none' },
+            producerKey: 'none',
+            tabs: ['missing_from_app'],
+            needsReview: true,
+            review: {
+              status: 'open',
+              resolution: null,
+              note: null,
+              reviewedById: null,
+              reviewedAt: null,
+              carriedForwardFromRowId: null,
+            },
+            assignment: {
+              userId: producerId,
+              assignedById: null,
+              assignedAt: new Date(),
+              note: null,
+            },
+            ...extra,
+          })
+        )._id;
+      const underWay = await seedRow({ outcome: outcome('in_progress') });
+      const finished = outcome('done');
+      const recorded = await seedRow({
+        outcome: finished,
+        review: {
+          status: 'resolved',
+          resolution: 'sold_recorded',
+          note: null,
+          reviewedById: producerId,
+          reviewedAt: startedAt,
+          carriedForwardFromRowId: null,
+        },
+      });
+
+      const res = await api()
+        .delete(`/api/v1/users/${producerId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(res.body).toMatchObject({ reconciliationRowsUnassigned: 1 });
+
+      const released = await reconciliationRows.findById(underWay).lean();
+      expect(released?.assignment).toBeNull();
+      expect(released?.outcome).toBeNull();
+      const kept = await reconciliationRows.findById(recorded).lean();
+      expect(kept?.assignment?.userId).toBe(producerId);
+      expect(kept?.outcome).toEqual(finished);
     });
 
     it('never touches attribution on deals', async () => {
