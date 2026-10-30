@@ -14493,6 +14493,98 @@ describe('SFA API (e2e)', () => {
           await patchSoldDate(producerToken, created.id, '02/15/2026', 400);
           await patchSoldDate(readOnlyToken, created.id, '2026-02-10', 403);
         });
+
+        /*
+         * PAC-106 review: the manager passes "Correct Sold Date" against the
+         * application, so neither the date nor a policy may move under an
+         * approved audit, or one a person handed to the reviewer — the rule
+         * Add policy already followed. A send-back opens all three again.
+         */
+        it('409s the sold date and a policy correction while the audit is locked, and opens both on a send-back', async () => {
+          const { leadId, created } = await bookAuto();
+          const sale = await soldDealModel.findById(created.id);
+          const policyId = (await getDeal(producerToken, created.id))
+            .policies[0].id;
+          const setAudit = (set: Record<string, unknown>) =>
+            app
+              .get<Model<DealAudit>>(getModelToken(DealAudit.name))
+              .updateOne(
+                { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+                {
+                  $set: set,
+                  $setOnInsert: {
+                    branchId: seed.branchId,
+                    title: 'Locked audit',
+                    auditDate: new Date(),
+                    isTestRecord: false,
+                  },
+                },
+                { upsert: true },
+              );
+          const patchPolicy = (expected: number) =>
+            request(app.getHttpServer())
+              .patch(`/api/v1/policies/${policyId}`)
+              .set(authHeader(producerToken))
+              .send({ premium: 1100 })
+              .expect(expected);
+          const leadDeal = async () =>
+            (
+              (
+                await request(app.getHttpServer())
+                  .get(`/api/v1/leads/${leadId}`)
+                  .set(authHeader(producerToken))
+                  .expect(200)
+              ).body as LeadDetail
+            ).deal;
+
+          expect((await getDeal(producerToken, created.id)).auditLocked).toBe(
+            false,
+          );
+          expect((await leadDeal())?.auditLocked).toBe(false);
+
+          for (const locked of [
+            { auditStatus: 'Pass', submittedById: sale!.producerId },
+            { auditStatus: 'Pending', submittedById: sale!.producerId },
+          ]) {
+            await setAudit(locked);
+            expect(
+              (await getDeal(producerToken, created.id)).auditLocked,
+            ).toBe(true);
+            expect((await leadDeal())?.auditLocked).toBe(true);
+
+            const refused = await patchSoldDate(
+              producerToken,
+              created.id,
+              '2026-02-10',
+              409,
+            );
+            expect((refused.body as { message: string }).message).toMatch(
+              /sent back/,
+            );
+            await patchPolicy(409);
+          }
+          // Nothing moved under the lock.
+          expect(
+            (await soldDealModel.findById(created.id))!.soldDate?.toISOString(),
+          ).toBe(sale!.soldDate?.toISOString());
+          expect((await soldPolicyModel.findById(policyId))!.premium).toBe(
+            1000.1,
+          );
+          // A save with the date unchanged is still a no-op, not a 409.
+          await patchSoldDate(producerToken, created.id, '2026-02-15');
+
+          // A system submission (nothing for the producer) is not handed over
+          // by anyone, and stays open — as for Add policy.
+          await setAudit({ auditStatus: 'Pending', submittedById: null });
+          expect((await getDeal(producerToken, created.id)).auditLocked).toBe(
+            false,
+          );
+
+          // "Fix it" on the red card leads here: sent back opens everything.
+          await setAudit({ auditStatus: 'Fail' });
+          await patchSoldDate(producerToken, created.id, '2026-02-10');
+          await patchPolicy(200);
+        });
       });
 
       describe('POST /sold-deals/:id/policies', () => {

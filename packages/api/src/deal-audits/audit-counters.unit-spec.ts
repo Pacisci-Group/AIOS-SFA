@@ -1,5 +1,9 @@
 import { isProducerActionable } from '@sfa/shared';
-import { IS_PRODUCER_ACTIONABLE, completionPercent } from './audit-counters';
+import {
+  IS_PRODUCER_ACTIONABLE,
+  PRODUCER_ACTIONABLE_FILTER,
+  completionPercent,
+} from './audit-counters';
 
 /**
  * Just enough of Mongo's aggregation-expression semantics to evaluate
@@ -31,26 +35,56 @@ function evaluate(expr: unknown, doc: Record<string, unknown>): unknown {
 }
 
 /**
- * The producer board's filter lives twice — the shared helper (the web and the
- * service) and this aggregation expression (the stored counters). If they
- * disagreed, a card's "3 of 5 outstanding" would not match the rows its drawer
- * lists.
+ * Just enough of Mongo's *query* semantics to evaluate
+ * `PRODUCER_ACTIONABLE_FILTER`: `$or`, `{ field: { $ne: v } }` and
+ * `{ field: v }`. As in Mongo, `$ne` matches a missing field, and equality to a
+ * non-null value does not.
  */
-describe('IS_PRODUCER_ACTIONABLE', () => {
+function matches(
+  filter: Record<string, unknown>,
+  doc: Record<string, unknown>,
+): boolean {
+  return Object.entries(filter).every(([key, condition]) => {
+    if (key === '$or') {
+      return (condition as Record<string, unknown>[]).some((branch) =>
+        matches(branch, doc),
+      );
+    }
+    if (condition !== null && typeof condition === 'object') {
+      const [op, value] = Object.entries(
+        condition as Record<string, unknown>,
+      )[0];
+      if (op !== '$ne') throw new Error(`matches: unsupported operator ${op}`);
+      return doc[key] !== value;
+    }
+    return doc[key] === condition;
+  });
+}
+
+/**
+ * The producer board's filter lives three times — the shared helper (the web
+ * and the service), the aggregation expression (the stored counters) and the
+ * query filter (the drawer's checklist). If they disagreed, a card's "3 of 5
+ * outstanding" would not match the rows its drawer lists.
+ */
+describe('the producer-actionable rule', () => {
   const visibilities = [true, false, null, undefined] as const;
   const verdicts = ['pass', 'fail', null, undefined] as const;
 
   for (const producerVisible of visibilities) {
     for (const reviewVerdict of verdicts) {
-      it(`agrees with isProducerActionable for producerVisible=${String(producerVisible)}, verdict=${String(reviewVerdict)}`, () => {
-        const doc: Record<string, unknown> = {};
-        if (producerVisible !== undefined)
-          doc.producerVisible = producerVisible;
-        if (reviewVerdict !== undefined) doc.reviewVerdict = reviewVerdict;
+      const label = `producerVisible=${String(producerVisible)}, verdict=${String(reviewVerdict)}`;
+      const doc: Record<string, unknown> = {};
+      if (producerVisible !== undefined) doc.producerVisible = producerVisible;
+      if (reviewVerdict !== undefined) doc.reviewVerdict = reviewVerdict;
+      const expected = isProducerActionable({ producerVisible, reviewVerdict });
 
-        expect(Boolean(evaluate(IS_PRODUCER_ACTIONABLE, doc))).toBe(
-          isProducerActionable({ producerVisible, reviewVerdict }),
-        );
+      it(`IS_PRODUCER_ACTIONABLE agrees with isProducerActionable for ${label}`, () => {
+        expect(Boolean(evaluate(IS_PRODUCER_ACTIONABLE, doc))).toBe(expected);
+      });
+
+      it(`PRODUCER_ACTIONABLE_FILTER agrees with isProducerActionable for ${label}`, () => {
+        expect(matches(PRODUCER_ACTIONABLE_FILTER, doc)).toBe(expected);
       });
     }
   }

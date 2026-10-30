@@ -21,6 +21,7 @@ import type {
   DealAuditDealRow,
   DealAuditListResponse,
 } from '../src/deal-audits/deal-audits.types';
+import { reconcileDealAudits } from '../src/deal-audits/audit-reconcile';
 import { DealAudit } from '../src/deal-audits/schemas/deal-audit.schema';
 import {
   Deal,
@@ -801,6 +802,21 @@ describe('Deal Audits review (PAC-106) (e2e)', () => {
       );
       expect((await dealModel.findById(dealId))!.dealAuditStatus).toBe('Pass');
       expect((await auditOf(dealId))!.openFailedCount).toBe(0);
+
+      /*
+       * The sign-off stands (PAC-106 review). A submit on `Pass` used to flip
+       * it back to `Pending` on the producer's say-so; the board never offered
+       * it, but the API allowed it.
+       */
+      const resubmitted = await submit(dealId).expect(409);
+      expect((resubmitted.body as { message: string }).message).toMatch(
+        /approved/,
+      );
+      expect((await auditOf(dealId))!.auditStatus).toBe('Pass');
+      expect((approved.body as { canSubmit: boolean }).canSubmit).toBe(false);
+
+      // Approving twice is a 409 too, not a second write.
+      await review(dealId, { decision: 'approve' }).expect(409);
     });
 
     it('rejects a request with neither a verdict nor a note', async () => {
@@ -1193,6 +1209,69 @@ describe('Deal Audits review (PAC-106) (e2e)', () => {
           .get(`${BOARD}/queue?${query}`)
           .set(authHeader(managerToken))
           .expect(400);
+      }
+    });
+  });
+
+  /*
+   * PAC-106 review: the flags are copied onto an item at generation, so a
+   * template change used to leave every item already raised on the old one.
+   * `reconcileDealAudits` re-stamps them on audits not yet approved.
+   *
+   * Last on purpose: the reconcile runs over the whole agency.
+   */
+  describe('re-stamping template flags', () => {
+    it('moves open items onto a changed template, and leaves an approved audit alone', async () => {
+      const templateModel = app.get<Model<AuditTemplate>>(
+        getModelToken(AuditTemplate.name),
+      );
+      const open = await studentSale();
+      const approved = await studentSale();
+      await auditModel.updateOne(
+        { dealId: new Types.ObjectId(approved) },
+        { $set: { auditStatus: 'Pass' } },
+      );
+      expect(await boardRow(open)).toBeDefined();
+
+      // David makes the transcript a manager-only check.
+      await templateModel.updateMany(
+        { agencyId: seed.agencyId, name: 'Good Student' },
+        { $set: { producerVisible: false } },
+      );
+      try {
+        const result = await reconcileDealAudits(
+          { itemModel, dealAuditModel: auditModel, dealModel, templateModel },
+          seed.agencyId,
+        );
+        expect(result.flagsRestamped).toBeGreaterThanOrEqual(1);
+
+        expect((await itemNamed(open, 'Good Student')).producerVisible).toBe(
+          false,
+        );
+        // Nothing left for the producer: off the board, and with the manager
+        // as a system submission — the generator's own rule.
+        const audit = await auditOf(open);
+        expect(audit!.producerItemCount).toBe(0);
+        expect(audit!.auditStatus).toBe('Pending');
+        expect(audit!.submittedById ?? null).toBeNull();
+        expect(await boardRow(open)).toBeUndefined();
+
+        // History is not rewritten.
+        expect(
+          (await itemNamed(approved, 'Good Student')).producerVisible,
+        ).toBe(true);
+
+        // A re-run with nothing changed writes nothing.
+        const again = await reconcileDealAudits(
+          { itemModel, dealAuditModel: auditModel, dealModel, templateModel },
+          seed.agencyId,
+        );
+        expect(again.flagsRestamped).toBe(0);
+      } finally {
+        await templateModel.updateMany(
+          { agencyId: seed.agencyId, name: 'Good Student' },
+          { $set: { producerVisible: true } },
+        );
       }
     });
   });

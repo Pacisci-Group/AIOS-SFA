@@ -503,6 +503,13 @@ export interface SoldDealEditView {
   /** The furthest the deal's audit has got; `null` when none was generated. */
   auditStatus: DealAuditStatus | null;
   /**
+   * The audit has passed, or a person submitted it and it is with the
+   * reviewer: the sold date, the policies and Add policy are all closed until
+   * it is sent back (PAC-106 review). The server refuses each with a `409`;
+   * the page disables them up front.
+   */
+  auditLocked: boolean;
+  /**
    * Imported from SmartSuite. Adding a policy recomputes its totals from the
    * policies linked here, which may be fewer than the rollup it was imported
    * with — the page warns before that happens.

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -39,8 +40,13 @@ import {
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
 import { clientScopeFilter } from '../clients/client-scope';
+import {
+  AUDIT_LOCKED_MESSAGE,
+  loadDealAuditLock,
+} from '../common/deal-audits/audit-lock';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { loadPrimaryContacts } from '../households/primary-contact';
+import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -155,6 +161,9 @@ export class PoliciesService {
     private readonly activityModel: Model<ActivityDocument>,
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
+    // Only to refuse a Sold-card correction under a locked audit.
+    @InjectModel(DealAudit.name)
+    private readonly dealAuditModel: Model<DealAudit>,
     private readonly carriers: CarriersService,
     // Global module; only to sign the new business application for viewing.
     private readonly storage: StorageService,
@@ -310,6 +319,16 @@ export class PoliciesService {
    * across lines), and warn-and-link belongs on the create path where the
    * producer is choosing between "link" and "correct". Blocking a typo fix
    * because the corrected number already exists would strand the record.
+   *
+   * ## Refused (409) while the sale's audit is locked
+   *
+   * Approved, or submitted by a person and with the reviewer
+   * (`loadDealAuditLock` — the rule Edit sale follows). The manager checks the
+   * sale's policies against the application; a correction underneath an
+   * approval would leave that pass vouching for what is no longer there
+   * (PAC-106 review). Here only, not in {@link applyUpdate}: once the sale is
+   * approved the policy is the service team's, and their household-side
+   * correction (`PATCH /households/:id/policies/:policyId`) stays open.
    */
   async update(
     access: AccessContext,
@@ -322,6 +341,19 @@ export class PoliciesService {
       branchId,
       policyId,
     );
+
+    if (
+      policy.dealId &&
+      (
+        await loadDealAuditLock(
+          this.dealAuditModel,
+          policy.agencyId,
+          policy.dealId,
+        )
+      ).locked
+    ) {
+      throw new ConflictException(AUDIT_LOCKED_MESSAGE);
+    }
 
     await this.applyUpdate(access, policy, dto, leadId);
     return toLeadDetailPolicy(policy);

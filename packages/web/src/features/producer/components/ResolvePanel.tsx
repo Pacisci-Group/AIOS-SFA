@@ -29,9 +29,9 @@ import {
   type DealAuditDealRow,
   type DealAuditItemRow,
 } from "@/lib/deal-audits-api";
-import { EvidenceBlock } from "@/features/deal-audits/components/EvidenceBlock";
-import { SENT_BACK_TEXT } from "@/features/deal-audits/components/review-display";
-import { AuditWorkflowPanel } from "./AuditWorkflowPanel";
+import { EvidenceBlock } from "@/components/audit/EvidenceBlock";
+import { SENT_BACK_TEXT } from "@/components/audit/review-display";
+import { AuditWorkflowPanel } from "@/components/audit/AuditWorkflowPanel";
 
 interface ResolvePanelProps {
   deal: DealAuditDealRow | null;

@@ -93,6 +93,11 @@ docs {
   The producer fixes, resubmits (**Submit Audit For Review**), and the failed
   verdicts are cleared for a fresh ruling; the passed ones stand.
 
+  Steps 1–2, the recomputed counters and the mirror on `Deal.dealAuditStatus`
+  are **one transaction** (PAC-106 review) — they used to be separate writes,
+  and a failure between them could leave a `Fail` audit with no reopened items
+  that the producer's board then hid. Steps 3–4 run after it commits.
+
   ## Body
   | field       | type     | rules |
   |-------------|----------|-------|
@@ -113,7 +118,8 @@ docs {
   - `403 Forbidden` — missing `deal_audits:write` or `management:read`, or the
     caller submitted this audit.
   - `404 Not Found` — no audit for that deal, or out of reach.
-  - `409 Conflict` — the audit is not awaiting review; or
+  - `409 Conflict` — the audit is not awaiting review (including a second
+    approve, or another manager ruling first); or
     ```json
     {
       "statusCode": 409,

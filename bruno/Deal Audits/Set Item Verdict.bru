@@ -124,6 +124,11 @@ docs {
   `item` is the same shape as **Get Deal Audit Review**'s `items[]`; the page
   swaps it in place and updates the summary bar from the rest.
 
+  `canApprove` / `canSendBack` are computed exactly as on **Get Deal Audit
+  Review** — `canReview` and every item passed / at least one failed — by one
+  server helper, so the page drops them in without re-deriving anything
+  (PAC-106 review; they used to differ, and the web re-clamped this one).
+
   ## Errors
   - `400 Bad Request` — neither field sent, an unknown verdict, or a note over
     2000 characters.

@@ -56,8 +56,14 @@ docs {
   |---------------|---------|-----|
   | Not Submitted | ✅ | the normal path |
   | Fail          | ✅ | **the correction loop** — fix it, submit again |
-  | Pass          | ✅ | a pass found to be wrong must be correctable |
   | Pending       | ❌ `409` | already with the reviewer |
+  | Pass          | ❌ `409` | the manager's sign-off (PAC-106 review) |
+
+  `Pass` was submittable until the PAC-106 review ("a pass found to be wrong
+  must be correctable"). Once a pass became the manager's sign-off, that let a
+  producer flip an approved audit back to `Pending` — clearing the manager's
+  failed verdicts and the `sentBack` marker — with a request the board never
+  offered. `canSubmit` is `false` on a passed audit.
 
   ### A new round after a send-back (PAC-106)
 
@@ -91,10 +97,13 @@ docs {
   ## Errors
   - `403 Forbidden` — module disabled or missing `deal_audits:write`.
   - `404 Not Found` — no audit for that deal, or out of reach.
-  - `409 Conflict` — already awaiting review.
+  - `409 Conflict` — already awaiting review, already approved, or the audit
+    changed status between the read and the write (a double-click, two tabs).
 
   ## Side effects
-  Mirrors the new state onto `Deal.dealAuditStatus` (a display copy;
-  `DealAudit.auditStatus` is authoritative) and appends `audit_submitted` to the
-  thread. Both best-effort and post-commit.
+  One transaction (PAC-106 review): the status, the cleared failed verdicts,
+  the recomputed counters (which decide the producer's board) and the mirror on
+  `Deal.dealAuditStatus` (a display copy; `DealAudit.auditStatus` is
+  authoritative) commit together or not at all. The `audit_submitted` thread
+  entry is written afterwards, best-effort.
 }

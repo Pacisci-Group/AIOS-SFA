@@ -331,9 +331,13 @@ export interface DealAuditReviewLead {
 /** `GET /deal-audits/deals/:dealId/review` — everything the page needs. */
 export interface DealAuditReviewView {
   audit: AuditWorkflowView & {
-    /** Every item passed — the Approve button's gate. */
+    /**
+     * `canReview`, and every item passed — the Approve button's gate. Decided
+     * by the server only; {@link SetAuditItemVerdictResponse} returns the same
+     * value under the same rule.
+     */
     canApprove: boolean;
-    /** Reviewable, and at least one item failed — the Send back gate. */
+    /** `canReview`, and at least one item failed — the Send back gate. */
     canSendBack: boolean;
     /** Items not yet passed, in checklist order. */
     unmet: AuditItemRef[];
@@ -364,7 +368,13 @@ export interface DealAuditReviewView {
   items: DealAuditReviewItem[];
 }
 
-/** `PATCH /deal-audits/:itemId/verdict` — the item, and the page's new gates. */
+/**
+ * `PATCH /deal-audits/:itemId/verdict` — the item, and the page's new gates.
+ *
+ * `canApprove` / `canSendBack` mean exactly what they mean on
+ * {@link DealAuditReviewView} — clamped by `canReview` on the server — so the
+ * page drops them in as they come, without re-deriving anything.
+ */
 export interface SetAuditItemVerdictResponse {
   item: DealAuditReviewItem;
   counts: AuditReviewCounts;

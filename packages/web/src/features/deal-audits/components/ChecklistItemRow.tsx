@@ -10,8 +10,8 @@ import type {
 } from "@/lib/deal-audits-api";
 import { cn } from "@/lib/utils";
 import { useItemVerdict } from "../useItemVerdict";
-import { EvidenceBlock } from "./EvidenceBlock";
-import { SENT_BACK_SURFACE, SENT_BACK_TEXT } from "./review-display";
+import { EvidenceBlock } from "@/components/audit/EvidenceBlock";
+import { SENT_BACK_SURFACE, SENT_BACK_TEXT } from "@/components/audit/review-display";
 
 const VERDICT_STYLES: Record<AuditItemVerdict, string> = {
   pass: "border-success/30 bg-success/12 text-success hover:bg-success/16 hover:text-success",

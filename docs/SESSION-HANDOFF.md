@@ -1816,3 +1816,13 @@ while `Pending`; audits with no producer items **submit themselves**; B10 in sco
   auto-submit of legacy audits; passes surviving a resubmit; Pending audits leaving the producer's
   board; whether Submit should need every producer item resolved; a "mine" chip on the queue.
 - Deleting audits created before 31 Aug 2026 (own ticket); `audit.submitted` notification (PAC-127).
+
+### Review follow-up (30 Oct 2026)
+Asad's eight points on PR #151 are all addressed. The plan doc §11 has each one and the
+known cost of copied item flags. In short: no resubmit on `Pass`. Submit and review run in one
+transaction (`transitionAudit`) and the counter sync there is no longer quiet. One `reviewGates`
+helper decides `canApprove`. The shared audit UI moved to `web/src/components/audit/`.
+`PRODUCER_ACTIONABLE_FILTER` is pinned by the truth-table test. `reconcileDealAudits` re-stamps
+template flags. **New behaviour for David:** the sold date and the Sold-card policy edit now follow
+Add policy's lock (`auditLocked`: `Pass` or person-submitted `Pending`). The household-side policy
+edit stays open.

@@ -13,7 +13,7 @@ import {
   SENT_BACK_SURFACE,
   SENT_BACK_TEXT,
   waitingHint,
-} from "./review-display";
+} from "@/components/audit/review-display";
 
 /** How many names a disabled Approve's hint lists before "and N more". */
 const UNMET_NAMES_SHOWN = 4;

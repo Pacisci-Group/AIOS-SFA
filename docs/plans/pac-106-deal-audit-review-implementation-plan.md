@@ -231,3 +231,37 @@ Settled: queue page only; search by **client, producer or policy number**; filte
   (search by each field, AND across words, each filter, each sort, options gate, 400s); Bruno
   *Review Queue Options*, *List Review Queue (Filtered)* and *(Aging Only)* green twice on the demo
   tenant; web `tsc` + build. **Not yet checked in a browser.**
+
+## 11. Review follow-up — Asad's eight points on PR #151 (30 Oct 2026)
+
+[Review comment](https://github.com/Pacisci-Group/AIOS-SFA/pull/151#issuecomment-6496687327),
+29 Oct. All eight are addressed in this PR rather than split into follow-up tickets.
+
+| # | Point | What changed |
+|---|---|---|
+| 1 | An approved audit could be re-submitted and silently reopened | `canSubmitAudit` is `Not Submitted` or `Fail` only, so a submit on `Pass` is a `409` and `canSubmit` is `false`. Reopening an approved audit, if ever needed, would be a manager's own route. |
+| 2 | Sold-date and per-policy edits were not audit-gated | One rule, `common/deal-audits/audit-lock.ts` (`loadDealAuditLock`), now gates **Add policy**, **`PATCH /sold-deals/:id`** and **`PATCH /policies/:id`**: locked on `Pass` or a person-submitted `Pending`, open on `Fail` and on a system submission. Chosen over "reopen the items" because it is the product owner's existing call for Add policy (block rather than reopen). `SoldDealEditView.auditLocked` and `LeadDetailDeal.auditLocked` let Edit sale disable the date and both pages hide the policy edit. The household-side correction (`PATCH /households/:id/policies/:policyId`) stays open, because once a sale is approved the policy belongs to the service team. |
+| 3 | `review()` / `submit()` were multi-document writes without a transaction | Both go through `DealAuditsService.transitionAudit`, which runs `TransactionRunner` around the status (a conditional `updateOne` on the status the caller validated, so a race is a `409`), the item updates, `syncAuditCounters` (now session-aware) and the `Deal.dealAuditStatus` mirror. It uses `updateOne`, not `save()`, because `withTransaction` may re-run the callback. Timeline rows and the notification stay post-commit and best-effort. |
+| 4 | Board membership depended on a counter synced quietly | Inside that transaction the sync is **not** quiet: a failure rolls back the whole transition. `syncCountersQuietly` remains only on the per-item verdict path, where the audit is `Pending` and so off the producer's board whatever its counters say. Generation's sync also stays best-effort: the sale has already committed by then, and an audit it strands still appears on the manager's queue as *Not submitted*. No periodic reconcile job was added. |
+| 5 | `canApprove` meant two things on the wire | `reviewGates(canReview, items)` in `review-items.ts` decides `canApprove` / `canSendBack` / `unmet` / `counts` for both the page read and the verdict response. `DealAuditsService.canReview` is the one `canReview`. `useItemVerdict` no longer re-clamps. |
+| 6 | `features/deal-audits` ⇄ `features/producer` imported each other | `AuditWorkflowPanel`, `EvidenceBlock` and `review-display` moved to `packages/web/src/components/audit/`, so each feature now imports only from there. |
+| 7 | Four copies of the producer-actionable rule | `PRODUCER_ACTIONABLE_FILTER` (the query-filter spelling) now sits in `audit-counters.ts` beside `IS_PRODUCER_ACTIONABLE`, `loadChecklists` uses it, and `audit-counters.unit-spec.ts` pins both against `isProducerActionable` on the same truth table. The migration keeps its own copy by design. |
+| 8 | Flags copied onto items with no re-sync path | See *Known cost* below. `reconcileDealAudits` now takes an optional `templateModel` and re-stamps `producerVisible` / `requiresUpload` by `templateId` on every audit not yet approved, before it recomputes counters, so the auto-submit applies to the new flags. The migration and the demo seed pass it, and it reports `flagsRestamped`. |
+
+### Known cost — item flags are copies (point 8)
+
+`producerVisible` / `requiresUpload` are **copied** from the template onto each item at
+generation (§2.2). This is a deliberate trade: the producer's board and the counters filter on
+the item without joining the template catalog. The cost is that a template change does not reach
+items already raised. David has revised the template table twice already.
+
+- **The lever:** change the template, then run `reconcileDealAudits` with the template model.
+  Items generated from that template (`templateId`) on audits that are **not `Pass`** take the
+  new flags, and the counters and the "nothing for the producer → submit" rule follow. Approved
+  audits are history and are left alone. Migrated items have no `templateId` and take their flags
+  by name (`auditItemFlagsForName`), so a change there still needs a migration, as the PAC-106
+  one did.
+- **Still manual:** today only the SmartSuite migration and the demo seed call
+  `reconcileDealAudits`. In production a template change ships as a migration that edits the
+  template and re-stamps the items. A template-edit screen, if one is built, should call the
+  re-stamp itself.

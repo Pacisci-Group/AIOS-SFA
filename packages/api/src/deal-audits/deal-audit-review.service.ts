@@ -8,14 +8,12 @@ import {
   DataScope,
   MANAGEMENT_AUDIT_SLA_BUSINESS_DAYS,
   NEW_BUSINESS_MATCH,
-  approveBlockers,
   canReviewAudit,
   normalizeCarrier,
   normalizeDealAuditStatus,
   normalizeLeadStatus,
   normalizePolicyNumber,
   normalizePolicyType,
-  reviewCounts,
 } from '@sfa/shared';
 import type {
   AccessContext,
@@ -71,7 +69,7 @@ import { queueSortStages } from './deal-audit-queue.sort';
 import { DealAuditsService } from './deal-audits.service';
 import { ListDealAuditQueueDto } from './dto/list-deal-audit-queue.dto';
 import { SetItemVerdictDto } from './dto/set-item-verdict.dto';
-import { compareReviewItems } from './review-items';
+import { compareReviewItems, reviewGates } from './review-items';
 import {
   AuditOwnerRef,
   AuditSentBack,
@@ -648,8 +646,6 @@ export class DealAuditReviewService {
       ]);
 
     items.sort(compareReviewItems);
-    const counts = reviewCounts(items);
-    const unmet = approveBlockers(items);
     const today = zonedDate(new Date(), access.timeZone);
     const businessDaysOpen = deal.soldDate
       ? businessDaysBetween(zonedDate(deal.soldDate, access.timeZone), today)
@@ -659,10 +655,7 @@ export class DealAuditReviewService {
     return {
       audit: {
         ...workflow,
-        canApprove: workflow.canReview && unmet.length === 0,
-        canSendBack: workflow.canReview && counts.failed > 0,
-        unmet,
-        counts,
+        ...reviewGates(workflow.canReview, items),
       },
       deal: {
         id: deal._id.toString(),
@@ -759,19 +752,17 @@ export class DealAuditReviewService {
 
     const items = await this.audits.loadReviewItems(audit);
     items.sort(compareReviewItems);
-    const counts = reviewCounts(items);
-    const unmet = approveBlockers(items);
     const updated = items.find((entry) => entry.id === item._id.toString());
     if (!updated) {
       throw new NotFoundException('Audit item not found.');
     }
 
+    // The same gates the page read returns, clamped the same way — true here
+    // whenever `assertReviewer` let the request through, but decided by one
+    // rule so the two responses cannot drift apart.
     return {
       item: updated,
-      counts,
-      canApprove: unmet.length === 0,
-      canSendBack: counts.failed > 0,
-      unmet,
+      ...reviewGates(this.audits.canReview(audit, access), items),
     };
   }
 

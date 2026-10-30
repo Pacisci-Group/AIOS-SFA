@@ -2287,6 +2287,7 @@ export class MigrationService {
         itemModel: this.dealAuditItemModel,
         dealAuditModel: this.dealAuditModel,
         dealModel: this.dealModel,
+        templateModel: this.auditTemplateModel,
       },
       ctx.agencyId,
     );
@@ -2295,6 +2296,7 @@ export class MigrationService {
       `Deal audits: ${outcome.auditsCreated} roll-ups created, ` +
         `${outcome.itemsLinked} items linked, ${outcome.assigneesSet} assignees set, ` +
         `${outcome.statusesHealed} statuses healed, ` +
+        `${outcome.flagsRestamped} item flags re-stamped from templates, ` +
         `${outcome.countersSynced} counter sets synced, ` +
         `${outcome.autoSubmitted} with no producer items submitted for review`,
     );

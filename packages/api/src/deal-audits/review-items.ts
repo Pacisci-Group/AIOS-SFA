@@ -1,7 +1,9 @@
+import { approveBlockers, reviewCounts } from '@sfa/shared';
 import type {
   AuditItemReviewView,
   AuditItemVerdict,
   DealAuditReviewItem,
+  DealAuditReviewView,
 } from '@sfa/shared';
 import { Types } from 'mongoose';
 import type { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schema';
@@ -138,4 +140,30 @@ export function compareReviewItems(
     categoryRank(a.category) - categoryRank(b.category) ||
     a.itemName.localeCompare(b.itemName)
   );
+}
+
+/**
+ * The Deal Audit page's tally and its two buttons, from the checklist and from
+ * whether the caller may review at all (`DealAuditsService.canReview`).
+ *
+ * The one place `canApprove` / `canSendBack` are decided (PAC-106 review): the
+ * page read and the verdict response used to compute them two ways under the
+ * same names — one clamped by `canReview`, one not — and the web re-clamped
+ * the second. Both endpoints now return this.
+ */
+export function reviewGates(
+  canReview: boolean,
+  items: readonly DealAuditReviewItem[],
+): Pick<
+  DealAuditReviewView['audit'],
+  'canApprove' | 'canSendBack' | 'unmet' | 'counts'
+> {
+  const counts = reviewCounts(items);
+  const unmet = approveBlockers(items);
+  return {
+    canApprove: canReview && unmet.length === 0,
+    canSendBack: canReview && counts.failed > 0,
+    unmet,
+    counts,
+  };
 }

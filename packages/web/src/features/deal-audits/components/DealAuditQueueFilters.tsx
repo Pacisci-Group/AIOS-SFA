@@ -24,7 +24,7 @@ import {
   QUEUE_SORT_OPTIONS,
 } from "../queue-filters";
 import type { DealAuditsUrlState } from "../useDealAuditsUrlState";
-import { SENT_BACK_TEXT } from "./review-display";
+import { SENT_BACK_TEXT } from "@/components/audit/review-display";
 
 /**
  * Below `sm` a select grows to share its row; `min-w-40` is what breaks the

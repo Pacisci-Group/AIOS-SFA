@@ -109,9 +109,16 @@ export const AUDIT_REVIEW_OUTCOMES: Record<AuditReviewDecision, DealAuditStatus>
  * at best. `Fail` **is** submittable — that is the correction loop the brief
  * asks for (section B item 8): fix the problem, submit again, back to
  * `Pending`.
+ *
+ * `Pass` is **not** (PAC-106 review). It used to be — "a pass found to be wrong
+ * has to be correctable" — but since PAC-106 a pass is the manager's sign-off,
+ * and a submit would flip it back to `Pending`, clear the failed verdicts and
+ * wipe `sentBack` on the producer's say-so. The board never offered it; the
+ * API did. Reopening an approved audit, if it is ever needed, is a manager's
+ * action and gets its own route.
  */
 export function canSubmitAudit(status: DealAuditStatus): boolean {
-  return status !== 'Pending';
+  return status === 'Not Submitted' || status === 'Fail';
 }
 
 /**

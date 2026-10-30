@@ -18,7 +18,7 @@ import {
 } from "@/lib/deal-audits-api";
 import { DealAuditQueueFilters } from "./components/DealAuditQueueFilters";
 import { DealAuditQueueTable } from "./components/DealAuditQueueTable";
-import { QUEUE_STATUS_OPTIONS } from "./components/review-display";
+import { QUEUE_STATUS_OPTIONS } from "@/components/audit/review-display";
 import { useDealAuditsUrlState } from "./useDealAuditsUrlState";
 
 const PAGE_SIZE = 25;

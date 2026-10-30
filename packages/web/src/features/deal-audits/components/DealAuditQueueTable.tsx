@@ -19,7 +19,7 @@ import {
   SENT_BACK_TEXT,
   businessDaysLabel,
   waitingHint,
-} from "./review-display";
+} from "@/components/audit/review-display";
 
 /**
  * The Deal Audits queue's rows (PAC-106): Producer · Client · Days sitting ·

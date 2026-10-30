@@ -32,8 +32,10 @@ import {
   normalizeStoredAddress,
   resolveHouseholdAddress,
 } from '../common/address/household-address';
+import { loadDealAuditLock } from '../common/deal-audits/audit-lock';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
+import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   HouseholdMembersService,
@@ -189,6 +191,9 @@ export class LeadDetailService {
     @InjectModel(Activity.name)
     private readonly activityModel: Model<ActivityDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    // Only to decide whether the Sold card may offer its policy edit.
+    @InjectModel(DealAudit.name)
+    private readonly dealAuditModel: Model<DealAudit>,
     private readonly leadAccess: LeadAccessService,
     private readonly leadTickets: LeadTicketsService,
     private readonly memberships: HouseholdMembersService,
@@ -234,11 +239,15 @@ export class LeadDetailService {
       ),
     ]);
 
-    const [priorInsurance, userNames, leadSource] = await Promise.all([
-      this.loadPriorInsurance(deal, household, agencyId),
-      this.loadUserNames(lead, activities, recaps),
-      this.toLeadSource(lead),
-    ]);
+    const [priorInsurance, userNames, leadSource, auditLock] =
+      await Promise.all([
+        this.loadPriorInsurance(deal, household, agencyId),
+        this.loadUserNames(lead, activities, recaps),
+        this.toLeadSource(lead),
+        deal
+          ? loadDealAuditLock(this.dealAuditModel, agencyId, deal._id)
+          : null,
+      ]);
 
     const [latestRecap, ...earlierRecaps] = recaps;
 
@@ -306,7 +315,14 @@ export class LeadDetailService {
       earlierQuoteRecaps: earlierRecaps.map((recap) =>
         this.toQuoteRecap(recap, userNames, access.timeZone),
       ),
-      deal: deal ? this.toDeal(deal, policies, access.timeZone) : null,
+      deal: deal
+        ? this.toDeal(
+            deal,
+            policies,
+            access.timeZone,
+            auditLock?.locked ?? false,
+          )
+        : null,
       priorInsurance,
       activities: activities.map((activity) =>
         this.toActivity(activity, userNames),
@@ -988,6 +1004,7 @@ export class LeadDetailService {
     deal: DealDocument,
     policies: PolicyDocument[],
     timeZone: string,
+    auditLocked: boolean,
   ): LeadDetailDeal {
     const dealId = deal._id.toString();
 
@@ -1005,6 +1022,7 @@ export class LeadDetailService {
       policies: policies
         .filter((policy) => policy.dealId?.toString() === dealId)
         .map((policy) => toLeadDetailPolicy(policy)),
+      auditLocked,
     };
   }
 

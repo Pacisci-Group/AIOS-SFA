@@ -25,7 +25,7 @@ import {
   AUDIT_STATUS_STYLES,
   SENT_BACK_SURFACE,
   SENT_BACK_TEXT,
-} from "@/features/deal-audits/components/review-display";
+} from "./review-display";
 import { formatDate } from "@/features/lead/components/lead-display";
 import {
   addAuditNote,
@@ -53,6 +53,12 @@ import { agencyUserOptionsKey, listUserOptions } from "@/lib/users-api";
  *
  * ⚠ Every action is gated on a server-supplied flag (`canSubmit`) rather than
  * on rules re-derived here.
+ *
+ * Lives in `components/audit/` with `EvidenceBlock` and `review-display`
+ * because both the producer's board and the manager's Deal Audit page render
+ * it. It sat in `features/producer/` while the producer feature imported the
+ * other two from `features/deal-audits/`, so each lazy route pulled the
+ * other's chunk (PAC-106 review).
  */
 
 /** Relative-ish timestamp; the thread is a conversation, not an audit log. */

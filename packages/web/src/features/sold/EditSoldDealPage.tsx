@@ -50,7 +50,7 @@ const BLOCKED_REASONS: Record<SoldDealAddPoliciesBlock, string> = {
   // sent-back audit, or one the system submitted, stays open — Fix it on the
   // producer's board leads here.
   audit_submitted:
-    "This sale's audit has been approved or is with a reviewer, so no more policies can be added to it. If something needs changing, ask your manager to send the audit back.",
+    "This sale's audit has been approved or is with a reviewer, so its policies can't be changed or added to. If something needs changing, ask your manager to send the audit back.",
   no_lead:
     "This sale isn't linked to a lead, so policies can't be added to it here.",
   no_household:
@@ -263,17 +263,21 @@ function SaleDetailsSection({ deal }: { deal: SoldDealEditView }) {
         max={agencyTodayYmd(getStoredUser()?.timeZone)}
         value={soldDate}
         onChange={setSoldDate}
-        disabled={mutation.isPending}
+        disabled={deal.auditLocked || mutation.isPending}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
-          Changing the date moves this sale into that period's Sold figures.
+        <p role="status" className="text-xs text-muted-foreground">
+          {deal.auditLocked
+            ? "This sale's audit has been approved or is with a reviewer, so the sold date can't be changed. Ask your manager to send the audit back if it's wrong."
+            : "Changing the date moves this sale into that period's Sold figures."}
         </p>
         <Button
           type="button"
           size="sm"
-          disabled={!changed || !soldDate || mutation.isPending}
+          disabled={
+            deal.auditLocked || !changed || !soldDate || mutation.isPending
+          }
           onClick={() => mutation.mutate(soldDate)}
         >
           {mutation.isPending ? (
@@ -389,7 +393,11 @@ function PoliciesSection({
                 <div className="min-w-0 flex-1">
                   <PolicyRow policy={policy} />
                 </div>
-                <EditPolicyDialog leadId={deal.leadId ?? ""} policy={policy} />
+                <EditPolicyDialog
+                  leadId={deal.leadId ?? ""}
+                  policy={policy}
+                  locked={deal.auditLocked}
+                />
               </li>
             ))}
           </ul>

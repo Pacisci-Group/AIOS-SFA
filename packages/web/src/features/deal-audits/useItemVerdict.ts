@@ -18,9 +18,10 @@ export interface ItemVerdictInput {
  * Rule on one checklist item, and fold the answer into the page in place.
  *
  * One mutation per row, so each row knows whether *it* is saving. The response
- * carries the updated item plus the audit's tally, so the summary bar moves
- * without refetching the whole page — `canApprove` / `canSendBack` are still
- * clamped by the page's own `canReview`, which a verdict cannot change.
+ * carries the updated item plus the audit's tally and gates, so the summary
+ * bar moves without refetching the whole page. `canApprove` / `canSendBack`
+ * are taken as the server sends them: it clamps both by `canReview`, the same
+ * rule as the page read.
  */
 export function useItemVerdict(dealId: string) {
   const queryClient = useQueryClient();
@@ -41,8 +42,8 @@ export function useItemVerdict(dealId: string) {
               ...prev.audit,
               counts: result.counts,
               unmet: result.unmet,
-              canApprove: prev.audit.canReview && result.canApprove,
-              canSendBack: prev.audit.canReview && result.canSendBack,
+              canApprove: result.canApprove,
+              canSendBack: result.canSendBack,
             },
           },
       );

@@ -25,7 +25,7 @@ import {
 } from "@/lib/deal-audits-api";
 import { managementDashboardKey } from "@/lib/management-dashboard-api";
 import { cn } from "@/lib/utils";
-import { SENT_BACK_TEXT } from "./review-display";
+import { SENT_BACK_TEXT } from "@/components/audit/review-display";
 
 export type ReviewDecision = "approve" | "send_back";
 

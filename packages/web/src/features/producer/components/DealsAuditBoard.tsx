@@ -30,7 +30,7 @@ import { ResolvePanel } from "./ResolvePanel";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 import {
   SENT_BACK_TEXT,
-} from "@/features/deal-audits/components/review-display";
+} from "@/components/audit/review-display";
 
 const PAGE_SIZE = 8;
 

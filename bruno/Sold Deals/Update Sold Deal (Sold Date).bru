@@ -65,10 +65,19 @@ docs {
   ⚠ **This moves reported numbers**, intentionally: a sale moved from February
   to January leaves February's Sold figure and joins January's.
 
+  ## Refused while the audit is locked (`409`, PAC-106 review)
+  When the deal's audit is **approved**, or a **person** submitted it and it is
+  with the reviewer — `auditLocked` on **Get Sold Deal For Edit**, the rule Add
+  policy already followed. The manager passes "Correct Sold Date" against the
+  application; moving the date afterwards would leave that pass vouching for a
+  value no longer on the deal. A sent-back audit (`Fail`) and a system
+  submission (`submittedById: null`) stay open. A patch naming the stored day is
+  still a no-op `200`, locked or not.
+
   ## What deliberately does not
   - **Audit items.** Their `dueAt` counts from when each was raised, not from the
     sale; the baseline "Correct Sold Date" item is left as it is (product owner's
-    call — the edit log is the record).
+    call — the edit log is the record). The lock above is what keeps that safe.
   - **Policies and their renewal anchors**, which derive from each policy's own
     effective date.
 
@@ -97,4 +106,5 @@ docs {
   - `401 Unauthorized` — missing/expired access token.
   - `403 Forbidden` — `deal_audits` disabled, or no `deal_audits:write`.
   - `404 Not Found` — unknown/malformed id, out of scope, or a company transfer.
+  - `409 Conflict` — the deal's audit is locked (above).
 }

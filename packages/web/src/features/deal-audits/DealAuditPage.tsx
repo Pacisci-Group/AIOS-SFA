@@ -7,7 +7,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AuditWorkflowPanel } from "@/features/producer/components/AuditWorkflowPanel";
+import { AuditWorkflowPanel } from "@/components/audit/AuditWorkflowPanel";
 import { formatDate } from "@/features/lead/components/lead-display";
 import {
   dealAuditReviewKey,
@@ -22,7 +22,7 @@ import {
   type ReviewDecision,
 } from "./components/ReviewDecisionDialog";
 import { ReviewSummaryBar } from "./components/ReviewSummaryBar";
-import { SENT_BACK_TEXT, businessDaysLabel } from "./components/review-display";
+import { SENT_BACK_TEXT, businessDaysLabel } from "@/components/audit/review-display";
 import { SoldPoliciesCard } from "./components/SoldPoliciesCard";
 import { LeadDrawer } from "./drawers/LeadDrawer";
 import { NbaDocumentDrawer } from "./drawers/NbaDocumentDrawer";

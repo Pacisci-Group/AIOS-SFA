@@ -1478,6 +1478,7 @@ export class DemoSeedService {
         itemModel: this.dealAuditItemModel,
         dealAuditModel: this.dealAuditModel,
         dealModel: this.dealModel,
+        templateModel: this.auditTemplateModel,
       },
       ctx.agencyId,
     );
