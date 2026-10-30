@@ -31,11 +31,10 @@ import {
 } from '../quote-recaps/schemas/quote-recap.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Mailer, MailerSchema } from '../mailers/schemas/mailer.schema';
+import { HouseholdIntakeModule } from './intake/household-intake.module';
 import { LeadIntakeService } from './intake/lead-intake.service';
 import { MailerLinkResolver } from './intake/mailer-link.resolver';
 import { LinkEntitiesStep } from './intake/link-entities.step';
-import { ResolveContactStep } from './intake/resolve-contact.step';
-import { ResolveHouseholdStep } from './intake/resolve-household.step';
 import { ResolveLeadStep } from './intake/resolve-lead.step';
 import { HotLeadsService } from './hot-leads.service';
 import { LeadAccessService } from './lead-access.service';
@@ -86,6 +85,10 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     // instead of moving the contact, `ResolveHouseholdStep` derives the
     // household from it, and the Lead Detail roster reads it.
     HouseholdMembersModule,
+    // `ResolveContactStep` / `ResolveHouseholdStep` — the household half of
+    // the pipeline, in a module of its own so the 1-800 service intake can run
+    // it without a lead (PAC-173 PR 5).
+    HouseholdIntakeModule,
     /*
      * `PoliciesService.loadHouseholdPolicy` — the scope clamp on a replacement
      * lead (PAC-126). A Cancel Rewrite or Company Transfer creates its lead
@@ -118,8 +121,6 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
     LeadIntakeService,
     LeadAccessService,
     LeadAssignmentService,
-    ResolveContactStep,
-    ResolveHouseholdStep,
     ResolveLeadStep,
     LinkEntitiesStep,
     MailerLinkResolver,

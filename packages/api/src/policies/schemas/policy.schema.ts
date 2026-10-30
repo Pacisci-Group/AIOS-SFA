@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import type { SoldPolicyDiscounts } from '@sfa/shared';
+import { POLICY_ORIGINS } from '@sfa/shared';
+import type { PolicyOrigin, SoldPolicyDiscounts } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 import {
@@ -119,6 +120,13 @@ export class Policy extends TenantRecord {
 
   @Prop({ type: ObjectIdType, ref: 'Deal', index: true })
   dealId?: Types.ObjectId;
+
+  /**
+   * `carrier_direct`: Allstate sold it (1-800) and the agency services it — no
+   * deal, never a sale (PAC-173). Absent = the agency's own.
+   */
+  @Prop({ type: String, enum: POLICY_ORIGINS })
+  origin?: PolicyOrigin;
 
   @Prop()
   legacyDealId?: string;

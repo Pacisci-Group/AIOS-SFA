@@ -5,7 +5,7 @@ Ticket: https://linear.app/paciscigroup/issue/PAC-173 (sub-issue of PAC-152).
 Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 `web/` = `packages/web/src/`, `shared/` = `packages/shared/src/`.
 
-> **Changed since this was written (v2, PRs 1–4 — 27–28 Oct 2026).** The notes
+> **Changed since this was written (v2, PRs 1–5 — 27–29 Oct 2026).** The notes
 > below describe v1. Where they disagree with this box, this box wins; the full
 > as-built rewrite follows the last v2 PR.
 >
@@ -156,8 +156,79 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >     endpoint), and run detail has `inProgress`. The export adds `outcome` and
 >     `outcome_note`. The assigned page and the Dash follow-ups panel show
 >     where each row stands.
-> - Still to come (v2 plan): 1-800 service intake (PR 5) and Chargeback
->   (PR 6).
+> - **A 1-800 policy is set up for service, never sold (PR 5).**
+>   - A Dash-only 1-800 row (1-800 review, `dash_only`) offers **Set up for
+>     service** besides Other (`reconciliationOutcomeKinds` now takes the row's
+>     match). A 1-800 policy the app already has — on a deal or not — keeps
+>     Other only (owner, 29 Oct 2026).
+>   - It needs `leads:write` (owner, 29 Oct 2026), which every default Producer
+>     and CSR holds, by effective permission: `canSetUpReconciliationService`.
+>     Assigning such a row to someone without it is a 400
+>     `RECONCILIATION_ASSIGNEE_CANNOT_SERVICE`; `GET options` marks
+>     `canSetUpService`. Only the assignee runs it; the owner reads it.
+>   - Its page, `/reconciliation/assigned/:rowId/service-intake`, captures the
+>     client as the New Lead form captures a household — the same cards and
+>     the same contact and household resolution (`HouseholdIntakeModule`), DOB,
+>     phone and email required on the primary — but makes **no lead**. "Existing
+>     client?" adds the policy to a household instead. Then the policy, filled
+>     in from Dash, with its signed application (required, PDF, presigned under
+>     the row: `reconciliation-rows/<rowId>/nba`), and the hand-off: a CSR from
+>     the ticket picker's pool and an opening note written from the Dash line.
+>   - `POST carrier-reconciliation/assigned/:rowId/service-intake`
+>     (`ServicedPolicyIntakeService`) writes the household, members and a
+>     policy with **`origin: 'carrier_direct'` and no deal**, and makes the CSR
+>     the household's Assigned CRM when it has none — in one transaction with
+>     the row's outcome, at step `start_onboarding`. The welcome call
+>     (`ServiceTicketsService.startOnboarding`, "sold by" `Allstate 1-800
+>     (<Bind ID>)`) opens right after and finishes the outcome with its
+>     onboarding and ticket ids; the row is resolved
+>     `service_intake_recorded`, which the owner's review cannot pick
+>     (`service_set_up` stays their hand pick). If the welcome call cannot open,
+>     the row waits at `start_onboarding` and Continue opens it. A number
+>     already on a sale in the app is a 409; CRM service off is a 409.
+>   - Nothing is credited: performance and the leaderboard read deals. The
+>     household page and the policy page label the policy "Allstate direct
+>     (1-800)"; the row drawer links the household, the policy and the welcome
+>     call.
+>   - The engine expects a `carrier_direct` policy in Dash by its effective
+>     date (a UTC calendar day — there is no sold date), names it by its
+>     household's primary contact, and leaves it out of the per-producer table.
+>     Any later report that lists it matches it clean (tab Matched, context
+>     issue `direct_1800`); one that leaves it out lists it under Not in Dash.
+>     A re-upload of the **same period** carries the finished outcome, its
+>     decision and its assignee to the new row — only while that row asks
+>     nothing (a premium difference reopens it) — and first opens any welcome
+>     call still pending on the run it replaces. A `carrier_direct` policy
+>     later put on a deal is a 1-800 policy recorded as a sale again
+>     (`direct_recorded_as_sale`). Re-check does not re-match (it only
+>     re-derives stored rows), so only a new upload moves a row out of 1-800
+>     review.
+>   - The policy number must be the Dash line's. An owner deciding,
+>     reassigning or taking back a row whose welcome call is still pending
+>     opens the call first; work release keeps such an outcome (with nobody on
+>     the row) for that, or for a same-period re-upload, to finish. One that
+>     still cannot open at a re-upload travels to the new row, which then
+>     waits on a decision. A late call re-checks its CSR (unassigned if they
+>     are no longer an active CSR or CRM), and a timed claim on the row
+>     (`outcome.handOffAt`, 2 minutes) lets only one caller open it. While
+>     someone holds that claim, the owner's decide, reassign or take-back is a
+>     409 rather than a clear. A household the caller cannot see is refused
+>     with `RECONCILIATION_HOUSEHOLD_NOT_VISIBLE`, whether it was pinned,
+>     offered by the "which household?" chooser (which lists only in-scope
+>     ones), or found as the person's only household.
+>   - A carried pending intake whose call then opens decides its row only if
+>     the row asks nothing else. On a row whose premium now differs, the
+>     intake finishes but the Premium question stays open for the owner, and
+>     the row leaves the assignee's list (`openAssignmentsFilter` skips a
+>     finished outcome). Once the intake is no longer pending, `needsReview`
+>     goes back to what the row's own tabs say (`asksForDecision`).
+>   - Setting a reopened row up again makes a second `carrier_direct` copy
+>     (the plan accepts that twin). The next upload matches the newer one, so
+>     the outcome that links it carries, and the twin shows as
+>     `duplicate_in_app`.
+>   - The demo seed adds one `carrier_direct` policy (`900800001`) with its
+>     onboarding and open welcome call for Casey Kim (`ONBD-117`).
+> - Still to come (v2 plan): Chargeback (PR 6, after PAC-170 / #153).
 
 ## What it is
 

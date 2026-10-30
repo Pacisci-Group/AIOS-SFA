@@ -32,7 +32,9 @@
  * The owner works the open rows, or hands one to a Producer or CSR
  * (`assignment`), who is notified and sees it on their own page and records
  * what became of it (`outcome`): **Sold** (entered as a sale), **Cancel
- * rewrite** (entered, then rewritten through the normal replacement chain) or
+ * rewrite** (entered, then rewritten through the normal replacement chain),
+ * **Service intake** (a 1-800 policy set up for service: household, a
+ * `carrier_direct` policy, and a CSR's welcome call — never a sale) or
  * **Other** (a note). Finishing one resolves the row.
  *
  * Who a line belongs to is the user holding its **Bind ID** — the login that
@@ -44,7 +46,9 @@
 
 import { ModuleKey } from '../enums/module-key.enum';
 import { modulePermission } from '../permissions/permission.constants';
+import type { PolicyOrigin } from './policy-origin';
 import type { PolicyType } from './policy-type';
+import type { ServiceTicketAssignee } from '../service/service-ticket';
 
 export const RECONCILIATION_RUN_STATUSES = [
   'processing',
@@ -129,8 +133,8 @@ export type BindIdStatus = (typeof BIND_ID_STATUSES)[number];
  * Everything worth pointing out on a row. Some put the row in a tab
  * (`not_staff_bind_id`, `direct_channel`, `premium_mismatch`,
  * `producer_mismatch`); the rest are context shown beside it.
- * `direct_recorded_as_sale` says why a matched row is in 1-800 review, and
- * `item_count_mismatch` is context only.
+ * `direct_recorded_as_sale` says why a matched row is in 1-800 review;
+ * `item_count_mismatch` and `direct_1800` are context only.
  */
 export const RECONCILIATION_ISSUES = [
   'not_staff_bind_id',
@@ -138,6 +142,7 @@ export const RECONCILIATION_ISSUES = [
   'no_bind_id',
   'direct_channel',
   'direct_recorded_as_sale',
+  'direct_1800',
   'premium_mismatch',
   'item_count_mismatch',
   'producer_mismatch',
@@ -160,6 +165,8 @@ export const RECONCILIATION_ISSUE_LABELS: Record<ReconciliationIssue, string> =
     direct_channel: 'Sold through 1-800 / allstate.com',
     direct_recorded_as_sale:
       'Allstate sold it directly, but the app has it on a sale — a 1-800 policy is serviced, never sold',
+    direct_1800:
+      'Allstate direct policy — set up for service in the app, not sold',
     premium_mismatch: 'Premium in the app differs from Dash',
     item_count_mismatch: 'Item count in the app differs from Dash',
     producer_mismatch: 'Bound in Dash by someone other than the app’s producer',
@@ -228,6 +235,7 @@ export type RetiredReconciliationResolution =
 export const RECONCILIATION_OUTCOME_RESOLUTIONS = [
   'sold_recorded',
   'cancel_rewrite_recorded',
+  'service_intake_recorded',
   'other_recorded',
 ] as const;
 export type ReconciliationOutcomeResolution =
@@ -256,6 +264,7 @@ export const RECONCILIATION_RESOLUTION_LABELS: Record<
   other: 'Other',
   sold_recorded: 'Sold recorded',
   cancel_rewrite_recorded: 'Cancel rewrite recorded',
+  service_intake_recorded: 'Service intake recorded',
   other_recorded: 'Other recorded',
 };
 
@@ -345,11 +354,16 @@ export const MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH = 1000;
  * - `cancel_rewrite` — it was sold and later rewritten: enter it as `sold`
  *   does, then write its replacement through the normal cancel-rewrite chain,
  *   so the trail and the chargeback exist.
+ * - `service_intake` — a 1-800 policy (PAC-173 PR 5): Allstate sold it, the
+ *   agency services it. Its form creates the household (captured like a lead,
+ *   but no lead), a `carrier_direct` policy with its NBA and no deal, and a
+ *   CSR onboarding opening on the welcome call. Never a sale.
  * - `other` — anything else, in a note. Done at once.
  */
 export const RECONCILIATION_OUTCOME_KINDS = [
   'sold',
   'cancel_rewrite',
+  'service_intake',
   'other',
 ] as const;
 export type ReconciliationOutcomeKind =
@@ -361,6 +375,7 @@ export const RECONCILIATION_OUTCOME_KIND_LABELS: Record<
 > = {
   sold: 'Sold',
   cancel_rewrite: 'Cancel rewrite',
+  service_intake: 'Service intake',
   other: 'Other',
 };
 
@@ -371,6 +386,7 @@ export const RECONCILIATION_OUTCOME_RESOLUTION: Record<
 > = {
   sold: 'sold_recorded',
   cancel_rewrite: 'cancel_rewrite_recorded',
+  service_intake: 'service_intake_recorded',
   other: 'other_recorded',
 };
 
@@ -381,10 +397,14 @@ export type ReconciliationOutcomeStatus =
 /**
  * Where an unfinished outcome stands: `record_sale` until the sale is booked,
  * then — for a cancel rewrite — `write_replacement` until its replacement is.
+ * A service intake is `start_onboarding` only between saving the household
+ * and policy and opening the welcome call; it stays there when that failed,
+ * and Continue opens it.
  */
 export const RECONCILIATION_OUTCOME_STEPS = [
   'record_sale',
   'write_replacement',
+  'start_onboarding',
 ] as const;
 export type ReconciliationOutcomeStep =
   (typeof RECONCILIATION_OUTCOME_STEPS)[number];
@@ -395,6 +415,7 @@ export const RECONCILIATION_OUTCOME_STEP_LABELS: Record<
 > = {
   record_sale: 'Recording the sale',
   write_replacement: 'Writing the replacement',
+  start_onboarding: 'Opening the welcome call',
 };
 
 /** The kinds that book a sale, and so need the caller to be able to. */
@@ -404,16 +425,25 @@ export const RECONCILIATION_SALE_OUTCOME_KINDS = [
 ] as const satisfies readonly ReconciliationOutcomeKind[];
 
 /**
- * The outcomes a row can take, by its tabs: a Dash sale missing from the app
- * can be Sold, a Cancel rewrite or Other; anything else only Other (1-800
- * service intake comes with its own outcome).
+ * The outcomes a row can take:
+ *
+ * - a Dash sale missing from the app: Sold, a Cancel rewrite or Other;
+ * - a 1-800 policy the app does not have (`review_1800`, `dash_only`): Set up
+ *   for service, or Other;
+ * - anything else — a 1-800 policy the app already has included (on a deal or
+ *   not; owner, 29 Oct 2026) — only Other.
  */
-export function reconciliationOutcomeKinds(
-  tabs: readonly ReconciliationTab[],
-): readonly ReconciliationOutcomeKind[] {
-  return tabs.includes('missing_from_app')
-    ? RECONCILIATION_OUTCOME_KINDS
-    : ['other'];
+export function reconciliationOutcomeKinds(row: {
+  tabs: readonly ReconciliationTab[];
+  match: ReconciliationMatch | null;
+}): readonly ReconciliationOutcomeKind[] {
+  if (row.tabs.includes('missing_from_app')) {
+    return ['sold', 'cancel_rewrite', 'other'];
+  }
+  if (row.tabs.includes('review_1800') && row.match === 'dash_only') {
+    return ['service_intake', 'other'];
+  }
+  return ['other'];
 }
 
 /**
@@ -429,6 +459,18 @@ export function canRecordReconciliationSale(
     permissions.includes(modulePermission(ModuleKey.Leads, 'write')) &&
     permissions.includes(modulePermission(ModuleKey.DealAudits, 'write'))
   );
+}
+
+/**
+ * Whether someone holding these permissions can set a 1-800 policy up for
+ * service: `leads:write` (owner, 29 Oct 2026), which both the Producer and the
+ * CSR templates carry. It captures a household as a lead does, and only people
+ * who can are given a row that offers it — checked by permission, not role.
+ */
+export function canSetUpReconciliationService(
+  permissions: readonly string[],
+): boolean {
+  return permissions.includes(modulePermission(ModuleKey.Leads, 'write'));
 }
 
 /**
@@ -449,6 +491,14 @@ export const MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH = 2000;
 /** Error codes for outcomes and the assignment rule they bring. */
 export const RECONCILIATION_ASSIGNEE_CANNOT_SELL =
   'RECONCILIATION_ASSIGNEE_CANNOT_SELL';
+export const RECONCILIATION_ASSIGNEE_CANNOT_SERVICE =
+  'RECONCILIATION_ASSIGNEE_CANNOT_SERVICE';
+/**
+ * A service intake named a household the caller cannot see (PAC-173 PR 5):
+ * the form keeps what was typed and asks for another client.
+ */
+export const RECONCILIATION_HOUSEHOLD_NOT_VISIBLE =
+  'RECONCILIATION_HOUSEHOLD_NOT_VISIBLE';
 export const RECONCILIATION_OUTCOME_NOT_ALLOWED =
   'RECONCILIATION_OUTCOME_NOT_ALLOWED';
 export const RECONCILIATION_OUTCOME_FORBIDDEN =
@@ -598,6 +648,8 @@ export interface ReconciliationAppSide {
   items: number;
   clientName: string | null;
   businessType: string | null;
+  /** `carrier_direct` for a 1-800 policy set up for service; `null` = the agency's own. */
+  origin: PolicyOrigin | null;
 }
 
 /** A likely counterpart for an unmatched row — usually a mistyped number. */
@@ -661,7 +713,8 @@ export interface ReconciliationRowView {
 /**
  * An assignee's outcome. The ids link what it created: the lead and deal of
  * the sale, the policy that is the Dash line, and — for a cancel rewrite — the
- * replacement policy and the chargeback the rewrite wrote.
+ * replacement policy and the chargeback the rewrite wrote; for a service
+ * intake, the household, the policy, and the onboarding with its welcome call.
  */
 export interface ReconciliationOutcome {
   kind: ReconciliationOutcomeKind;
@@ -675,6 +728,9 @@ export interface ReconciliationOutcome {
   householdId: string | null;
   replacementPolicyId: string | null;
   chargebackId: string | null;
+  /** A service intake's onboarding, and its welcome-call ticket. */
+  onboardingId: string | null;
+  ticketId: string | null;
   startedBy: { id: string; name: string } | null;
   startedAt: string;
   completedBy: { id: string; name: string } | null;
@@ -708,6 +764,15 @@ export interface ReconciliationAssignee {
    * can be given a `missing_from_app` row.
    */
   canRecordSale: boolean;
+  /**
+   * Whether they can set a 1-800 policy up for service
+   * (`canSetUpReconciliationService`: `leads:write`). Only they can be given
+   * a row that offers it. Whether the agency has CRM service on is checked
+   * when they set it up — `prefill.serviceIntake` is `null` and the intake a
+   * 409 while it is off — so the owner can still hand such a row over for
+   * Other.
+   */
+  canSetUpService: boolean;
 }
 
 export interface ReconciliationOptionsResponse {
@@ -753,6 +818,11 @@ export interface ReconciliationPrefill {
     effectiveDate: string | null;
     soldDate: string | null;
   };
+  /**
+   * The service-intake form's hand-off note for the welcome call, written
+   * from the Dash line; `null` unless the row offers a service intake.
+   */
+  serviceIntake: { openingNote: string } | null;
 }
 
 /** `GET carrier-reconciliation/assigned/:rowId`. */
@@ -768,6 +838,84 @@ export interface RecordReconciliationOutcomeInput {
   /** Required for `other`. */
   note?: string | null;
 }
+
+/** The signed application a service intake attaches to its policy. */
+export interface ReconciliationServiceDocument {
+  key: string;
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
+/**
+ * `POST carrier-reconciliation/assigned/:rowId/service-intake` — the 1-800
+ * row set up for service. The client is captured as a lead's household is
+ * (DOB, phone and email on the primary), or pinned to an existing household.
+ * Calendar dates are `YYYY-MM-DD`.
+ */
+export interface ReconciliationServiceIntakeInput {
+  /** An existing client to add the policy to; omitted to resolve one. */
+  householdId?: string | null;
+  primaryContact: {
+    firstName: string;
+    lastName: string;
+    dateOfBirth: string;
+    phone: string;
+    email: string;
+  };
+  address?: { street?: string; city?: string; state?: string; zip?: string };
+  members: {
+    firstName: string;
+    lastName: string;
+    dateOfBirth?: string;
+    role: string;
+  }[];
+  policy: {
+    policyNumber: string;
+    policyType: PolicyType;
+    premium: number;
+    itemCount: number;
+    effectiveDate: string;
+    newBusinessApplication: ReconciliationServiceDocument;
+  };
+  /** The CSR whose welcome call opens. */
+  assignedCsrId: string;
+  /** The welcome call's first timeline entry; the prefill's when omitted. */
+  openingNote?: string | null;
+}
+
+export interface ReconciliationServiceIntakeResponse {
+  /** What this request created — said even if the row moved meanwhile. */
+  householdId: string;
+  policyId: string;
+  /**
+   * `null` when the household and policy were saved but the welcome call could
+   * not be opened: the row waits at `start_onboarding`, and Continue opens it.
+   */
+  onboardingId: string | null;
+  ticketId: string | null;
+  /**
+   * The row as the caller now sees it; `null` once it is no longer theirs —
+   * the owner took it back between saving and the hand-off.
+   */
+  row: ReconciliationAssignedRowDetail | null;
+}
+
+/** `GET carrier-reconciliation/assigned/:rowId/service-intake/options`. */
+export interface ReconciliationServiceIntakeOptions {
+  /** The CSRs a welcome call can go to — the ticket picker's pool. */
+  assignees: ServiceTicketAssignee[];
+}
+
+/** `POST carrier-reconciliation/assigned/:rowId/documents/presign`. */
+export interface ReconciliationDocumentPresignInput {
+  filename: string;
+  contentType: 'application/pdf';
+  size: number;
+}
+
+/** The signed application's size limit, shared so the form and the API refuse alike. */
+export const MAX_RECONCILIATION_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
 export interface ReconciliationAssignedListResponse {
   items: ReconciliationAssignedRow[];

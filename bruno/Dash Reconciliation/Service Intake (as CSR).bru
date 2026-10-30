@@ -1,0 +1,185 @@
+meta {
+  name: Service Intake (as CSR)
+  type: http
+  seq: 60
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}/service-intake
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Morgan",
+      "lastName": "Hale",
+      "dateOfBirth": "1979-03-21",
+      "phone": "(918) 555-0142",
+      "email": "morgan.hale@example.com"
+    },
+    "address": {
+      "street": "4410 S Peoria Ave",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74105"
+    },
+    "members": [
+      { "firstName": "Riley", "lastName": "Hale", "dateOfBirth": "1981-07-02", "role": "Spouse" }
+    ],
+    "policy": {
+      "policyNumber": "900299991",
+      "policyType": "Auto",
+      "premium": 793.08,
+      "itemCount": 1,
+      "effectiveDate": "2026-10-15",
+      "newBusinessApplication": {
+        "key": "{{reconSvcKey}}",
+        "filename": "morgan-hale-application.pdf",
+        "contentType": "application/pdf",
+        "size": 2048
+      }
+    },
+    "assignedCsrId": "{{reconSvcCsrId}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("reconSvcHouseholdId", res.getBody().householdId);
+    bru.setVar("reconSvcPolicyId", res.getBody().policyId);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("names what it created, welcome call included", function () {
+    const body = res.getBody();
+    expect(body.householdId).to.be.a("string");
+    expect(body.policyId).to.be.a("string");
+    expect(body.onboardingId).to.be.a("string");
+    expect(body.ticketId).to.be.a("string");
+  });
+
+  test("finishes the row: Service intake, done, never a sale", function () {
+    const outcome = res.getBody().row.outcome;
+    expect(outcome).to.include({
+      kind: "service_intake",
+      status: "done",
+      step: null,
+      leadId: null,
+      dealId: null,
+    });
+    expect(outcome.householdId).to.equal(res.getBody().householdId);
+    expect(outcome.ticketId).to.equal(res.getBody().ticketId);
+    expect(outcome.completedBy.id).to.equal(bru.getVar("reconSvcCsrId"));
+    expect(res.getBody().row.review).to.include({
+      status: "resolved",
+      resolution: "service_intake_recorded",
+    });
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/assigned/:rowId/service-intake — set a 1-800 policy up for service
+
+  - **Module:** `carrier_reconciliation` (enabled for the agency); CRM service
+    must be on too — the hand-off opens a welcome call
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read` (the
+    class gate), **and** `leads:write`, checked on every call
+  - **Data scope:** the row's assignee only. A pinned `householdId` must be
+    inside the caller's client scope.
+
+  PAC-173 PR 5. Allstate sold the policy directly (1-800 / allstate.com) and
+  assigned it to the agency, which **services** it: it is never a sale. One
+  request records:
+
+  1. **The client**, as a lead's household is captured — the same contact and
+     household resolution as `POST /leads` (DOB, phone and email required on
+     the primary), the members, and the primary membership — but **no lead**.
+     `householdId` adds the policy to an existing client instead. A submitted
+     phone or email that differs from the one on file is not applied; it is
+     noted on the welcome call.
+  2. **The policy**: `origin: "carrier_direct"`, **no deal**, on the
+     household's branch, with the signed application (verified in storage —
+     under this row's key, a PDF, ≤ 10 MB), `Active`, its renewal anchor
+     derived from the effective date. The carrier is the run's. Nothing is
+     credited on performance or the leaderboard, which read deals.
+  3. **The hand-off**: the chosen CSR becomes the household's Assigned CRM if
+     it has none, and their **welcome call** opens — the onboarding chain's
+     first step, "sold by" `Allstate 1-800 (<Bind ID>)`, opening with
+     `openingNote` (the prefill's, when omitted).
+
+  The household, the policy and the row's outcome commit together; the
+  welcome call opens right after. If it cannot, the answer is still `201`
+  with `onboardingId`/`ticketId` `null`, the row waits at `start_onboarding`,
+  and `PATCH …/outcome { "kind": "service_intake" }` (the page's Continue)
+  opens it — repairing an onboarding written without its call, never
+  finishing without one. So do the owner's decision or hand-over of the row,
+  and a re-upload of the same period (which carries the outcome to the new
+  row either way — still pending, the new row waits on a decision until the
+  call opens). A call opened late re-checks its CSR: one no longer an active
+  CSR or CRM leaves it unassigned. Only one caller opens it at a time. The ids in the
+  answer are what this request created; `row` is the caller's view of the
+  row, or `null` if the owner took it back meanwhile. Otherwise the row is
+  **done** and resolved `service_intake_recorded` (the owner's review cannot
+  pick it).
+
+  Any later report that lists the policy matches it clean (tab Matched,
+  context issue `direct_1800`). A **re-upload of the same period** — the run
+  it replaces — also carries this outcome, its decision and its assignee to
+  the new row, as long as that row asks nothing (a premium Dash and the app
+  now disagree on reopens it instead). Next month's report is a new run, so
+  its row is simply matched, with no outcome. The policy number has to be
+  this Dash line's (400 otherwise).
+
+  ## Body
+  - `householdId` — optional, an existing client
+  - `primaryContact` — `firstName`, `lastName` (1–60), `dateOfBirth`
+    (`YYYY-MM-DD`), `phone` (10–20), `email`
+  - `address` — optional `{ street, city, state, zip }`, the living address
+  - `members` — ≤ 10 of `{ firstName, lastName, dateOfBirth?, role }`, role
+    `Spouse` | `Child` | `Driver` | `Additional Named Insured`
+  - `policy` — `policyNumber`, `policyType` (an app policy type), `premium`
+    (≥ 0), `itemCount` (≥ 1), `effectiveDate` (`YYYY-MM-DD`),
+    `newBusinessApplication` `{ key, filename, contentType, size }` from
+    `Presign Service Document`
+  - `assignedCsrId` — one of `Service Intake Options`
+  - `openingNote` — optional, ≤ 2000 characters
+
+  ## Response `201`
+
+  ```json
+  { "householdId": "…", "policyId": "…", "onboardingId": "…", "ticketId": "…",
+    "row": { "id": "…", "outcome": { "kind": "service_intake", "status": "done", … },
+             "review": { "status": "resolved", "resolution": "service_intake_recorded", … }, … } }
+  ```
+
+  ## Errors
+  - `400` — validation; `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the row is not
+    a 1-800 policy the app lacks (a matched one takes Other only); the
+    application is not under this row's key or not a PDF; the number fails
+    the carrier's format; the CSR is not in the pool
+  - `403` `RECONCILIATION_OUTCOME_FORBIDDEN` — no `leads:write`
+  - `404` — no such row, or not assigned to the caller; the application never
+    reached storage; the pinned household is not one the caller can see
+  - `409` — the row is decided, already set up for service, or recorded
+    another way (`RECONCILIATION_OUTCOME_LOCKED`); its run was replaced or is
+    unfinished; CRM service is off for the agency; the policy number is
+    already on a sale in the app (the row is stale — record Other).
+    Answers the form can act on, as for a lead: `ambiguous_household` (the
+    person belongs to several households — `households[]` lists them; send
+    `householdId`) and `contact_deceased` (the client on file has died)
+}

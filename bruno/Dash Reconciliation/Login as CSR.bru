@@ -1,0 +1,55 @@
+meta {
+  name: Login as CSR
+  type: http
+  seq: 51
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{csrEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("reconSvcCsrToken", res.getBody().accessToken);
+    bru.setVar("reconSvcCsrId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the CSR can create leads and work CRM service, but not book a sale", function () {
+    const permissions = res.getBody().user.permissions;
+    expect(permissions).to.include("leads:write");
+    expect(permissions).to.include("crm_service:read");
+    expect(permissions).to.not.include("deal_audits:write");
+  });
+}
+
+docs {
+  # Sign in as a CSR (Dash Reconciliation, 1-800 service intake)
+
+  The 1-800 requests that follow (PAC-173 PR 5) run as the demo's CSR, Casey
+  Kim (`csrEmail`): the person a 1-800 policy is set up for service by. The
+  token is captured as `reconSvcCsrToken`, the id as `reconSvcCsrId` — both
+  separate from the collection's producer token, which every earlier
+  assignee request uses.
+
+  The CSR template holds `leads:write` (what setting up for service takes)
+  and CRM service, but no Deal Audits — so a CSR is the case PR 5 is for.
+}

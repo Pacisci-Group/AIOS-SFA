@@ -1,0 +1,41 @@
+meta {
+  name: Get Household (Serviced)
+  type: http
+  seq: 64
+}
+
+get {
+  url: {{baseUrl}}/households/{{reconSvcHouseholdId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the CSR's new client holds the 1-800 policy, marked as Allstate's", function () {
+    const policy = res.getBody().policies.find(
+      (item) => item.id === bru.getVar("reconSvcPolicyId"),
+    );
+    expect(policy).to.include({
+      policyNumber: "900299991",
+      origin: "carrier_direct",
+      active: true,
+    });
+  });
+}
+
+docs {
+  # GET /households/:id — the client a service intake created
+
+  See `Households/Get Household` for the endpoint. Every policy in `policies[]` now carries
+  `origin`: `"carrier_direct"` for a policy Allstate sold that the agency
+  services (PAC-173 PR 5, shown as "Allstate direct (1-800)"), `null` for the
+  agency's own. A CSR reaches the page through `crm_service:read`.
+}

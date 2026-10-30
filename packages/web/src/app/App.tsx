@@ -31,6 +31,9 @@ const ReconciliationPage = lazy(
 const AssignedRowsPage = lazy(
   () => import('@/features/reconciliation/AssignedRowsPage'),
 );
+const ServiceIntakePage = lazy(
+  () => import('@/features/reconciliation/ServiceIntakePage'),
+);
 const DataExportPage = lazy(
   () => import('@/features/data-export/DataExportPage'),
 );
@@ -436,6 +439,17 @@ export function App() {
                   element={
                     <LazyPage>
                       <AssignedRowsPage />
+                    </LazyPage>
+                  }
+                />
+                {/* Set up for service (PAC-173 PR 5): a 1-800 row's assignee
+                    records the client and the policy and hands it to a CSR.
+                    The page itself says when the row is not theirs to set up. */}
+                <Route
+                  path="/reconciliation/assigned/:rowId/service-intake"
+                  element={
+                    <LazyPage>
+                      <ServiceIntakePage />
                     </LazyPage>
                   }
                 />

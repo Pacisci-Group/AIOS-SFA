@@ -63,6 +63,11 @@ docs {
     `RECONCILIATION_ASSIGNEE_CANNOT_SELL` (PAC-173 PR 4, owner 28 Oct 2026):
     the assignee records it as Sold or a Cancel rewrite by entering the lead
     and the sale. A standard CSR still takes rows in every other tab.
+  - A **1-800 policy the app does not have** (1-800 review, `dash_only`) goes
+    only to someone who can set it up for service — `canSetUpService`
+    (`leads:write`, which every default Producer and CSR holds). Anyone else
+    is a `400` `RECONCILIATION_ASSIGNEE_CANNOT_SERVICE` (PAC-173 PR 5). A
+    1-800 policy the app already has takes Other only, so anyone may.
   - Handing the row to someone else, or taking it back, **clears an outcome
     under way** in the same write: the new person starts over, because the
     first one's lead stays in their own pipeline. A note change for the same
@@ -90,6 +95,8 @@ docs {
   - `400` — not an active Producer or CSR of this agency; validation
   - `400` `RECONCILIATION_ASSIGNEE_CANNOT_SELL` — a row missing from the app,
     to someone who cannot book a sale (checked only for a new assignee)
+  - `400` `RECONCILIATION_ASSIGNEE_CANNOT_SERVICE` — a 1-800 row the app does
+    not have, to someone who cannot set it up for service (new assignee only)
   - `404` — no such run or row in the agency
   - `409` — the row is already decided or needs no decision; the run was
     replaced by a newer upload or did not finish; someone else changed the

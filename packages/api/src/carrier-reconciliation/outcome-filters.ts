@@ -1,6 +1,47 @@
 import type { FilterQuery } from 'mongoose';
-import type { RowOutcome } from '../common/carrier-reconciliation/carry-forward';
+import {
+  isPendingServiceIntake,
+  type RowOutcome,
+} from '../common/carrier-reconciliation/carry-forward';
 import type { ReconciliationRow } from './schemas/reconciliation-row.schema';
+
+/** How long a welcome-call opener holds a pending row before another may try. */
+export const HAND_OFF_CLAIM_MS = 2 * 60 * 1000;
+
+/**
+ * Whether someone is opening this pending service intake's welcome call right
+ * now (PAC-173 PR 5): a claim younger than {@link HAND_OFF_CLAIM_MS}. One a
+ * crash left behind lapses.
+ */
+export function handOffClaimed(
+  outcome: RowOutcome | null | undefined,
+  at: Date = new Date(),
+): boolean {
+  return (
+    isPendingServiceIntake(outcome) &&
+    !!outcome?.handOffAt &&
+    outcome.handOffAt.getTime() > at.getTime() - HAND_OFF_CLAIM_MS
+  );
+}
+
+/**
+ * No live claim on the row's welcome call — what the opener matches to take
+ * one, and what an owner write clearing a pending service intake matches, so
+ * it never clears one whose call is being opened.
+ */
+export function noLiveHandOffClaim(
+  at: Date = new Date(),
+): FilterQuery<ReconciliationRow> {
+  return {
+    $nor: [
+      {
+        'outcome.handOffAt': {
+          $gt: new Date(at.getTime() - HAND_OFF_CLAIM_MS),
+        },
+      },
+    ],
+  };
+}
 
 /**
  * Compare-and-swap on a row's outcome as it was read (PAC-173 PR 4): every

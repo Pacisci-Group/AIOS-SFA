@@ -64,19 +64,23 @@ export class SoldSubmissionValidator {
     if (bySlug.size === 0) return;
 
     dto.policies.forEach((policy, index) => {
-      const carrier = bySlug.get(carrierSlug(policy.carrier));
-      if (!carrier?.policyNumberPattern) return;
-
-      const key = policyNumberKey(policy.policyNumber);
-      if (carrierPolicyNumberMatches(carrier.policyNumberPattern, key)) return;
-
-      throw new BadRequestException(
-        `Policy ${index + 1}: ${
-          carrier.policyNumberHint ??
-          `"${policy.policyNumber}" is not a valid ${carrier.name} policy number.`
-        }`,
-      );
+      const problem = numberFormatProblem(bySlug, policy);
+      if (problem)
+        throw new BadRequestException(`Policy ${index + 1}: ${problem}`);
     });
+  }
+
+  /**
+   * One policy's number against its carrier's format — the 1-800 service
+   * intake's single policy (PAC-173 PR 5). 400 with the catalog's hint.
+   */
+  async assertPolicyNumberFormat(
+    agencyId: string,
+    policy: { carrier: string; policyNumber: string },
+  ): Promise<void> {
+    const bySlug = await this.carriers.optionsBySlug(agencyId);
+    const problem = numberFormatProblem(bySlug, policy);
+    if (problem) throw new BadRequestException(problem);
   }
 
   /**
@@ -103,43 +107,76 @@ export class SoldSubmissionValidator {
     purposeFor: (kind: SoldUploadKind) => string,
   ): Promise<void> {
     for (const { attachment, kind } of collectAttachments(dto.policies)) {
-      /*
-       * Reject a key this agency and anchor did not produce, before touching
-       * storage — otherwise a caller could attach any object they knew of,
-       * including another agency's.
-       *
-       * The purpose carries the **kind** (PAC-56 #23), so this also rejects a
-       * JPEG presigned as a discount proof and then declared as the New
-       * Business Application: its key sits under the wrong prefix. The
-       * content-type check below is the second, independent gate.
-       */
-      this.storage.assertKeyOwnership(attachment.key, {
+      await this.verifyDocument(attachment, {
         agencyId,
         purpose: purposeFor(kind),
+        kind,
       });
-
-      const stored = await this.storage.statObject(attachment.key);
-      if (!stored) {
-        throw new NotFoundException(
-          'An uploaded document was not found in storage.',
-        );
-      }
-      if (stored.size > MAX_SOLD_DOCUMENT_BYTES) {
-        throw new BadRequestException('A document is larger than 10MB.');
-      }
-      const allowed = ALLOWED_CONTENT_TYPES[kind];
-      if (!stored.contentType || !allowed.has(stored.contentType)) {
-        throw new BadRequestException(
-          kind === 'new_business_application'
-            ? 'The new business application must be a PDF.'
-            : 'Documents must be a PDF, JPEG or PNG.',
-        );
-      }
-
-      attachment.contentType = stored.contentType ?? attachment.contentType;
-      attachment.size = stored.size;
     }
   }
+
+  /**
+   * {@link verifyAttachments} for one document, under a purpose the caller
+   * names — also how the 1-800 service intake verifies its signed application,
+   * which is anchored on the Dash row rather than a lead (PAC-173 PR 5).
+   * Mutates `attachment` to what storage reports.
+   */
+  async verifyDocument(
+    attachment: SoldDocumentMeta,
+    {
+      agencyId,
+      purpose,
+      kind,
+    }: { agencyId: string; purpose: string; kind: SoldUploadKind },
+  ): Promise<void> {
+    /*
+     * Reject a key this agency and anchor did not produce, before touching
+     * storage — otherwise a caller could attach any object they knew of,
+     * including another agency's.
+     *
+     * The purpose carries the **kind** (PAC-56 #23), so this also rejects a
+     * JPEG presigned as a discount proof and then declared as the New
+     * Business Application: its key sits under the wrong prefix. The
+     * content-type check below is the second, independent gate.
+     */
+    this.storage.assertKeyOwnership(attachment.key, { agencyId, purpose });
+
+    const stored = await this.storage.statObject(attachment.key);
+    if (!stored) {
+      throw new NotFoundException(
+        'An uploaded document was not found in storage.',
+      );
+    }
+    if (stored.size > MAX_SOLD_DOCUMENT_BYTES) {
+      throw new BadRequestException('A document is larger than 10MB.');
+    }
+    const allowed = ALLOWED_CONTENT_TYPES[kind];
+    if (!stored.contentType || !allowed.has(stored.contentType)) {
+      throw new BadRequestException(
+        kind === 'new_business_application'
+          ? 'The new business application must be a PDF.'
+          : 'Documents must be a PDF, JPEG or PNG.',
+      );
+    }
+
+    attachment.contentType = stored.contentType ?? attachment.contentType;
+    attachment.size = stored.size;
+  }
+}
+
+/** The catalog's complaint about a policy number, or `null` when it fits (or no rule applies). */
+function numberFormatProblem(
+  bySlug: Awaited<ReturnType<CarriersService['optionsBySlug']>>,
+  policy: { carrier: string; policyNumber: string },
+): string | null {
+  const carrier = bySlug.get(carrierSlug(policy.carrier));
+  if (!carrier?.policyNumberPattern) return null;
+  const key = policyNumberKey(policy.policyNumber);
+  if (carrierPolicyNumberMatches(carrier.policyNumberPattern, key)) return null;
+  return (
+    carrier.policyNumberHint ??
+    `"${policy.policyNumber}" is not a valid ${carrier.name} policy number.`
+  );
 }
 
 export type { SoldDocumentMeta };

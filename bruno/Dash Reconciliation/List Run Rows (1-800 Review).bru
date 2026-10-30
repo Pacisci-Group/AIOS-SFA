@@ -56,8 +56,9 @@ docs {
   - `reviewStatus` — `open` | `resolved` | `dismissed` (rows needing review only)
   - `assignee` — a user id, `me` or `unassigned`
   - `outcome` — what the assignee recorded (PAC-173 PR 4): `in_progress` or
-    `done` (by where it stands), or `sold` | `cancel_rewrite` | `other` (by
-    kind). Anything else is a `400`. See `List Run Rows (Outcome Done)`
+    `done` (by where it stands), or `sold` | `cancel_rewrite` |
+    `service_intake` | `other` (by kind). Anything else is a `400`. See
+    `List Run Rows (Outcome Done)` and `List Run Rows (Outcome Service Intake)`
   - `q` — policy number, customer or client name, Bind ID (substring)
   - `page`, `pageSize` (≤ 100, default 25)
 
@@ -74,4 +75,11 @@ docs {
   A matched row in the 1-800 tab also carries `direct_recorded_as_sale` when
   the app has the policy on a deal: a 1-800 policy is serviced, never sold. A
   Bind ID Dash names (`former_staff`) never raises it.
+
+  A 1-800 policy already **set up for service** (`app.origin:
+  "carrier_direct"`, PAC-173 PR 5) is the answer to that tab's question: its
+  line matches it clean — tab `matched`, context issue `direct_1800`, no
+  producer to check — and leaves the 1-800 tab. A re-upload carries the
+  finished outcome and its decision across to it. (`Reclassify Run` does not
+  re-match, so only a new upload moves the row.)
 }

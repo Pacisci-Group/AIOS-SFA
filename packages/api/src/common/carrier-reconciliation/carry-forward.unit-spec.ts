@@ -2,6 +2,7 @@ import {
   carriedAssignment,
   carriedOutcome,
   carriedReview,
+  type CarriedRow,
   type PreviousRowReview,
   type RowOutcome,
 } from './carry-forward';
@@ -204,5 +205,98 @@ describe('carriedOutcome', () => {
     expect(
       carriedOutcome({ ...row, issues: [...row.issues] }, previous()),
     ).toBeNull();
+  });
+
+  // PAC-173 PR 5: the line now matches the policy its service intake created.
+  describe('a 1-800 line set up for service since', () => {
+    const serviced = outcome({
+      kind: 'service_intake',
+      status: 'done',
+      step: null,
+      leadId: null,
+      policyId: 'p-direct',
+      householdId: 'h1',
+      csrId: 'u-casey',
+      onboardingId: 'o1',
+      ticketId: 't1',
+      completedById: 'u-pat',
+      completedAt: new Date('2026-10-04T09:01:00Z'),
+    });
+    const before = () =>
+      previous({
+        match: 'dash_only',
+        issues: ['not_staff_bind_id'],
+        status: 'resolved',
+        resolution: 'service_intake_recorded',
+        assignment,
+        outcome: serviced,
+      });
+    const matchedNow: CarriedRow = {
+      ...row,
+      match: 'matched',
+      issues: ['direct_1800', 'not_staff_bind_id'],
+      app: { policyId: 'p-direct', origin: 'carrier_direct' },
+      needsReview: false,
+    };
+
+    it('carries the finished outcome, its decision and its assignee', () => {
+      expect(carriedOutcome(matchedNow, before())).toEqual(serviced);
+      expect(carriedReview(matchedNow, before())?.resolution).toBe(
+        'service_intake_recorded',
+      );
+      expect(carriedAssignment(matchedNow, before())).toEqual(assignment);
+    });
+
+    it('only when the line matched the very policy it created', () => {
+      expect(
+        carriedOutcome(
+          {
+            ...matchedNow,
+            app: { policyId: 'p-other', origin: 'carrier_direct' },
+          },
+          before(),
+        ),
+      ).toBeNull();
+      expect(
+        carriedOutcome(
+          { ...matchedNow, app: { policyId: 'p-direct', origin: null } },
+          before(),
+        ),
+      ).toBeNull();
+    });
+
+    it('not onto a row that asks something new — a premium Dash now disagrees on', () => {
+      const premiumOff: CarriedRow = {
+        ...matchedNow,
+        issues: ['direct_1800', 'not_staff_bind_id', 'premium_mismatch'],
+        needsReview: true,
+      };
+      expect(carriedOutcome(premiumOff, before())).toBeNull();
+      expect(carriedReview(premiumOff, before())).toBeNull();
+    });
+
+    it('an unfinished one travels too, so its welcome call can still be opened', () => {
+      const pending = {
+        ...serviced,
+        status: 'in_progress' as const,
+        step: 'start_onboarding' as const,
+        onboardingId: null,
+        ticketId: null,
+        completedById: null,
+        completedAt: null,
+      };
+      const waiting = previous({
+        match: 'dash_only',
+        issues: ['not_staff_bind_id'],
+        status: 'open',
+        resolution: null,
+        assignment,
+        outcome: pending,
+      });
+      expect(carriedOutcome(matchedNow, waiting)).toEqual(pending);
+      expect(carriedAssignment(matchedNow, waiting)).toEqual(assignment);
+      // Nothing was decided: the new row asks again.
+      expect(carriedReview(matchedNow, waiting)).toBeNull();
+    });
   });
 });

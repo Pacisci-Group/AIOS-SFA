@@ -223,10 +223,31 @@ export class UserWorkReleaseService {
       // assignee: that is the record of who worked it, not open work. An
       // outcome they had under way goes too (PAC-173 PR 4): its lead just went
       // back to the pool above, so whoever takes the row next starts over.
-      // Open rows hold no finished outcome — finishing one decides the row.
-      this.reconciliationRowModel.updateMany(f.reconciliationRows, {
-        $set: { assignment: null, outcome: null },
-      }),
+      // Rows on a person's list hold no finished outcome (`openAssignmentsFilter`
+      // leaves those out), so nothing finished is cleared here.
+      //
+      // Except a 1-800 service intake waiting on its welcome call (PR 5): its
+      // household and policy are saved, so the outcome stays as their only
+      // link. The owner deciding or handing the row on opens the call, as does
+      // a re-upload of the same period; the call then re-checks its CSR, so it
+      // never goes to the person just removed.
+      (async () => {
+        const pendingIntake = {
+          'outcome.kind': 'service_intake',
+          'outcome.step': 'start_onboarding',
+        };
+        const [cleared, kept] = await Promise.all([
+          this.reconciliationRowModel.updateMany(
+            { ...f.reconciliationRows, $nor: [pendingIntake] },
+            { $set: { assignment: null, outcome: null } },
+          ),
+          this.reconciliationRowModel.updateMany(
+            { ...f.reconciliationRows, ...pendingIntake },
+            { $set: { assignment: null } },
+          ),
+        ]);
+        return { modifiedCount: cleared.modifiedCount + kept.modifiedCount };
+      })(),
     ]);
 
     await this.recordLeadActivities(leadIds, userId);

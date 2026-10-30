@@ -7,7 +7,9 @@ import {
   AgencyPermission,
   MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH,
   ModuleKey,
+  POLICY_ORIGIN_LABELS,
   RECONCILIATION_ASSIGNEE_CANNOT_SELL,
+  RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
   RECONCILIATION_IGNORED_REASON_LABELS,
   RECONCILIATION_OUTCOME_KIND_LABELS,
   RECONCILIATION_RESOLUTION_LABELS,
@@ -16,6 +18,7 @@ import {
   RECONCILIATION_REVIEW_STATUS_LABELS,
   RECONCILIATION_REVIEW_STATUSES,
   RECONCILIATION_TAB_LABELS,
+  reconciliationOutcomeKinds,
   type ReconciliationResolution,
 } from "@sfa/shared";
 import { DataRow, SectionLabel } from "@/components/common/DetailCard";
@@ -250,7 +253,16 @@ function RowDetail({
                     .filter(Boolean)
                     .join(" · ") || NOT_AVAILABLE}
                 />
-                <DataRow label="Producer" value={app.producerName ?? NOT_AVAILABLE} />
+                {/* A 1-800 policy set up for service has no deal and no
+                    producer: say where it came from instead (PAC-173 PR 5). */}
+                <DataRow
+                  label="Producer"
+                  value={
+                    app.origin
+                      ? POLICY_ORIGIN_LABELS[app.origin]
+                      : (app.producerName ?? NOT_AVAILABLE)
+                  }
+                />
                 <DataRow label="Sold" value={formatDay(app.soldDay)} />
                 <DataRow
                   label="Premium · items"
@@ -629,7 +641,11 @@ function AssignmentForm({
     onError: (error) => {
       toast.error(apiErrorMessage(error, "The assignment could not be saved."));
       // Someone's permissions changed since the list was read.
-      if (apiErrorCode(error) === RECONCILIATION_ASSIGNEE_CANNOT_SELL) {
+      const code = apiErrorCode(error);
+      if (
+        code === RECONCILIATION_ASSIGNEE_CANNOT_SELL ||
+        code === RECONCILIATION_ASSIGNEE_CANNOT_SERVICE
+      ) {
         void queryClient.invalidateQueries({
           queryKey: reconciliationOptionsKey,
         });
@@ -639,6 +655,9 @@ function AssignmentForm({
 
   const people = assignees.data ?? [];
   const needsSeller = row.tabs.includes("missing_from_app");
+  // A 1-800 policy the app lacks goes only to someone who can set it up for
+  // service (PAC-173 PR 5) — the API's rule, so the picker never offers a 400.
+  const needsService = reconciliationOutcomeKinds(row).includes("service_intake");
   const options = [
     { value: UNASSIGNED, label: "Unassigned" },
     // Someone who stopped qualifying (deactivated, or no longer a Producer or
@@ -656,6 +675,7 @@ function AssignmentForm({
       : []),
     ...people.map((person) => {
       const cannotSell = needsSeller && !person.canRecordSale;
+      const cannotService = needsService && !person.canSetUpService;
       return {
         value: person.id,
         label: (
@@ -664,12 +684,14 @@ function AssignmentForm({
             <span className="text-xs text-muted-foreground">
               {cannotSell
                 ? `${assigneeRoleLabel(person)} · Can't book a sale`
-                : assigneeRoleLabel(person)}
+                : cannotService
+                  ? `${assigneeRoleLabel(person)} · Can't set up service`
+                  : assigneeRoleLabel(person)}
             </span>
           </span>
         ),
         triggerLabel: person.name,
-        disabled: cannotSell,
+        disabled: cannotSell || cannotService,
       };
     }),
   ];

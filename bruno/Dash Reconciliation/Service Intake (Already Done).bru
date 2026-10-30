@@ -1,0 +1,58 @@
+meta {
+  name: Service Intake (Already Done)
+  type: http
+  seq: 61
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}/service-intake
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "primaryContact": {
+      "firstName": "Morgan",
+      "lastName": "Hale",
+      "dateOfBirth": "1979-03-21",
+      "phone": "(918) 555-0142",
+      "email": "morgan.hale@example.com"
+    },
+    "members": [],
+    "policy": {
+      "policyNumber": "900299991",
+      "policyType": "Auto",
+      "premium": 793.08,
+      "itemCount": 1,
+      "effectiveDate": "2026-10-15",
+      "newBusinessApplication": {
+        "key": "{{reconSvcKey}}",
+        "filename": "morgan-hale-application.pdf",
+        "contentType": "application/pdf",
+        "size": 2048
+      }
+    },
+    "assignedCsrId": "{{reconSvcCsrId}}"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST …/service-intake again — 409
+
+  A double submit creates nothing: the row is already set up for service.
+}

@@ -46,6 +46,7 @@ import {
   type RowsQueryDto,
 } from './dto/carrier-reconciliation.dto';
 import { ReconciliationAssignmentsService } from './reconciliation-assignments.service';
+import { ReconciliationOutcomesService } from './reconciliation-outcomes.service';
 import { ReconciliationRunsService } from './reconciliation-runs.service';
 
 const Id = () => new ZodValidationPipe(reconciliationIdSchema);
@@ -74,6 +75,7 @@ export class CarrierReconciliationController {
   constructor(
     private readonly runs: ReconciliationRunsService,
     private readonly assignments: ReconciliationAssignmentsService,
+    private readonly outcomes: ReconciliationOutcomesService,
   ) {}
 
   /** The assignee picker: the agency's active Producers and CSRs. */
@@ -175,15 +177,22 @@ export class CarrierReconciliationController {
    * not an active Producer/CSR here; 409 for a row already decided, an
    * unfinished run, a run a re-upload replaced (taking a row back there
    * too), or a concurrent change.
+   *
+   * A 1-800 service intake on the row still opening its welcome call is
+   * finished first (PAC-173 PR 5), so a hand-over never strands the client
+   * it saved.
    */
   @Patch('runs/:id/rows/:rowId/assignment')
   @RequireWrite(ModuleKey.CarrierReconciliation)
-  assign(
+  async assign(
     @Access() access: AccessContext,
     @Param('id', Id()) id: string,
     @Param('rowId', Id()) rowId: string,
     @Body(new ZodValidationPipe(assignRowSchema)) body: AssignRowDto,
   ): Promise<ReconciliationRowView> {
+    if (access.agencyId) {
+      await this.outcomes.settlePendingHandOff(access.agencyId, rowId);
+    }
     return this.assignments.assign(access, id, rowId, body);
   }
 }

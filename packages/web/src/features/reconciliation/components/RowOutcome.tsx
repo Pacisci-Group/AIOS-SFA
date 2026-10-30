@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import {
   canRecordReconciliationSale,
+  canSetUpReconciliationService,
   MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH,
   ModuleKey,
   RECONCILIATION_SALE_OUTCOME_KINDS,
@@ -57,6 +58,7 @@ const isSaleKind = (kind: ReconciliationOutcomeKind) =>
 const START_LABELS: Record<ReconciliationOutcomeKind, string> = {
   sold: "Record as sold",
   cancel_rewrite: "Cancel rewrite",
+  service_intake: "Set up for service",
   other: "Other…",
 };
 
@@ -72,6 +74,9 @@ const START_LABELS: Record<ReconciliationOutcomeKind, string> = {
  * - **Cancel rewrite** — entered the same way, then its replacement is
  *   written through the ordinary Cancel & rewrite chain, so the trail and the
  *   chargeback exist.
+ * - **Set up for service** — a 1-800 policy the app does not have (PR 5): its
+ *   own form records the client and the policy, never a sale, and opens a
+ *   CSR's welcome call.
  * - **Other** — anything else, in a note. Done at once.
  *
  * Finishing one resolves the row with the outcome's resolution, which is why
@@ -82,10 +87,11 @@ const START_LABELS: Record<ReconciliationOutcomeKind, string> = {
  * assigning, reassigning and deciding by hand in the sections around it, and
  * each of those stops an outcome under way (their forms say so).
  *
- * What is offered follows the row's tabs (`reconciliationOutcomeKinds`) and,
- * for the two sale kinds, whether the viewer can book a sale
- * (`canRecordReconciliationSale` — by permission, never role). The API checks
- * both again, and the outcome's own state.
+ * What is offered follows the row (`reconciliationOutcomeKinds`) and, for the
+ * two sale kinds, whether the viewer can book a sale
+ * (`canRecordReconciliationSale`); for a service intake, whether they can
+ * create leads (`canSetUpReconciliationService`) — by permission, never role.
+ * The API checks both again, and the outcome's own state.
  */
 export function RowOutcomeSection({
   row,
@@ -165,8 +171,18 @@ function OutcomeSummary({
     canEditSale && outcome.dealId
       ? { to: `/sold/${outcome.dealId}/edit`, label: "Open the sale" }
       : null,
+    canOpenRecords && outcome.householdId
+      ? { to: `/clients/${outcome.householdId}`, label: "Open household" }
+      : null,
     canOpenRecords && outcome.policyId
       ? { to: `/policies/${outcome.policyId}`, label: "Open policy" }
+      : null,
+    // The workspace opens a ticket from `?ticket=`; it needs CRM service.
+    can(`${ModuleKey.CrmService}:read`) && outcome.ticketId
+      ? {
+          to: `/crm/tickets?ticket=${outcome.ticketId}`,
+          label: "Open the welcome call",
+        }
       : null,
     canOpenRecords && outcome.replacementPolicyId
       ? {
@@ -243,6 +259,9 @@ function reportRefusal(queryClient: QueryClient, error: unknown) {
 /** The toast for an outcome the request found already finished. */
 function doneMessage(outcome: ReconciliationOutcome): string {
   if (outcome.kind === "other") return "Recorded. The row is resolved.";
+  if (outcome.kind === "service_intake") {
+    return "Set up for service — the welcome call is open, and the row is resolved.";
+  }
   return outcome.kind === "cancel_rewrite"
     ? "The replacement was already written — the row is resolved."
     : "The sale was already booked — the row is resolved.";
@@ -261,7 +280,13 @@ function doneMessage(outcome: ReconciliationOutcome): string {
  *   New Lead form. Both carry the row.
  * - `write_replacement` → the ordinary Cancel & rewrite chain on the policy
  *   the sale booked (`useStartReplacement`), carrying the row.
+ * - `start_onboarding` → the welcome call is opened again; the client and the
+ *   policy are already saved.
  * - done → said so, and the drawer shows it.
+ *
+ * **Set up for service** starts on its own page
+ * (`/reconciliation/assigned/:rowId/service-intake`), not with a request here:
+ * the form is the outcome's first write.
  *
  * Another kind is offered in place of the one under way only while nothing is
  * booked — the API's rule, mirrored so the buttons never offer a 409.
@@ -280,10 +305,16 @@ function OutcomeActions({
   const { permissions } = usePermissions();
   const [otherOpen, setOtherOpen] = useState(false);
 
-  const allowed = reconciliationOutcomeKinds(row.tabs);
+  const allowed = reconciliationOutcomeKinds(row);
   const canSell = canRecordReconciliationSale([...permissions]);
-  const kinds = allowed.filter((kind) => !isSaleKind(kind) || canSell);
+  const canService = canSetUpReconciliationService([...permissions]);
+  const kinds = allowed.filter(
+    (kind) =>
+      (!isSaleKind(kind) || canSell) &&
+      (kind !== "service_intake" || canService),
+  );
   const saleWithheld = !canSell && allowed.some(isSaleKind);
+  const serviceWithheld = !canService && allowed.includes("service_intake");
 
   const replacement = useStartReplacement(
     outcome?.policyId ?? "",
@@ -300,6 +331,12 @@ function OutcomeActions({
       if (!next) return;
       if (next.status === "done") {
         toast.success(doneMessage(next));
+        return;
+      }
+      if (next.step === "start_onboarding") {
+        toast.error(
+          "The welcome call still could not be opened. The client and the policy are saved — try again in a moment.",
+        );
         return;
       }
       if (next.step === "record_sale") {
@@ -329,7 +366,10 @@ function OutcomeActions({
   // The API refuses a sale kind — resuming included — to someone who can no
   // longer book one: the owner took the permission away, or a work transfer
   // handed the row to someone without it.
-  const resumeWithheld = !!underWay && isSaleKind(underWay.kind) && !canSell;
+  const resumeWithheld =
+    !!underWay &&
+    ((isSaleKind(underWay.kind) && !canSell) ||
+      (underWay.kind === "service_intake" && !canService));
 
   const kindButton = (kind: ReconciliationOutcomeKind, primary: boolean) => (
     <Button
@@ -337,9 +377,12 @@ function OutcomeActions({
       size="sm"
       variant={primary ? "default" : "outline"}
       disabled={busy}
-      onClick={() =>
-        kind === "other" ? setOtherOpen(true) : record.mutate(kind)
-      }
+      onClick={() => {
+        if (kind === "other") setOtherOpen(true);
+        else if (kind === "service_intake") {
+          navigate(`/reconciliation/assigned/${row.id}/service-intake`);
+        } else record.mutate(kind);
+      }}
     >
       {START_LABELS[kind]}
     </Button>
@@ -352,18 +395,37 @@ function OutcomeActions({
           <p className="text-sm text-muted-foreground">
             {kinds.some(isSaleKind)
               ? "What became of this line? Sold enters it on the New Lead and Sold forms, filled in from Dash. Cancel rewrite enters it the same way, then writes the policy that replaced it. Other is anything else, in a note. Finishing one resolves the row."
-              : "What became of this line? Record it in a note for the owner — that resolves the row."}
+              : kinds.includes("service_intake")
+                ? "Allstate sold this policy directly. Set up for service records the client and the policy — never a sale — and opens a CSR's welcome call. Other is anything else, in a note. Either one resolves the row."
+                : "What became of this line? Record it in a note for the owner — that resolves the row."}
           </p>
           <div className="flex flex-wrap gap-2">
-            {kinds.map((kind) => kindButton(kind, kind === "sold"))}
+            {kinds.map((kind) =>
+              kindButton(kind, kind === "sold" || kind === "service_intake"),
+            )}
           </div>
         </>
       ) : resumeWithheld ? (
         <p className="text-sm text-muted-foreground">
-          Finishing this sale takes permission to add leads and book sales,
-          which you don't have. Ask the owner to reassign the row or reopen it
-          {switchable ? ", or record it as something else below" : ""}.
+          {underWay.kind === "service_intake"
+            ? "Opening the welcome call takes permission to add leads, which you don't have. Ask the owner to reassign the row."
+            : `Finishing this sale takes permission to add leads and book sales, which you don't have. Ask the owner to reassign the row or reopen it${switchable ? ", or record it as something else below" : ""}.`}
         </p>
+      ) : underWay.step === "start_onboarding" ? (
+        <>
+          <p className="text-sm text-muted-foreground">
+            The client and the policy are saved, but the welcome call did not
+            open. Try again — it finishes the row.
+          </p>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => record.mutate(underWay.kind)}
+          >
+            {busy && <Loader2 aria-hidden className="animate-spin" />}
+            Open the welcome call
+          </Button>
+        </>
       ) : underWay.step === "write_replacement" ? (
         <>
           <p className="text-sm text-muted-foreground">
@@ -418,6 +480,13 @@ function OutcomeActions({
         <p className="text-xs text-muted-foreground">
           Recording it as sold takes permission to add leads and book sales,
           which you don't have. Ask the owner if it was a sale.
+        </p>
+      )}
+
+      {serviceWithheld && !underWay && (
+        <p className="text-xs text-muted-foreground">
+          Setting it up for service takes permission to add leads, which you
+          don't have. Ask the owner to reassign the row.
         </p>
       )}
 

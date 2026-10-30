@@ -1,0 +1,35 @@
+meta {
+  name: Upload Service Document
+  type: http
+  seq: 59
+}
+
+put {
+  url: {{reconSvcUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the application", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw application, straight to storage
+
+  Not an API endpoint, as `Upload NBA (Dash Row)`. `auth: none`; the
+  `Content-Type` must be `application/pdf`, the value the URL was signed for.
+}
