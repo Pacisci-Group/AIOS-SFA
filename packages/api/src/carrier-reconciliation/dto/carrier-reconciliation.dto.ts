@@ -1,5 +1,8 @@
 import {
   DATA_EXPORT_FORMATS,
+  MAX_POLICY_ITEM_COUNT,
+  MAX_RECONCILIATION_DOCUMENT_BYTES,
+  POLICY_TYPES,
   MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH,
@@ -13,6 +16,12 @@ import {
 } from '@sfa/shared';
 import { z } from 'zod';
 import { objectId } from '../../common/dashboard/dashboard-filter-query.dto';
+import { ymd } from '../../common/dto/business-date.dto';
+import {
+  intakeAddressSchema,
+  intakeMemberSchema,
+  intakePersonSchema,
+} from '../../leads/dto/create-lead.dto';
 
 /** `:id`, `:rowId`. */
 export const reconciliationIdSchema = objectId;
@@ -130,6 +139,65 @@ export const recordOutcomeSchema = z
     }
   });
 export type RecordOutcomeDto = z.infer<typeof recordOutcomeSchema>;
+
+/**
+ * `POST assigned/:rowId/documents/presign` — the signed application a 1-800
+ * service intake attaches (PAC-173 PR 5). PDF only, as for every new business
+ * application.
+ */
+export const presignRowDocumentSchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.literal('application/pdf', {
+    error: 'The new business application must be a PDF.',
+  }),
+  size: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(MAX_RECONCILIATION_DOCUMENT_BYTES, 'A document is larger than 10MB.'),
+});
+export type PresignRowDocumentDto = z.infer<typeof presignRowDocumentSchema>;
+
+/**
+ * `POST assigned/:rowId/service-intake` — a 1-800 row set up for service. The
+ * client is captured as a lead's household is (the lead DTO's own shapes: DOB,
+ * phone and email required on the primary), or pinned to an existing
+ * household; the policy's carrier is the run's, never the client's to say.
+ */
+export const serviceIntakeSchema = z.object({
+  householdId: objectId.nullable().optional(),
+  primaryContact: intakePersonSchema,
+  address: intakeAddressSchema.optional(),
+  members: z.array(intakeMemberSchema).max(10).default([]),
+  policy: z.object({
+    policyNumber: z.string().trim().min(1, 'Enter the policy number').max(60),
+    policyType: z.enum(POLICY_TYPES),
+    premium: z.coerce
+      .number()
+      .nonnegative('Premium must be 0 or greater')
+      .max(1_000_000, 'Too large'),
+    itemCount: z.coerce
+      .number()
+      .int('Whole numbers only')
+      .min(1, 'At least 1 item')
+      .max(MAX_POLICY_ITEM_COUNT, 'Too many'),
+    effectiveDate: ymd,
+    newBusinessApplication: z.object({
+      key: z.string().trim().min(1).max(512),
+      filename: z.string().trim().min(1).max(255),
+      contentType: z.string().trim().min(1).max(120),
+      size: z.coerce.number().int().nonnegative(),
+    }),
+  }),
+  assignedCsrId: objectId.transform((value) => value.toLowerCase()),
+  openingNote: z
+    .string()
+    .trim()
+    .max(MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH)
+    .nullable()
+    .optional(),
+});
+export type ServiceIntakeDto = z.infer<typeof serviceIntakeSchema>;
 
 /** The assignee's list: their own rows, or — with `:read` — someone else's. */
 export const assignedQuerySchema = z.object({

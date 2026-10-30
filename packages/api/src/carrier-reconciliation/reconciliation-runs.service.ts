@@ -43,6 +43,7 @@ import { clientAgencyId } from '../common/access/client-scope';
 import {
   carriedAssignment,
   carriedOutcome,
+  isPendingServiceIntake,
   carriedReview,
   type PreviousRowReview,
 } from '../common/carrier-reconciliation/carry-forward';
@@ -60,6 +61,7 @@ import {
 } from '../common/carrier-reconciliation/load-inputs';
 import { ProducerCodeIndex } from '../common/carrier-reconciliation/producer-code-index';
 import {
+  asksForDecision,
   deriveRow,
   matchRows,
   summarize,
@@ -76,8 +78,17 @@ import { isDuplicateKeyError } from '../common/mongo/duplicate-key';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
+import {
+  Contact,
+  type ContactDocument,
+} from '../contacts/schemas/contact.schema';
+import {
+  Household,
+  type HouseholdDocument,
+} from '../households/schemas/household.schema';
 import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
 import { StorageService } from '../storage/storage.service';
+import { ReconciliationOutcomesService } from './reconciliation-outcomes.service';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   ExportQueryDto,
@@ -87,7 +98,7 @@ import type {
   ReviewRowDto,
   RowsQueryDto,
 } from './dto/carrier-reconciliation.dto';
-import { outcomeAsRead } from './outcome-filters';
+import { noLiveHandOffClaim, outcomeAsRead } from './outcome-filters';
 import {
   isStale,
   outcomeLabel,
@@ -148,7 +159,12 @@ export class ReconciliationRunsService {
     private readonly carrierModel: Model<CarrierDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(Household.name)
+    private readonly householdModel: Model<HouseholdDocument>,
+    @InjectModel(Contact.name)
+    private readonly contactModel: Model<ContactDocument>,
     private readonly storage: StorageService,
+    private readonly outcomes: ReconciliationOutcomesService,
   ) {}
 
   private get models(): ReconciliationModels {
@@ -158,6 +174,8 @@ export class ReconciliationRunsService {
       agency: this.agencyModel,
       carrier: this.carrierModel,
       user: this.userModel,
+      household: this.householdModel,
+      contact: this.contactModel,
     };
   }
 
@@ -358,6 +376,12 @@ export class ReconciliationRunsService {
       })
       .sort({ createdAt: -1 })
       .lean<LeanRun>();
+    // A service intake on the run being replaced whose welcome call never
+    // opened would match its own policy now and carry nothing: open the call
+    // first, so its finished outcome carries (PAC-173 PR 5).
+    if (previous) {
+      await this.outcomes.finishPendingHandOffs(agencyId, previous._id);
+    }
     const previousReviews = previous
       ? await this.previousReviews(agencyId, previous._id)
       : new Map<string, PreviousRowReview>();
@@ -371,8 +395,11 @@ export class ReconciliationRunsService {
         rowKey: base.rowKey,
         match: base.match,
         issues: derived.issues,
+        app: base.app,
+        needsReview: derived.needsReview,
       };
       const carried = carriedReview(sameRow, previousReviews);
+      const outcome = carriedOutcome(sameRow, previousReviews);
       return {
         _id: ids.get(base.rowKey)!,
         agencyId,
@@ -401,7 +428,10 @@ export class ReconciliationRunsService {
             } satisfies StoredReview)
           : openReview(),
         assignment: carriedAssignment(sameRow, previousReviews),
-        outcome: carriedOutcome(sameRow, previousReviews),
+        outcome,
+        // A pending service intake carried here keeps the row asking until
+        // its welcome call is opened (PAC-173 PR 5).
+        needsReview: derived.needsReview || isPendingServiceIntake(outcome),
         searchText: searchText(base),
       };
     });
@@ -564,12 +594,14 @@ export class ReconciliationRunsService {
   ): Promise<ReconciliationRunDetail> {
     const agencyId = clientAgencyId(access);
     const run = await this.loadRun(agencyId, runId);
+    // What the assignees' lists hold (`openAssignmentsFilter`).
     const assignedOpen = {
       agencyId,
       runId: run._id,
       needsReview: true,
       'review.status': 'open',
       'assignment.userId': { $type: 'string' },
+      'outcome.status': { $ne: 'done' },
     };
     const [tabCounts, open, assigned, inProgress] = await Promise.all([
       this.tabCounts(agencyId, run._id),
@@ -674,6 +706,9 @@ export class ReconciliationRunsService {
   ): Promise<ReconciliationRowView> {
     const agencyId = clientAgencyId(access);
     const run = await this.loadRun(agencyId, runId);
+    // A service intake saved but waiting on its welcome call is finished
+    // first, so the decision never strands the client it created.
+    await this.outcomes.settlePendingHandOff(agencyId, rowId);
     const row = await this.rowModel
       .findOne({ _id: new Types.ObjectId(rowId), agencyId, runId: run._id })
       .lean<LeanRow>();
@@ -689,10 +724,29 @@ export class ReconciliationRunsService {
       carriedForwardFromRowId: null,
     };
     const clearsOutcome = open || row.outcome?.status === 'in_progress';
+    // A pending service intake left here could not be opened (CRM service
+    // off, or its call failed): clear it only while nobody is opening it, and
+    // let the row ask what its own tabs do again.
+    const clearsPending = clearsOutcome && isPendingServiceIntake(row.outcome);
     const updated = await this.rowModel
       .findOneAndUpdate(
-        { _id: row._id, agencyId, ...outcomeAsRead(row.outcome) },
-        { $set: clearsOutcome ? { review, outcome: null } : { review } },
+        {
+          _id: row._id,
+          agencyId,
+          ...outcomeAsRead(row.outcome),
+          ...(clearsPending ? noLiveHandOffClaim() : {}),
+        },
+        {
+          $set: clearsOutcome
+            ? {
+                review,
+                outcome: null,
+                ...(clearsPending
+                  ? { needsReview: asksForDecision(row.tabs) }
+                  : {}),
+              }
+            : { review },
+        },
         { new: true },
       )
       .lean<LeanRow>();
@@ -745,6 +799,8 @@ export class ReconciliationRunsService {
     const operations: Parameters<typeof this.rowModel.bulkWrite>[0] = [];
     const next = rows.map((row) => {
       const derived = deriveRow(baseOf(row), index);
+      // A pending service intake keeps its row asking (PAC-173 PR 5).
+      if (isPendingServiceIntake(row.outcome)) derived.needsReview = true;
       if (classificationKey(row) !== classificationKey(derived)) {
         operations.push({
           updateOne: {

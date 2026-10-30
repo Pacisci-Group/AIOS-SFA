@@ -174,6 +174,10 @@ export default function PolicyDetailPage() {
           <DetailCard title="Policy terms">
             <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
               <DataRow label="Carrier" value={policy.carrier ?? NOT_AVAILABLE} />
+              {/* Allstate sold it (1-800); the agency services it (PAC-173). */}
+              {display.origin && (
+                <DataRow label="Source" value={display.origin} />
+              )}
               <DataRow
                 label="Premium"
                 value={

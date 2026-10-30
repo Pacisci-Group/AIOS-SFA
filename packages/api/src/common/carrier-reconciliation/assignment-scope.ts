@@ -33,7 +33,9 @@ export async function currentRunIds(
 /**
  * Rows on those runs assigned to `userId` that still wait on a decision. A
  * decided row stays assigned to whoever had it — that is the record of who
- * worked it — but it is no longer on anyone's list.
+ * worked it — but it is no longer on anyone's list. So does a row whose
+ * outcome they finished while it still asks the owner something: a 1-800
+ * service intake carried onto a row whose premium now differs (PAC-173 PR 5).
  *
  * `agencyId` and `assignment.userId` are **strings** on these rows: an
  * ObjectId here would match nothing and say nothing. Ids are stored lower
@@ -50,5 +52,6 @@ export function openAssignmentsFilter(
     'assignment.userId': userId.toLowerCase(),
     needsReview: true,
     'review.status': 'open' as const,
+    'outcome.status': { $ne: 'done' as const },
   };
 }

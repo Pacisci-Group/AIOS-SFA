@@ -118,6 +118,13 @@ export function AddressAutocompleteField({
    * address the user just chose.
    */
   const justSelected = useRef<string | null>(null);
+  /**
+   * What the person last typed. Only that is looked up: a value the form wrote
+   * itself — a prefill, an existing client picked on the 1-800 service intake
+   * (PAC-173) — is already an address, and looking it up would start a billed
+   * session and open a list over the form that nobody asked for.
+   */
+  const lastTyped = useRef<string | null>(null);
 
   const debounced = useDebouncedValue(value, 250);
 
@@ -141,6 +148,7 @@ export function AddressAutocompleteField({
       return;
     }
     if (justSelected.current === term) return;
+    if (debounced !== lastTyped.current) return;
 
     // Guards against an out-of-order response overwriting a newer one. The user
     // types faster than the network answers.
@@ -235,6 +243,7 @@ export function AddressAutocompleteField({
             value={value}
             onChange={(e) => {
               justSelected.current = null;
+              lastTyped.current = e.target.value;
               field.handleChange(e.target.value);
             }}
             onKeyDown={(e) => {

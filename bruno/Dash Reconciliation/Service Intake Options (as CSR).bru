@@ -1,0 +1,54 @@
+meta {
+  name: Service Intake Options (as CSR)
+  type: http
+  seq: 56
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}/service-intake/options
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the CSRs the welcome call can go to, the caller among them", function () {
+    const assignees = res.getBody().assignees;
+    expect(assignees).to.be.an("array").that.is.not.empty;
+    expect(assignees[0]).to.have.keys(["id", "name", "email", "roles"]);
+    expect(assignees.map((person) => person.id)).to.include(bru.getVar("reconSvcCsrId"));
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId/service-intake/options — whose welcome call
+
+  - **Module:** `carrier_reconciliation` (enabled for the agency)
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read`
+  - **Data scope:** the row's assignee only
+
+  PAC-173 PR 5. The service-intake form's CSR picker: the agency's active
+  **CSR and CRM** role holders, as `GET /crm/service-tickets/assignees`
+  lists them — narrowed to the caller's branch unless their data scope is the
+  agency. Served on the row because a Producer, who may set a 1-800 policy up
+  for service too, holds no `crm_service:read` to ask the ticket endpoint.
+
+  ## Response `200`
+
+  ```json
+  { "assignees": [
+      { "id": "…", "name": "Casey Kim", "email": "casey.kim@demoagency.local", "roles": ["csr"] } ] }
+  ```
+
+  ## Errors
+  - `400` `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the row offers no service
+    intake (not a 1-800 policy the app lacks)
+  - `404` — no such row, or it is not assigned to the caller
+}

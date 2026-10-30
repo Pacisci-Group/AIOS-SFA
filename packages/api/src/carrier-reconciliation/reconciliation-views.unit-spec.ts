@@ -4,6 +4,7 @@ import {
   outcomeLabel,
   outcomeView,
   reconciliationPrefill,
+  serviceIntakeOpeningNote,
 } from './reconciliation-views';
 
 const PAT = 'a'.repeat(24);
@@ -40,6 +41,8 @@ describe('outcomeView', () => {
       householdId: 'h1',
       replacementPolicyId: null,
       chargebackId: null,
+      onboardingId: null,
+      ticketId: null,
       startedBy: { id: PAT, name: 'Pat Producer' },
       startedAt: '2026-10-04T09:00:00.000Z',
       completedBy: null,
@@ -59,6 +62,24 @@ describe('outcomeView', () => {
     );
     expect(view.completedBy).toEqual({ id: GONE, name: 'Former user' });
     expect(view.completedAt).toBe('2026-10-05T10:00:00.000Z');
+  });
+
+  it('links a service intake’s welcome call, and keeps its CSR to itself', () => {
+    const view = outcomeView(
+      outcome({
+        kind: 'service_intake',
+        status: 'done',
+        step: null,
+        leadId: null,
+        dealId: null,
+        csrId: 'u-casey',
+        onboardingId: 'o1',
+        ticketId: 't1',
+      }),
+      new Map(),
+    );
+    expect(view).toMatchObject({ onboardingId: 'o1', ticketId: 't1' });
+    expect(view).not.toHaveProperty('csrId');
   });
 });
 
@@ -119,6 +140,7 @@ describe('reconciliationPrefill', () => {
         effectiveDate: '2026-09-15',
         soldDate: '2026-09-02',
       },
+      serviceIntake: null,
     });
   });
 
@@ -153,10 +175,41 @@ describe('reconciliationPrefill', () => {
         effectiveDate: null,
         soldDate: null,
       },
+      serviceIntake: null,
     });
   });
 
   it('is null without a Dash line', () => {
     expect(reconciliationPrefill(null, 'Allstate')).toBeNull();
+  });
+
+  it('writes the welcome call’s opening note on a row that offers a service intake', () => {
+    const prefill = reconciliationPrefill(
+      dashRow({
+        bindId: 'OSCVANJ',
+        bindIdName: null,
+        channel: '1-800',
+        product: 'Standard Auto',
+        writtenPremium: 1793.08,
+        dateWritten: '2026-10-15',
+      }),
+      'Allstate',
+      { offersServiceIntake: true },
+    );
+    expect(prefill?.serviceIntake).toEqual({
+      openingNote:
+        '1-800 policy from Dash — bound by OSCVANJ on 2026-10-15 through 1-800, Standard Auto, written premium $1,793.08.',
+    });
+  });
+});
+
+describe('serviceIntakeOpeningNote', () => {
+  it('leaves out what Dash left blank', () => {
+    expect(serviceIntakeOpeningNote({})).toBe('1-800 policy from Dash.');
+    expect(
+      serviceIntakeOpeningNote({ bindId: 'OSCVANJ', writtenPremium: 12 }),
+    ).toBe(
+      '1-800 policy from Dash — bound by OSCVANJ, written premium $12.00.',
+    );
   });
 });

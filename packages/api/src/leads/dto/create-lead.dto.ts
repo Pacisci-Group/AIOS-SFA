@@ -69,6 +69,17 @@ const address = z.object({
 });
 
 /**
+ * The household half of a lead, shared with the 1-800 service intake
+ * (PAC-173 PR 5), which captures a household exactly as a lead does — DOB,
+ * phone and email on the primary — but creates no lead.
+ */
+export {
+  person as intakePersonSchema,
+  member as intakeMemberSchema,
+  address as intakeAddressSchema,
+};
+
+/**
  * One requested policy. Canonical labels only — a raw SmartSuite code is a 400,
  * the same rule the Quote Recap DTO applies: `normalizePolicyType` exists to
  * *read* legacy data, not to launder input.

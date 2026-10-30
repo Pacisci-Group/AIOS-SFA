@@ -227,6 +227,9 @@ export function outcomeView(
     householdId: outcome.householdId,
     replacementPolicyId: outcome.replacementPolicyId,
     chargebackId: outcome.chargebackId,
+    // Absent on outcomes stored before service intakes existed.
+    onboardingId: outcome.onboardingId ?? null,
+    ticketId: outcome.ticketId ?? null,
     startedBy: person(outcome.startedById),
     startedAt: new Date(outcome.startedAt).toISOString(),
     completedBy: person(outcome.completedById),
@@ -261,12 +264,16 @@ export function outcomeLabel(
  * - **Carrier** is the catalog name of the carrier the run was uploaded for —
  *   the one the report is from — which the Sold form's carrier list carries.
  *
+ * - **Service intake** (PAC-173 PR 5), only on a row that offers one: the
+ *   welcome call's opening note, saying where the policy came from.
+ *
  * Tolerant of a `dash` snapshot missing fields (one stored by hand, or by an
  * older reader): anything absent reads as unknown.
  */
 export function reconciliationPrefill(
   dash: Partial<DashRow> | null,
   carrierName: string | null,
+  { offersServiceIntake = false }: { offersServiceIntake?: boolean } = {},
 ): ReconciliationPrefill | null {
   if (!dash) return null;
   const soldDate = dash.dateWritten ?? dash.issuedDate ?? null;
@@ -282,7 +289,39 @@ export function reconciliationPrefill(
       effectiveDate: dash.issuedDate ?? dash.dateWritten ?? null,
       soldDate,
     },
+    serviceIntake: offersServiceIntake
+      ? { openingNote: serviceIntakeOpeningNote(dash) }
+      : null,
   };
+}
+
+/**
+ * "1-800 policy from Dash — bound by OSCVANJ on 2026-10-15 through 1-800,
+ * Standard Auto, written premium $793.08." Whatever Dash left blank is left
+ * out. The CSR reads it first on the welcome call, so it says where the client
+ * came from before anything else.
+ */
+export function serviceIntakeOpeningNote(dash: Partial<DashRow>): string {
+  const day = dash.dateWritten ?? dash.issuedDate ?? null;
+  const bound = [
+    dash.bindId ? `bound by ${dash.bindId}` : null,
+    day ? `on ${day}` : null,
+    dash.channel ? `through ${dash.channel}` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const details = [
+    dash.product?.trim() || null,
+    dash.writtenPremium != null
+      ? `written premium $${dash.writtenPremium.toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`
+      : null,
+  ].filter(Boolean);
+  return `1-800 policy from Dash${bound ? ` — ${bound}` : ''}${
+    details.length ? `, ${details.join(', ')}` : ''
+  }.`;
 }
 
 function assignmentView(
@@ -346,5 +385,7 @@ function appView(
     items: app.items,
     clientName: app.clientName,
     businessType: app.businessType,
+    // Absent on snapshots stored before 1-800 policies were serviced.
+    origin: app.origin ?? null,
   };
 }

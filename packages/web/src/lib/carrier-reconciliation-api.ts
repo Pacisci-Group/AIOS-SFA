@@ -12,6 +12,9 @@ import type {
   ReconciliationRowView,
   ReconciliationRunDetail,
   ReconciliationRunListResponse,
+  ReconciliationServiceIntakeInput,
+  ReconciliationServiceIntakeOptions,
+  ReconciliationServiceIntakeResponse,
   ReconciliationTab,
   RecordReconciliationOutcomeInput,
 } from "@sfa/shared";
@@ -35,6 +38,9 @@ export type {
   ReconciliationRowView,
   ReconciliationRunDetail,
   ReconciliationRunView,
+  ReconciliationServiceIntakeInput,
+  ReconciliationServiceIntakeOptions,
+  ReconciliationServiceIntakeResponse,
   ReconciliationSuggestion,
   ReconciliationTab,
   ReconciliationTotals,
@@ -60,6 +66,8 @@ export const reconciliationAssignedListKey = (params: AssignedRowsParams) =>
   [...reconciliationAssignedKey, "list", params] as const;
 export const reconciliationAssignedRowKey = (rowId: string) =>
   [...reconciliationAssignedKey, "row", rowId] as const;
+export const reconciliationServiceIntakeOptionsKey = (rowId: string) =>
+  [...reconciliationAssignedKey, "service-intake-options", rowId] as const;
 
 const BASE = "/carrier-reconciliation";
 
@@ -230,6 +238,35 @@ export function recordReconciliationOutcome(
   return apiFetch<ReconciliationAssignedRowDetail>(
     `${BASE}/assigned/${rowId}/outcome`,
     { method: "PATCH", body: JSON.stringify(body) },
+  );
+}
+
+/**
+ * The CSRs a 1-800 service intake's welcome call can go to (PAC-173 PR 5) —
+ * the ticket picker's pool, served on the row because a Producer cannot ask
+ * the ticket endpoints. 400 on a row that offers no service intake.
+ */
+export function getServiceIntakeOptions(rowId: string) {
+  return apiFetch<ReconciliationServiceIntakeOptions>(
+    `${BASE}/assigned/${rowId}/service-intake/options`,
+  );
+}
+
+/**
+ * Set a 1-800 row up for service, as its assignee (PAC-173 PR 5): the
+ * household, a `carrier_direct` policy with its signed application (uploaded
+ * through `uploadSoldDocument` with the `reconciliation` scope), and the CSR's
+ * welcome call. Answers with what it created and the row; `ticketId: null`
+ * means the household and policy are saved but the welcome call did not open,
+ * and the row's Continue opens it.
+ */
+export function submitServiceIntake(
+  rowId: string,
+  body: ReconciliationServiceIntakeInput,
+) {
+  return apiFetch<ReconciliationServiceIntakeResponse>(
+    `${BASE}/assigned/${rowId}/service-intake`,
+    { method: "POST", body: JSON.stringify(body) },
   );
 }
 

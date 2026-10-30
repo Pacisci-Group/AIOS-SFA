@@ -17,27 +17,54 @@ import {
   RECONCILIATION_SALE_OUTCOME_KINDS,
   RECONCILIATION_TAB_LABELS,
   canRecordReconciliationSale,
+  canSetUpReconciliationService,
   primaryReconciliationTab,
   reconciliationOutcomeKinds,
   type AccessContext,
   type ReconciliationAssignedRowDetail,
   type ReconciliationOutcomeKind,
+  type ReconciliationPresignResponse,
+  type ReconciliationServiceIntakeOptions,
+  type ReconciliationServiceIntakeResponse,
 } from '@sfa/shared';
-import { Types, type Model } from 'mongoose';
+import { Types, type ClientSession, type Model } from 'mongoose';
 import {
   Chargeback,
   type ChargebackDocument,
 } from '../chargebacks/schemas/chargeback.schema';
+import { ServicedPolicyIntakeService } from '../clients/serviced-policy-intake.service';
 import { clientAgencyId } from '../common/access/client-scope';
-import type { RowOutcome } from '../common/carrier-reconciliation/carry-forward';
+import {
+  isPendingServiceIntake,
+  type RowOutcome,
+} from '../common/carrier-reconciliation/carry-forward';
 import { reconciliationPolicyKey } from '../common/carrier-reconciliation/dash-file-reader';
+import { asksForDecision } from '../common/carrier-reconciliation/reconcile';
+import { reconciliationDocumentPurpose } from '../common/carrier-reconciliation/reconciliation-file-types';
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
+import type { ContactFieldConflict } from '../leads/intake/intake.types';
+import { normalizePolicyNumber } from '../policies/policy-number';
 import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
-import type { RecordOutcomeDto } from './dto/carrier-reconciliation.dto';
-import { outcomeAsRead } from './outcome-filters';
+import { SoldSubmissionValidator } from '../sold-deals/intake/sold-submission.validator';
+import { StorageService } from '../storage/storage.service';
+import type {
+  PresignRowDocumentDto,
+  RecordOutcomeDto,
+  ServiceIntakeDto,
+} from './dto/carrier-reconciliation.dto';
+import {
+  handOffClaimed,
+  noLiveHandOffClaim,
+  outcomeAsRead,
+} from './outcome-filters';
 import { ReconciliationAssignmentsService } from './reconciliation-assignments.service';
-import { isStale, type LeanRow, type LeanRun } from './reconciliation-views';
+import {
+  isStale,
+  serviceIntakeOpeningNote,
+  type LeanRow,
+  type LeanRun,
+} from './reconciliation-views';
 import {
   ReconciliationRow,
   type ReconciliationRowDocument,
@@ -60,7 +87,7 @@ export interface ReconciliationSale {
 
 /**
  * What the assignee records on a Dash row (PAC-173 PR 4): **Sold**, **Cancel
- * rewrite** or **Other**.
+ * rewrite**, **Service intake** (PR 5) or **Other**.
  *
  * - **Other** is a note, and finishes the row at once.
  * - **Sold** starts at `record_sale`: the assignee enters the Dash line as an
@@ -70,6 +97,10 @@ export interface ReconciliationSale {
  * - **Cancel rewrite** starts the same way; booking the sale moves it to
  *   `write_replacement`, and the replacement, written through the normal
  *   cancel-rewrite chain (which writes the chargeback), finishes it.
+ * - **Service intake** — a 1-800 policy the app does not have — is one form
+ *   ({@link serviceIntake}): the household, a `carrier_direct` policy with no
+ *   deal, and the outcome at `start_onboarding` commit together; the CSR's
+ *   welcome call opens after, and finishes it. Never a sale.
  *
  * Finishing writes the row's decision too (`RECONCILIATION_OUTCOME_RESOLUTION`),
  * by the person who finished it, so the owner's tabs read the same as for a
@@ -117,6 +148,9 @@ export class ReconciliationOutcomesService {
     @InjectModel(Agency.name)
     private readonly agencyModel: Model<AgencyDocument>,
     private readonly assignments: ReconciliationAssignmentsService,
+    private readonly intake: ServicedPolicyIntakeService,
+    private readonly validator: SoldSubmissionValidator,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -165,7 +199,11 @@ export class ReconciliationOutcomesService {
     if (!row.needsReview || row.review.status !== 'open') {
       throw new ConflictException('This row has already been decided.');
     }
-    if (!reconciliationOutcomeKinds(row.tabs).includes(dto.kind)) {
+    // A pending service intake is Continued wherever its row now is — one a
+    // re-upload carried onto a matched row included.
+    const continuing =
+      dto.kind === 'service_intake' && isPendingServiceIntake(current);
+    if (!continuing && !reconciliationOutcomeKinds(row).includes(dto.kind)) {
       const tab = primaryReconciliationTab(row.tabs);
       throw new BadRequestException({
         code: RECONCILIATION_OUTCOME_NOT_ALLOWED,
@@ -183,6 +221,23 @@ export class ReconciliationOutcomesService {
         message:
           'Recording this as a sale needs permission to create leads and record sales.',
       });
+    }
+    if (dto.kind === 'service_intake') {
+      assertCanSetUpService(access);
+      // Continue: the household and policy are saved, the welcome call is not
+      // open yet. Anything else starts from the form, which carries the client.
+      if (current?.kind === 'service_intake') {
+        await this.assertCrmServiceOn(agencyId);
+        const { row: handedOff } = await this.finishHandOff(access.userId, row);
+        return this.assignments.assignedDetail(agencyId, handedOff);
+      }
+      if (!current) {
+        throw new BadRequestException({
+          code: RECONCILIATION_OUTCOME_NOT_ALLOWED,
+          message:
+            'Set up for service runs from its form, which records the client and the policy.',
+        });
+      }
     }
 
     if (current?.kind === dto.kind) {
@@ -203,7 +258,9 @@ export class ReconciliationOutcomesService {
       throw new ConflictException({
         code: RECONCILIATION_OUTCOME_LOCKED,
         message:
-          'A sale is already booked on this row, so what it is recorded as cannot change. Finish it, or ask the owner to reopen the row.',
+          current.kind === 'service_intake'
+            ? 'This policy is already set up for service, so what the row is recorded as cannot change. Continue to open its welcome call, or ask the owner to reopen the row.'
+            : 'A sale is already booked on this row, so what it is recorded as cannot change. Finish it, or ask the owner to reopen the row.',
       });
     }
 
@@ -231,6 +288,467 @@ export class ReconciliationOutcomesService {
     );
     if (!updated) throw new ConflictException(CHANGED);
     return this.assignments.assignedDetail(agencyId, updated);
+  }
+
+  // -------------------------------------------------------------------------
+  // Service intake — a 1-800 policy set up for service (PAC-173 PR 5)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `POST carrier-reconciliation/assigned/:rowId/documents/presign` — where
+   * the service intake's signed application goes: under the row, PDF only.
+   * The assignee's, on a row of a current run that still waits on a decision
+   * and offers a service intake, and only with `leads:write` — the intake's
+   * own gates, so nothing is uploaded for a row it would refuse.
+   */
+  async presignDocument(
+    access: AccessContext,
+    rowId: string,
+    dto: PresignRowDocumentDto,
+  ): Promise<ReconciliationPresignResponse> {
+    const { agencyId, row } = await this.workableRow(access, rowId);
+    if (!row.needsReview || row.review.status !== 'open') {
+      throw new ConflictException('This row has already been decided.');
+    }
+    assertOffersServiceIntake(row);
+    assertCanSetUpService(access);
+    const key = this.storage.buildObjectKey({
+      agencyId,
+      purpose: reconciliationDocumentPurpose(String(row._id)),
+      filename: dto.filename,
+    });
+    return this.storage.createPresignedUpload(key, dto.contentType);
+  }
+
+  /**
+   * `GET carrier-reconciliation/assigned/:rowId/service-intake/options` — the
+   * CSRs the welcome call can go to. Served on the row because a Producer
+   * holds no `crm_service:read` to ask the ticket picker; it is that picker's
+   * pool, branch-clamped the same way.
+   */
+  async serviceIntakeOptions(
+    access: AccessContext,
+    rowId: string,
+  ): Promise<ReconciliationServiceIntakeOptions> {
+    const { row } = await this.assigneeRow(access, rowId);
+    assertOffersServiceIntake(row);
+    assertCanSetUpService(access);
+    return { assignees: await this.intake.assignableCsrs(access) };
+  }
+
+  /**
+   * `POST carrier-reconciliation/assigned/:rowId/service-intake` — set the
+   * 1-800 policy up for service: the household (captured as a lead's), a
+   * `carrier_direct` policy with its signed application and no deal, then the
+   * CSR's welcome call. Never a sale.
+   *
+   * The household, the policy and the row's outcome (at `start_onboarding`)
+   * commit in one transaction, the outcome last; the welcome call opens after
+   * it, because `startOnboarding` takes no session, and that finishes the
+   * outcome. If opening it fails, the answer still says what was saved
+   * (`onboardingId: null`), and Continue opens it.
+   *
+   * Refused before anything is written: a row not the caller's (404), not on
+   * a current finished run or already decided (409), not a Dash-only 1-800
+   * row (400), without `leads:write` (403), with CRM service off (409), whose
+   * number is already on a sale in the app (409 — the row is stale), a number
+   * the carrier's format rejects, an application not uploaded under this row
+   * or not a PDF, or a CSR outside the pool (400).
+   */
+  async serviceIntake(
+    access: AccessContext,
+    branchId: string | null,
+    rowId: string,
+    dto: ServiceIntakeDto,
+  ): Promise<ReconciliationServiceIntakeResponse> {
+    const { agencyId, row } = await this.workableRow(access, rowId);
+    const current = row.outcome ?? null;
+    if (current?.kind === 'service_intake' && current.status === 'done') {
+      throw new ConflictException('This policy is already set up for service.');
+    }
+    if (!row.needsReview || row.review.status !== 'open') {
+      throw new ConflictException('This row has already been decided.');
+    }
+    if (!isPendingServiceIntake(current)) assertOffersServiceIntake(row);
+    assertCanSetUpService(access);
+    await this.assertCrmServiceOn(agencyId);
+    if (current?.kind === 'service_intake') {
+      // Saved before, welcome call not open: the form has nothing to add.
+      const { row: handedOff, handed } = await this.finishHandOff(
+        access.userId,
+        row,
+      );
+      return this.intakeResponse(agencyId, handedOff, {
+        householdId: current.householdId ?? '',
+        policyId: current.policyId ?? '',
+        handed,
+      });
+    }
+    if (current) {
+      throw new ConflictException({
+        code: RECONCILIATION_OUTCOME_LOCKED,
+        message: `This row is already being recorded as ${RECONCILIATION_OUTCOME_KIND_LABELS[current.kind]}.`,
+      });
+    }
+
+    const carrier =
+      (await this.assignments.carrierNameOfRun(agencyId, row.runId)) ??
+      'Allstate';
+    // The policy is the Dash line's: another number would leave this line
+    // unmatched and could make a different line read as set up for service.
+    if (
+      row.dash?.policyKey &&
+      reconciliationPolicyKey(dto.policy.policyNumber) !== row.dash.policyKey
+    ) {
+      throw new BadRequestException(
+        `The policy number has to be this Dash line's (${row.dash.policyNumber ?? row.dash.policyKey}).`,
+      );
+    }
+    const numberKey = normalizePolicyNumber(dto.policy.policyNumber);
+    if (numberKey) {
+      const booked = await this.policyModel
+        .findOne({
+          agencyId,
+          policyNumberKey: numberKey,
+          dealId: { $ne: null },
+          isTestRecord: { $ne: true },
+        })
+        .select('_id')
+        .lean<{ _id: Types.ObjectId }>();
+      if (booked) {
+        throw new ConflictException(
+          `Policy ${dto.policy.policyNumber} is already on a sale in the app, and a 1-800 policy is never a sale. Record Other, and tell the owner.`,
+        );
+      }
+    }
+    await this.validator.assertPolicyNumberFormat(agencyId, {
+      carrier,
+      policyNumber: dto.policy.policyNumber,
+    });
+    const application = { ...dto.policy.newBusinessApplication };
+    await this.validator.verifyDocument(application, {
+      agencyId,
+      purpose: reconciliationDocumentPurpose(String(row._id)),
+      kind: 'new_business_application',
+    });
+    const csr = (await this.intake.assignableCsrs(access)).find(
+      (person) => person.id === dto.assignedCsrId,
+    );
+    if (!csr) {
+      throw new BadRequestException(
+        'The welcome call can go only to an active CSR or CRM you can assign tickets to.',
+      );
+    }
+
+    let saved: LeanRow | null = null;
+    const startedAt = new Date();
+    const result = await this.intake.create(
+      access,
+      branchId,
+      {
+        householdId: dto.householdId ?? null,
+        primaryContact: dto.primaryContact,
+        address: dto.address,
+        members: dto.members,
+        policy: {
+          policyNumber: dto.policy.policyNumber,
+          policyType: dto.policy.policyType,
+          carrier,
+          premium: dto.policy.premium,
+          itemCount: dto.policy.itemCount,
+          effectiveDate: dto.policy.effectiveDate,
+          newBusinessApplication: application,
+        },
+        csrId: csr.id,
+      },
+      {
+        beforeCommit: async (session, created) => {
+          saved = await this.writeOutcome(
+            row,
+            {
+              kind: 'service_intake',
+              status: 'in_progress',
+              step: 'start_onboarding',
+              // The welcome call's opening line — what the assignee wrote,
+              // plus any contact detail the form gave that differs from the
+              // one on file (never applied). Kept here, inside the commit, so
+              // a retried hand-off opens the call with all of it.
+              note:
+                [
+                  openingNoteFor(row, dto.openingNote),
+                  ...created.conflicts.map(conflictLine),
+                ].join('\n\n') || null,
+              leadId: null,
+              dealId: null,
+              policyId: String(created.policyId),
+              householdId: String(created.householdId),
+              replacementPolicyId: null,
+              chargebackId: null,
+              csrId: csr.id,
+              onboardingId: null,
+              ticketId: null,
+              startedById: access.userId,
+              startedAt,
+              completedById: null,
+              completedAt: null,
+            },
+            session,
+          );
+          // Moved first — decided, reassigned, recorded: nothing is created.
+          if (!saved) throw new ConflictException(CHANGED);
+        },
+      },
+    );
+
+    const { row: handedOff, handed } = await this.finishHandOff(
+      access.userId,
+      saved!,
+    );
+    // Said from what this request created, not from the row re-read: the
+    // owner may have moved the row in between, and the client, the policy and
+    // (usually) the welcome call exist either way.
+    return this.intakeResponse(agencyId, handedOff, {
+      householdId: String(result.householdId),
+      policyId: String(result.policyId),
+      handed,
+    });
+  }
+
+  /**
+   * Before the owner decides, reassigns or takes back a row (PAC-173 PR 5):
+   * a service intake on it still waiting at `start_onboarding` has its
+   * household and policy saved already, so its welcome call is opened first
+   * — clearing the outcome instead would leave them linked to nothing, and
+   * let the next person set the same policy up again. Best-effort; a no-op
+   * for any other row, and while CRM service is off.
+   *
+   * A 409 while someone else is opening that call: the owner's action would
+   * clear the outcome under them. Their write, or the claim lapsing, ends it.
+   */
+  async settlePendingHandOff(agencyId: string, rowId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(rowId)) return;
+    const row = await this.rowModel
+      .findOne({
+        _id: new Types.ObjectId(rowId),
+        agencyId,
+        'outcome.kind': 'service_intake',
+        'outcome.status': 'in_progress',
+        'outcome.step': 'start_onboarding',
+      })
+      .lean<LeanRow>();
+    if (!row || !(await this.assignments.crmServiceOn(agencyId))) return;
+    const { row: now } = await this.finishHandOff(
+      row.outcome!.startedById,
+      row,
+    );
+    if (handOffClaimed(now.outcome)) {
+      throw new ConflictException(
+        'The welcome call for this row is being opened right now. Try again in a moment.',
+      );
+    }
+  }
+
+  /**
+   * A re-upload is about to replace `runId` (PAC-173 PR 5): open the welcome
+   * call of every service intake on it still waiting at `start_onboarding`,
+   * so the finished outcome carries to the new row — which now matches the
+   * policy the intake created, needs no decision, and could never be
+   * Continued. Best-effort, per row; returns how many it finished.
+   */
+  async finishPendingHandOffs(
+    agencyId: string,
+    runId: Types.ObjectId,
+  ): Promise<number> {
+    const pending = await this.rowModel
+      .find({
+        agencyId,
+        runId,
+        'outcome.kind': 'service_intake',
+        'outcome.status': 'in_progress',
+        'outcome.step': 'start_onboarding',
+      })
+      .lean<LeanRow[]>();
+    let finishedCount = 0;
+    for (const row of pending) {
+      // On the assignee's behalf: they set it up, and Continue would have
+      // been theirs. Skipped while CRM service is off, as Continue is.
+      if (!(await this.assignments.crmServiceOn(agencyId))) break;
+      const { handed } = await this.finishHandOff(
+        row.outcome!.startedById,
+        row,
+      );
+      if (handed) finishedCount += 1;
+    }
+    return finishedCount;
+  }
+
+  /**
+   * Open the welcome call for a service intake saved at `start_onboarding`,
+   * and finish the outcome with it — by `actorId`, the caller (or, for an
+   * upload finishing it, the assignee who started it).
+   *
+   * Never throws: the household and the policy are saved either way, and a
+   * failure leaves the row where Continue retries it. Returns the row as it
+   * now stands, and what was opened (`handed`, `null` when nothing was) —
+   * which can be open even when the row moved before it was recorded.
+   */
+  private async finishHandOff(
+    actorId: string,
+    row: LeanRow,
+  ): Promise<{
+    row: LeanRow;
+    handed: { onboardingId: string; ticketId: string } | null;
+  }> {
+    const outcome = row.outcome;
+    if (
+      outcome?.kind !== 'service_intake' ||
+      outcome.status !== 'in_progress' ||
+      !outcome.householdId ||
+      !outcome.policyId
+    ) {
+      return { row, handed: null };
+    }
+    // One opener at a time: the assignee's own request, a Continue, the
+    // owner's action and an upload can all reach a pending row at once, and
+    // `startOnboarding` dedupes only on a deal. The claim is timed, so one a
+    // crash left behind lapses; a failure releases it below.
+    const claimedAt = new Date();
+    const claimed = await this.rowModel
+      .findOneAndUpdate(
+        {
+          _id: row._id,
+          agencyId: row.agencyId,
+          ...outcomeAsRead(outcome),
+          ...noLiveHandOffClaim(claimedAt),
+        },
+        { $set: { 'outcome.handOffAt': claimedAt } },
+        { new: true },
+      )
+      .lean<LeanRow>();
+    if (!claimed) {
+      const now =
+        (await this.rowModel
+          .findOne({ _id: row._id, agencyId: row.agencyId })
+          .lean<LeanRow>()) ?? row;
+      return { row: now, handed: null };
+    }
+    let handed: { onboardingId: string; ticketId: string } | null = null;
+    try {
+      handed = await this.intake.handOff({
+        agencyId: row.agencyId,
+        householdId: outcome.householdId,
+        policyId: outcome.policyId,
+        csrId: outcome.csrId ?? null,
+        salesProducerName: row.dash?.bindId
+          ? `Allstate 1-800 (${row.dash.bindId})`
+          : 'Allstate 1-800',
+        openingNote: outcome.note ?? '',
+        createdByUserId: actorId,
+      });
+      const done = await this.writeOutcome(claimed, {
+        ...finished(outcome, actorId, new Date()),
+        onboardingId: handed.onboardingId,
+        ticketId: handed.ticketId,
+        handOffAt: null,
+      });
+      if (done) return { row: done, handed };
+      // Decided, reassigned or reopened in between: the welcome call is open
+      // and no row links it — the sale hook's logged no-op, in kind.
+      this.logger.warn(
+        `Dash row ${String(row._id)}: welcome call ${handed.ticketId} opened, but the row changed before it was recorded.`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Dash row ${String(row._id)}: opening the welcome call failed; Continue retries it — ${String(error)}`,
+      );
+      await this.rowModel.updateOne(
+        {
+          _id: row._id,
+          agencyId: row.agencyId,
+          'outcome.handOffAt': claimedAt,
+        },
+        { $set: { 'outcome.handOffAt': null } },
+      );
+    }
+    const now =
+      (await this.rowModel
+        .findOne({ _id: row._id, agencyId: row.agencyId })
+        .lean<LeanRow>()) ?? row;
+    return { row: now, handed };
+  }
+
+  /**
+   * The intake's answer. The ids are what the request created and opened; the
+   * row is the caller's view of it, or `null` once it is not theirs to see —
+   * the owner took it back between the commit and the hand-off.
+   */
+  private async intakeResponse(
+    agencyId: string,
+    row: LeanRow,
+    made: {
+      householdId: string;
+      policyId: string;
+      handed: { onboardingId: string; ticketId: string } | null;
+    },
+  ): Promise<ReconciliationServiceIntakeResponse> {
+    let view: ReconciliationAssignedRowDetail | null = null;
+    try {
+      view = await this.assignments.assignedDetail(agencyId, row);
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) throw error;
+    }
+    return {
+      householdId: made.householdId,
+      policyId: made.policyId,
+      onboardingId: made.handed?.onboardingId ?? null,
+      ticketId: made.handed?.ticketId ?? null,
+      row: view,
+    };
+  }
+
+  /** 409 while the agency has CRM service off: no welcome call can open. */
+  private async assertCrmServiceOn(agencyId: string): Promise<void> {
+    if (await this.assignments.crmServiceOn(agencyId)) return;
+    throw new ConflictException(
+      'CRM service is off for this agency, so no welcome call can be opened. Record Other, or ask the owner to turn it on.',
+    );
+  }
+
+  /** The caller's own row — 404 for anyone else's. */
+  private async assigneeRow(
+    access: AccessContext,
+    rowId: string,
+  ): Promise<{ agencyId: string; row: LeanRow }> {
+    const agencyId = clientAgencyId(access);
+    const row = await this.rowModel
+      .findOne({ _id: new Types.ObjectId(rowId), agencyId })
+      .lean<LeanRow>();
+    if (!row || row.assignment?.userId !== access.userId) {
+      throw new NotFoundException('That row is not assigned to you.');
+    }
+    return { agencyId, row };
+  }
+
+  /** {@link assigneeRow}, on a current, finished run — what every write needs. */
+  private async workableRow(
+    access: AccessContext,
+    rowId: string,
+  ): Promise<{ agencyId: string; row: LeanRow }> {
+    const { agencyId, row } = await this.assigneeRow(access, rowId);
+    const run = await this.runModel
+      .findOne({ _id: row.runId, agencyId })
+      .lean<LeanRun>();
+    if (run?.supersededByRunId) {
+      throw new ConflictException(
+        'A newer upload of this report replaced this row. Open it from your list again.',
+      );
+    }
+    if (!run || run.status !== 'ready' || isStale(run)) {
+      throw new ConflictException(
+        'Only the rows of a finished run can be worked.',
+      );
+    }
+    return { agencyId, row };
   }
 
   /**
@@ -343,7 +861,11 @@ export class ReconciliationOutcomesService {
     if (!row.needsReview || row.review.status !== 'open') {
       return 'the row has been decided';
     }
-    if (outcome?.status !== 'in_progress' || !outcome.step) {
+    if (
+      outcome?.status !== 'in_progress' ||
+      !outcome.step ||
+      !isSaleKind(outcome.kind)
+    ) {
       return 'no sale is under way on it';
     }
     const next = await this.afterSale(
@@ -400,7 +922,9 @@ export class ReconciliationOutcomesService {
   /** The deal that booked the outcome's current step already, if any. */
   private async bookedSince(row: LeanRow): Promise<Types.ObjectId | null> {
     const outcome = row.outcome;
-    if (outcome?.status !== 'in_progress') return null;
+    if (outcome?.status !== 'in_progress' || !isSaleKind(outcome.kind)) {
+      return null;
+    }
     if (outcome.step === 'record_sale') {
       if (!outcome.leadId || outcome.dealId) return null;
       // The lead was made for this row (`POST /leads` skips the address
@@ -524,39 +1048,63 @@ export class ReconciliationOutcomesService {
    * Write `next` over the outcome as read, or `null` if the row moved first —
    * decided, handed to someone else, or its outcome changed. A finished
    * outcome resolves the row in the same write.
+   *
+   * Except a service intake finished on a row a re-upload carried it to that
+   * asks something besides 1-800 (PAC-173 PR 5) — a premium the app and Dash
+   * now disagree on. The intake answers only whether the agency services the
+   * policy, so that question stays open for the owner, as it would had the
+   * intake been done before the upload (`servicedSince`).
    */
   private async writeOutcome(
     row: LeanRow,
     next: RowOutcome,
+    session: ClientSession | null = null,
   ): Promise<LeanRow | null> {
-    const resolved: StoredReview | null =
-      next.status === 'done'
-        ? {
-            status: 'resolved',
-            resolution: RECONCILIATION_OUTCOME_RESOLUTION[next.kind],
-            note: next.note,
-            reviewedById: next.completedById,
-            reviewedAt: next.completedAt,
-            carriedForwardFromRowId: null,
-          }
-        : null;
+    const resolves =
+      next.status === 'done' &&
+      !(
+        next.kind === 'service_intake' &&
+        asksForDecision(row.tabs, 'review_1800')
+      );
+    const resolved: StoredReview | null = resolves
+      ? {
+          status: 'resolved',
+          resolution: RECONCILIATION_OUTCOME_RESOLUTION[next.kind],
+          note: next.note,
+          reviewedById: next.completedById,
+          reviewedAt: next.completedAt,
+          carriedForwardFromRowId: null,
+        }
+      : null;
+    // A pending service intake held the row asking; past it, the row asks
+    // what its own tabs do.
+    const asking =
+      isPendingServiceIntake(row.outcome) && !isPendingServiceIntake(next)
+        ? { needsReview: asksForDecision(row.tabs) }
+        : {};
     return this.rowModel
       .findOneAndUpdate(
         {
           _id: row._id,
           agencyId: row.agencyId,
-          'assignment.userId': row.assignment?.userId,
+          // A row work release took back keeps a pending service intake
+          // (PAC-173 PR 5) with nobody on it; the owner deciding or handing
+          // the row on, or a same-period re-upload, finishes it.
+          ...(row.assignment
+            ? { 'assignment.userId': row.assignment.userId }
+            : { assignment: null }),
           needsReview: true,
           'review.status': 'open',
           ...outcomeAsRead(row.outcome),
         },
         {
           $set: resolved
-            ? { outcome: next, review: resolved }
-            : { outcome: next },
+            ? { outcome: next, review: resolved, ...asking }
+            : { outcome: next, ...asking },
         },
         { new: true },
       )
+      .session(session)
       .lean<LeanRow>();
   }
 
@@ -601,6 +1149,38 @@ export class ReconciliationOutcomesService {
     }
     return row;
   }
+}
+
+/** 400 unless the row offers a service intake — a Dash-only 1-800 line. */
+function assertOffersServiceIntake(row: LeanRow): void {
+  if (reconciliationOutcomeKinds(row).includes('service_intake')) return;
+  const tab = primaryReconciliationTab(row.tabs);
+  throw new BadRequestException({
+    code: RECONCILIATION_OUTCOME_NOT_ALLOWED,
+    message: `A row in ${tab ? RECONCILIATION_TAB_LABELS[tab] : 'this tab'} cannot be set up for service: only a 1-800 policy the app does not have can.`,
+  });
+}
+
+/** 403 without `leads:write` — checked on every call, as permissions change. */
+function assertCanSetUpService(access: AccessContext): void {
+  if (canSetUpReconciliationService(access.permissions)) return;
+  throw new ForbiddenException({
+    code: RECONCILIATION_OUTCOME_FORBIDDEN,
+    message:
+      'Setting a 1-800 policy up for service needs permission to create leads.',
+  });
+}
+
+/** What the welcome call opens with: the assignee's words, else the Dash line's. */
+function openingNoteFor(
+  row: LeanRow,
+  typed: string | null | undefined,
+): string {
+  return typed?.trim() || serviceIntakeOpeningNote(row.dash ?? {});
+}
+
+function conflictLine(conflict: ContactFieldConflict): string {
+  return `The ${conflict.field} on file is ${conflict.stored}; the form gave ${conflict.submitted}. The one on file was kept.`;
 }
 
 function isSaleKind(kind: ReconciliationOutcomeKind): boolean {

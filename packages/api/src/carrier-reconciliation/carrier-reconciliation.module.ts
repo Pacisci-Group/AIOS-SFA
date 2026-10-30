@@ -5,7 +5,13 @@ import {
   Chargeback,
   ChargebackSchema,
 } from '../chargebacks/schemas/chargeback.schema';
+import { ServicedPolicyIntakeModule } from '../clients/serviced-policy-intake.module';
+import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import {
+  Household,
+  HouseholdSchema,
+} from '../households/schemas/household.schema';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { PermissionsModule } from '../permissions/permissions.module';
 import {
@@ -38,10 +44,15 @@ import {
  * chargebacks and who holds which role, and wants none of their services.
  * `StorageService` and `InngestService` are global.
  *
- * `PermissionsModule` is the one feature import: who may be given a row
- * missing from the app is decided by effective permission
- * (`PermissionsService.resolveForUser`), which is not to be reimplemented. It
- * imports nothing but Redis, so no cycle is possible.
+ * Two feature imports:
+ *
+ * - `PermissionsModule`: who may be given a row is decided by effective
+ *   permission (`PermissionsService.resolveForUser`), which is not to be
+ *   reimplemented. It imports nothing but Redis.
+ * - `ServicedPolicyIntakeModule` (PAC-173 PR 5): a 1-800 row set up for
+ *   service creates a household, a policy and a CSR's welcome call. It reaches
+ *   CRM, clients and the Sold validator, none of which import Leads, SoldDeals
+ *   or this module.
  *
  * Exports `ReconciliationOutcomesService` for the two forms an assignee
  * records a sale through (PAC-173 PR 4): `LeadsModule` links the lead,
@@ -63,8 +74,12 @@ import {
       { name: User.name, schema: UserSchema },
       { name: AgencyRole.name, schema: AgencyRoleSchema },
       { name: UserRole.name, schema: UserRoleSchema },
+      // Read-only: names a dealless (1-800) policy's row by its client.
+      { name: Household.name, schema: HouseholdSchema },
+      { name: Contact.name, schema: ContactSchema },
     ]),
     PermissionsModule,
+    ServicedPolicyIntakeModule,
   ],
   controllers: [
     CarrierReconciliationController,

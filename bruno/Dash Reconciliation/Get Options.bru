@@ -31,7 +31,14 @@ tests {
   test("lists the Producers and CSRs a row can be assigned to", function () {
     const assignees = res.getBody().assignees;
     expect(assignees).to.be.an("array").that.is.not.empty;
-    expect(assignees[0]).to.have.keys(["id", "name", "email", "roles", "canRecordSale"]);
+    expect(assignees[0]).to.have.keys([
+      "id",
+      "name",
+      "email",
+      "roles",
+      "canRecordSale",
+      "canSetUpService",
+    ]);
     for (const person of assignees) {
       expect(person.roles.some((role) => ["producer", "csr"].includes(role))).to.equal(true);
     }
@@ -47,6 +54,15 @@ tests {
     for (const person of res.getBody().assignees) {
       expect(person.canRecordSale).to.be.a("boolean");
     }
+  });
+
+  test("marks who can set a 1-800 policy up for service", function () {
+    // Both templates hold `leads:write`, so every default Producer and CSR can.
+    for (const person of res.getBody().assignees) {
+      expect(person.canSetUpService).to.be.a("boolean");
+    }
+    const pat = res.getBody().assignees.find((person) => person.id === bru.getVar("currentUserId"));
+    expect(pat.canSetUpService).to.equal(true);
   });
 }
 
@@ -72,12 +88,19 @@ docs {
   template has no `deal_audits:write`) and still takes rows in any other tab,
   which only ever take Other. A CSR the agency lets sell is `true`.
 
+  `canSetUpService` (PAC-173 PR 5) says whether the person can **set a 1-800
+  policy up for service** — `leads:write`, which both the Producer and the
+  CSR templates hold — again by effective permission. Only they can be given
+  a 1-800 row the app does not have yet (`review_1800`, `dash_only`): its
+  outcome creates the client's household as a lead intake does. The picker
+  greys the rest out on those rows ("Can't set up service").
+
   ## Response `200`
 
   ```json
   { "assignees": [
       { "id": "6a95…", "name": "Pat Producer", "email": "producer@demoagency.local",
-        "roles": ["producer"], "canRecordSale": true },
+        "roles": ["producer"], "canRecordSale": true, "canSetUpService": true },
       { "id": "6a96…", "name": "Casey Kim", "email": "casey.kim@demoagency.local",
         "roles": ["csr"], "canRecordSale": false }] }
   ```

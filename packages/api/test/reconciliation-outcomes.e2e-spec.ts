@@ -817,6 +817,8 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
           effectiveDate: ISSUED,
           soldDate: WRITTEN,
         },
+        // Only a 1-800 row the app lacks offers a service intake (PR 5).
+        serviceIntake: null,
       });
     });
 

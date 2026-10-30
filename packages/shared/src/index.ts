@@ -42,6 +42,7 @@ export * from './domain/primary-contact';
 export * from './domain/policy-check';
 export * from './domain/policy-edit';
 export * from './domain/policy-number';
+export * from './domain/policy-origin';
 export * from './domain/policy-replacement';
 export * from './domain/policy-status';
 export * from './domain/policy-type';

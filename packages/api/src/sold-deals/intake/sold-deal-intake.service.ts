@@ -24,6 +24,7 @@ import {
   SoldStepDeps,
 } from './sold-intake.types';
 import { UpsertPoliciesStep, UpsertedPolicy } from './upsert-policies.step';
+import { recountHouseholdPolicies } from '../../households/household-policy-count';
 
 /** Mongo duplicate-key error. */
 const DUPLICATE_KEY = 11000;
@@ -193,7 +194,11 @@ export class SoldDealIntakeService {
     ctx: SoldIntakeContext,
     outcome: SoldIntakeOutcome,
   ): Promise<{ leadStatus: string | null }> {
-    await this.recountHouseholdPolicies(ctx.householdId);
+    await recountHouseholdPolicies(
+      { policy: this.policyModel, household: this.householdModel },
+      ctx.householdId,
+      this.logger,
+    );
 
     if (!ctx.leadId) {
       return { leadStatus: null };
@@ -227,41 +232,6 @@ export class SoldDealIntakeService {
     }
 
     return { leadStatus };
-  }
-
-  /**
-   * Bring `Household.totalActivePolicies` back in line with reality.
-   *
-   * Lived on the ticket-anchored transfer until PAC-126 retired it, which
-   * meant the **sold path never recounted at all** — every ordinary sale left
-   * the stored count where the migration put it. The household card computes
-   * its headline from the live policy list so nobody saw it there, but the
-   * Clients list sorts on the stored field, and a replacement that splits one
-   * policy into two moves it. It belongs here, where every booking passes.
-   *
-   * Recounted rather than incremented so a re-run is still correct, and
-   * best-effort like the activity row: the deal is committed by now, and a
-   * stale count is a worse reason to fail a request than no reason.
-   */
-  private async recountHouseholdPolicies(
-    householdId: Types.ObjectId,
-  ): Promise<void> {
-    try {
-      const active = await this.policyModel.countDocuments({
-        householdId,
-        active: true,
-      });
-      await this.householdModel.updateOne(
-        { _id: householdId },
-        { $set: { totalActivePolicies: active } },
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Household policy recount failed for ${householdId.toString()}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
   }
 
   private async findByToken(

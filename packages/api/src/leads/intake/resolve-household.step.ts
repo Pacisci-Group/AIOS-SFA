@@ -24,6 +24,16 @@ import {
 } from './intake.types';
 
 /**
+ * What this step reads of an intake: the primary's surname (the household's
+ * name) and the living address. Narrower than `IntakeInput` so the 1-800
+ * service intake, which has no lead, can run it too (PAC-173 PR 5).
+ */
+export type HouseholdIntakeInput = Pick<
+  IntakeInput,
+  'primaryContact' | 'address'
+>;
+
+/**
  * Step 2 — the household is **derived from the resolved contact**, never looked
  * up by address.
  *
@@ -97,7 +107,7 @@ export class ResolveHouseholdStep {
 
   async run(
     contact: ResolvedContact,
-    input: IntakeInput,
+    input: HouseholdIntakeInput,
     deps: StepDeps,
   ): Promise<ResolvedHousehold> {
     const existing = await this.findExisting(contact, deps);
@@ -157,7 +167,7 @@ export class ResolveHouseholdStep {
 
   private async create(
     contact: ResolvedContact,
-    input: IntakeInput,
+    input: HouseholdIntakeInput,
     deps: StepDeps,
   ): Promise<ResolvedHousehold> {
     const lastName = normalizeName(input.primaryContact.lastName);
@@ -212,7 +222,7 @@ export class ResolveHouseholdStep {
    */
   private async backfillAddressIfBlank(
     household: HouseholdDocument,
-    input: IntakeInput,
+    input: HouseholdIntakeInput,
     deps: StepDeps,
   ): Promise<void> {
     const address = this.toAddressObject(input);
@@ -233,7 +243,9 @@ export class ResolveHouseholdStep {
     );
   }
 
-  private toAddressObject(input: IntakeInput): StoredAddress | undefined {
+  private toAddressObject(
+    input: HouseholdIntakeInput,
+  ): StoredAddress | undefined {
     const { street, city, state, zip } = input.address ?? {};
     if (!street && !city && !state && !zip) return undefined;
     return { street, city, state, zip };

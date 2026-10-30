@@ -10,11 +10,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   ModuleKey,
   RECONCILIATION_ASSIGNEE_CANNOT_SELL,
+  RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
   RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
   RECONCILIATION_TAB_LABELS,
   canRecordReconciliationSale,
+  canSetUpReconciliationService,
   modulePermission,
   primaryReconciliationTab,
+  reconciliationOutcomeKinds,
   type AccessContext,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRow,
@@ -32,7 +35,11 @@ import {
   currentRunIds,
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
-import type { RowAssignment } from '../common/carrier-reconciliation/carry-forward';
+import {
+  isPendingServiceIntake,
+  type RowAssignment,
+} from '../common/carrier-reconciliation/carry-forward';
+import { asksForDecision } from '../common/carrier-reconciliation/reconcile';
 import { displayName, displayNamesFor } from '../common/domain/user-names';
 import { notificationRequested } from '../inngest/events';
 import { InngestService } from '../inngest/inngest.service';
@@ -46,12 +53,13 @@ import {
   AgencyRole,
   type AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
+import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   AssignedQueryDto,
   AssignRowDto,
 } from './dto/carrier-reconciliation.dto';
-import { outcomeAsRead } from './outcome-filters';
+import { noLiveHandOffClaim, outcomeAsRead } from './outcome-filters';
 import {
   isStale,
   reconciliationPrefill,
@@ -116,15 +124,22 @@ export class ReconciliationAssignmentsService {
     private readonly userRoleModel: Model<UserRole>,
     @InjectModel(Carrier.name)
     private readonly carrierModel: Model<CarrierDocument>,
+    @InjectModel(Agency.name)
+    private readonly agencyModel: Model<AgencyDocument>,
     private readonly inngest: InngestService,
-    /** Effective permissions, for who may be given a `missing_from_app` row. */
+    /**
+     * Effective permissions, for who may be given a row: a `missing_from_app`
+     * one needs someone who can book a sale, a 1-800 one someone who can set
+     * it up for service.
+     */
     private readonly permissions: PermissionsService,
   ) {}
 
   /**
    * The assignee picker: the agency's active Producers and CSRs, by name,
    * each marked with whether they can book a sale — only they can be given a
-   * row missing from the app.
+   * row missing from the app — and whether they can set a 1-800 policy up for
+   * service, which a Dash-only 1-800 row needs.
    */
   async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
     const agencyId = clientAgencyId(access);
@@ -133,7 +148,7 @@ export class ReconciliationAssignmentsService {
       agencyId,
       RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
     );
-    const sellers = await this.whoCanRecordSale(
+    const can = await this.whoCan(
       agencyId,
       holders.map((user) => user._id),
     );
@@ -143,7 +158,8 @@ export class ReconciliationAssignmentsService {
         name: displayName(user),
         email: user.email ?? '',
         roles: user.roles,
-        canRecordSale: sellers.has(String(user._id)),
+        canRecordSale: can.get(String(user._id))?.sell ?? false,
+        canSetUpService: can.get(String(user._id))?.service ?? false,
       })),
     };
   }
@@ -208,6 +224,9 @@ export class ReconciliationAssignmentsService {
         if (row.tabs.includes('missing_from_app')) {
           await this.assertCanRecordSale(agencyId, dto.userId);
         }
+        if (reconciliationOutcomeKinds(row).includes('service_intake')) {
+          await this.assertCanSetUpService(agencyId, dto.userId);
+        }
         next = {
           userId: dto.userId,
           assignedById: access.userId,
@@ -222,6 +241,10 @@ export class ReconciliationAssignmentsService {
     // over. A finished outcome is the record of what was done — it stays.
     const clearsOutcome =
       next?.userId !== current?.userId && row.outcome?.status === 'in_progress';
+    // A 1-800 service intake still waiting on its welcome call (PAC-173 PR 5)
+    // goes only while nobody is opening the call, and the row then asks what
+    // its own tabs do.
+    const clearsPending = clearsOutcome && isPendingServiceIntake(row.outcome);
 
     // Compare-and-swap on the assignment just read: two people assigning the
     // same row at once must not both believe they won, or the loser's
@@ -240,10 +263,17 @@ export class ReconciliationAssignmentsService {
               }
             : { assignment: null }),
           ...outcomeAsRead(row.outcome),
+          ...(clearsPending ? noLiveHandOffClaim() : {}),
         },
         {
           $set: clearsOutcome
-            ? { assignment: next, outcome: null }
+            ? {
+                assignment: next,
+                outcome: null,
+                ...(clearsPending
+                  ? { needsReview: asksForDecision(row.tabs) }
+                  : {}),
+              }
             : { assignment: next },
         },
         { new: true },
@@ -348,12 +378,43 @@ export class ReconciliationAssignmentsService {
     agencyId: string,
     row: LeanRow,
   ): Promise<ReconciliationAssignedRowDetail> {
-    const [[view], carrierName] = await Promise.all([
+    const offersServiceIntake =
+      reconciliationOutcomeKinds(row).includes('service_intake');
+    const [[view], carrierName, crmServiceOn] = await Promise.all([
       this.assignedViews(agencyId, [row]),
       this.runCarrierName(agencyId, row.runId),
+      offersServiceIntake ? this.crmServiceOn(agencyId) : false,
     ]);
     if (!view) throw new NotFoundException('That row is not assigned to you.');
-    return { ...view, prefill: reconciliationPrefill(row.dash, carrierName) };
+    return {
+      ...view,
+      // A service intake ends in a CSR's welcome call, so it is offered only
+      // where CRM service is on: `serviceIntake: null` is how the page knows.
+      prefill: reconciliationPrefill(row.dash, carrierName, {
+        offersServiceIntake: offersServiceIntake && crmServiceOn,
+      }),
+    };
+  }
+
+  /**
+   * Whether the agency has CRM service on — the welcome call a service intake
+   * opens lives there, and the assignee controller's own gate is Dash
+   * Reconciliation only.
+   */
+  async crmServiceOn(agencyId: string): Promise<boolean> {
+    const agency = await this.agencyModel
+      .findById(agencyId)
+      .select('modules')
+      .lean<{ modules?: Record<string, { enabled?: boolean }> }>();
+    return agency?.modules?.[ModuleKey.CrmService]?.enabled === true;
+  }
+
+  /** The catalog name of the carrier a run was uploaded for. */
+  async carrierNameOfRun(
+    agencyId: string,
+    runId: Types.ObjectId,
+  ): Promise<string | null> {
+    return this.runCarrierName(agencyId, runId);
   }
 
   /**
@@ -414,10 +475,8 @@ export class ReconciliationAssignmentsService {
     agencyId: string,
     userId: string,
   ): Promise<void> {
-    const sellers = await this.whoCanRecordSale(agencyId, [
-      new Types.ObjectId(userId),
-    ]);
-    if (!sellers.has(userId)) {
+    const can = await this.whoCan(agencyId, [new Types.ObjectId(userId)]);
+    if (!can.get(userId)?.sell) {
       throw new BadRequestException({
         code: RECONCILIATION_ASSIGNEE_CANNOT_SELL,
         message:
@@ -426,17 +485,33 @@ export class ReconciliationAssignmentsService {
     }
   }
 
+  /** 400 unless `userId` can set a 1-800 policy up for service — a Dash-only 1-800 row's rule. */
+  private async assertCanSetUpService(
+    agencyId: string,
+    userId: string,
+  ): Promise<void> {
+    const can = await this.whoCan(agencyId, [new Types.ObjectId(userId)]);
+    if (!can.get(userId)?.service) {
+      throw new BadRequestException({
+        code: RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
+        message:
+          'A 1-800 policy the app does not have can be given only to someone who can set it up for service (create leads).',
+      });
+    }
+  }
+
   /**
-   * Which of these users can book a sale, by their **effective** permissions —
-   * role defaults plus their own grants, less revokes, within the agency's
-   * enabled modules — never by role name. One resolve per person: the picker
-   * lists a handful of Producers and CSRs.
+   * What each of these users can do with a row — book a sale, set a 1-800
+   * policy up for service — by their **effective** permissions: role defaults
+   * plus their own grants, less revokes, within the agency's enabled modules;
+   * never by role name. One resolve per person: the picker lists a handful of
+   * Producers and CSRs.
    */
-  private async whoCanRecordSale(
+  private async whoCan(
     agencyId: string,
     userIds: readonly Types.ObjectId[],
-  ): Promise<Set<string>> {
-    if (!userIds.length) return new Set();
+  ): Promise<Map<string, { sell: boolean; service: boolean }>> {
+    if (!userIds.length) return new Map();
     const users = await this.userModel
       .find({
         _id: { $in: [...userIds] },
@@ -444,14 +519,18 @@ export class ReconciliationAssignmentsService {
       })
       .select('agencyId isPlatformAdmin');
     const verdicts = await Promise.all(
-      users.map(async (user) => ({
-        id: String(user._id),
-        can: canRecordReconciliationSale(
-          await this.permissions.resolveForUser(user),
-        ),
-      })),
+      users.map(async (user) => {
+        const permissions = await this.permissions.resolveForUser(user);
+        return [
+          String(user._id),
+          {
+            sell: canRecordReconciliationSale(permissions),
+            service: canSetUpReconciliationService(permissions),
+          },
+        ] as const;
+      }),
     );
-    return new Set(verdicts.filter((v) => v.can).map((v) => v.id));
+    return new Map(verdicts);
   }
 
   /** The catalog name of the carrier a run was uploaded for. */

@@ -556,11 +556,42 @@ describe('User removal (e2e)', () => {
         },
       });
 
+      // PAC-173 PR 5: a 1-800 service intake whose household and policy are
+      // saved, waiting on its welcome call. The outcome is their only link.
+      const pendingIntake: RowOutcome = {
+        kind: 'service_intake',
+        status: 'in_progress',
+        step: 'start_onboarding',
+        note: '1-800 policy from Dash.',
+        leadId: null,
+        dealId: null,
+        policyId: new Types.ObjectId().toHexString(),
+        householdId: new Types.ObjectId().toHexString(),
+        replacementPolicyId: null,
+        chargebackId: null,
+        csrId: producerId,
+        onboardingId: null,
+        ticketId: null,
+        startedById: producerId,
+        startedAt,
+        completedById: null,
+        completedAt: null,
+      };
+      const serviced = await seedRow({
+        tabs: ['review_1800'],
+        match: 'dash_only',
+        outcome: pendingIntake,
+      });
+
       const res = await api()
         .delete(`/api/v1/users/${producerId}`)
         .set(authHeader(ownerToken))
         .expect(200);
-      expect(res.body).toMatchObject({ reconciliationRowsUnassigned: 1 });
+      expect(res.body).toMatchObject({ reconciliationRowsUnassigned: 2 });
+
+      const handedBack = await reconciliationRows.findById(serviced).lean();
+      expect(handedBack?.assignment).toBeNull();
+      expect(handedBack?.outcome).toEqual(pendingIntake);
 
       const released = await reconciliationRows.findById(underWay).lean();
       expect(released?.assignment).toBeNull();

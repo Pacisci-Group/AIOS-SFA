@@ -176,6 +176,8 @@ export function appPolicy(
     soldDay: '2026-09-02',
     clientName: 'Casey Customer',
     businessType: 'new_business',
+    origin: null,
+    effectiveDay: null,
     expectedInDash: true,
     nearWindow: true,
     ...overrides,

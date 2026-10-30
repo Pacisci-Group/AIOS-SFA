@@ -1,0 +1,78 @@
+meta {
+  name: Presign Service Document (as CSR)
+  type: http
+  seq: 58
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}/documents/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "morgan-hale-application.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("reconSvcKey", res.getBody().key);
+    bru.setVar("reconSvcUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("a key under the row", function () {
+    const key = res.getBody().key;
+    expect(key).to.contain(`/reconciliation-rows/${bru.getVar("reconRowId")}/nba/`);
+    expect(res.getBody().uploadUrl).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/assigned/:rowId/documents/presign — the 1-800 policy's application
+
+  - **Module:** `carrier_reconciliation` (enabled for the agency)
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read` — the
+    assignee's class gate; no `:write` (the service clamps to the assignee)
+  - **Data scope:** the row's assignee only
+
+  PAC-173 PR 5. A presigned PUT for the signed **new business application** a
+  service intake attaches — required, a PDF, as on every policy entered. Its
+  own endpoint because the Sold form's (`POST /sold-deals/documents/presign`)
+  is anchored on a lead and needs `deal_audits:write`, and a service intake
+  makes no lead and is done by CSRs. The key is
+  `agencies/<agencyId>/reconciliation-rows/<rowId>/nba/<year>/<uuid>-<file>`,
+  so the prefix is the ownership check: `Service Intake` refuses a key for
+  another row. Feeds `Upload Service Document`.
+
+  ## Body
+  - `filename` — 1–255 characters
+  - `contentType` — `application/pdf` only
+  - `size` — bytes, ≤ 10 MB
+
+  ## Response `201`
+  `{ key, uploadUrl, requiredHeaders, expiresIn }` — PUT the bytes to
+  `uploadUrl` with `requiredHeaders` and no `Authorization`.
+
+  ## Errors
+  - `400` — validation (not a PDF, too large);
+    `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the row offers no service intake
+  - `404` — no such row, or it is not assigned to the caller
+}

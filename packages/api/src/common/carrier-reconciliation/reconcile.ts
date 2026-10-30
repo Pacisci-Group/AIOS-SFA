@@ -2,6 +2,7 @@ import {
   normalizeCarrier,
   reconciliationPremiumDelta,
   type BindIdStatus,
+  type PolicyOrigin,
   type ReconciliationIgnoredReason,
   type ReconciliationIssue,
   type ReconciliationMatch,
@@ -49,16 +50,30 @@ export interface AppPolicyLite {
   producerId: string | null;
   /** The deal's sold date on the agency's calendar, `YYYY-MM-DD`. */
   soldDay: string | null;
+  /**
+   * A policy with no deal — a 1-800 policy set up for service — has no sold
+   * date; its effective date (a UTC calendar day) places it instead, for the
+   * window and for suggestions. `null` on a policy with a deal, and absent on
+   * every snapshot stored before PAC-173 PR 5.
+   */
+  effectiveDay?: string | null;
   clientName: string | null;
   businessType: string | null;
   /**
+   * `carrier_direct` for a 1-800 policy set up for service (PAC-173 PR 5): no
+   * deal, and its Dash line's unknown Bind ID is expected, not a question.
+   * `null` — the agency's own, and every snapshot stored before the field.
+   */
+  origin: PolicyOrigin | null;
+  /**
    * Dash ought to list this policy: on a deal sold inside the report period
    * (new business or a company transfer — both issue a new policy number),
-   * written with a carrier the report covers. Only these can be `app_only` —
-   * a policy sold in March is not missing from September's file.
+   * or a 1-800 policy set up for service that took effect in it, written with
+   * a carrier the report covers. Only these can be `app_only` — a policy sold
+   * in March is not missing from September's file.
    */
   expectedInDash: boolean;
-  /** Sold within the padded window — a candidate for suggestions. */
+  /** Sold (or, with no deal, effective) within the padded window — a candidate for suggestions. */
   nearWindow: boolean;
 }
 
@@ -234,18 +249,31 @@ export function matchRows({
   return rows;
 }
 
-/** The candidate sold closest to the Dash date; a deal-less policy last. */
+/**
+ * The candidate sold closest to the Dash date; a deal-less policy last, so a
+ * number booked on a sale is always the one checked — a 1-800 policy recorded
+ * as a sale beside its own serviced copy must still read as one. Deal-less
+ * candidates (a serviced 1-800 policy) rank among themselves by the day they
+ * took effect, then newest first: a row set up for service again after the
+ * owner reopened it made a second copy, and the newer one is what its outcome
+ * links.
+ */
 function closestPolicy(
   candidates: readonly AppPolicyLite[],
   day: string | null,
 ): AppPolicyLite {
-  const distance = (policy: AppPolicyLite) =>
-    policy.soldDay && day ? Math.abs(daysBetween(policy.soldDay, day)) : 1e9;
+  const distance = (policy: AppPolicyLite) => {
+    const known = policy.dealId ? policy.soldDay : policy.effectiveDay;
+    return known && day ? Math.abs(daysBetween(known, day)) : 1e9;
+  };
   return [...candidates].sort(
     (a, b) =>
+      Number(!!b.dealId) - Number(!!a.dealId) ||
       distance(a) - distance(b) ||
       Number(b.expectedInDash) - Number(a.expectedInDash) ||
-      a.policyId.localeCompare(b.policyId),
+      (a.dealId
+        ? a.policyId.localeCompare(b.policyId)
+        : b.policyId.localeCompare(a.policyId)),
   )[0];
 }
 
@@ -295,7 +323,7 @@ function attachSuggestions(
             key: policy.policyKey,
             name: policy.clientName,
             premium: policy.premium,
-            day: policy.soldDay,
+            day: policy.soldDay ?? policy.effectiveDay ?? null,
           },
         ),
         suggestion: {
@@ -307,7 +335,7 @@ function attachSuggestions(
           policyNumber: policy.policyNumber,
           name: policy.clientName,
           premium: policy.premium,
-          day: policy.soldDay,
+          day: policy.soldDay ?? policy.effectiveDay ?? null,
           reasons: [],
         },
       })),
@@ -324,7 +352,7 @@ function attachSuggestions(
             key: app.policyKey,
             name: app.clientName,
             premium: app.premium,
-            day: app.soldDay,
+            day: app.soldDay ?? app.effectiveDay ?? null,
           },
           {
             key: other.dash!.policyKey,
@@ -474,6 +502,18 @@ const REVIEW_TABS: ReadonlySet<ReconciliationTab> = new Set([
   'producer_mismatch',
 ]);
 
+/**
+ * Whether a row's own tabs ask for a decision — {@link deriveRow}'s
+ * `needsReview`, for a stored row whose flag a pending service intake held up
+ * (PAC-173 PR 5). `besides` leaves out the tab an outcome just answered.
+ */
+export function asksForDecision(
+  tabs: readonly ReconciliationTab[],
+  besides?: ReconciliationTab,
+): boolean {
+  return tabs.some((tab) => tab !== besides && REVIEW_TABS.has(tab));
+}
+
 export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   const issues = new Set<ReconciliationIssue>(base.matchIssues);
   const tabs = new Set<ReconciliationTab>();
@@ -501,14 +541,24 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   // the 1-800 or web channel — machine ids on routine endorsements are noise.
   // A producer's own login is never 1-800, whatever the channel: a customer
   // who started on allstate.com and was bound by the agency is the agency's.
-  const isDirect = !!dash && status === 'not_staff' && (base.isSale || direct);
+  // A 1-800 policy already set up for service (`carrier_direct`) is the
+  // answer to that question, so it is not asked again: the row is matched,
+  // with `direct_1800` saying why its binder is nobody here. Only while it has
+  // no deal — one put on a sale since is exactly what 1-800 review is for
+  // (`direct_recorded_as_sale`).
+  const serviced =
+    base.match === 'matched' && app?.origin === 'carrier_direct' && !app.dealId;
+  const isDirect =
+    !!dash && status === 'not_staff' && (base.isSale || direct) && !serviced;
 
   // A matched policy is checked against the app's, which is the source of
   // truth: any difference is for a person to look at. Its producer is
   // whoever's Bind ID bound it; the deal naming someone else is a mismatch.
   if (base.match === 'matched') {
     tabs.add('matched');
-    if (!app?.producerId) issues.add('no_app_producer');
+    // Serviced, never sold: no deal, so no producer to have or to differ.
+    if (serviced) issues.add('direct_1800');
+    else if (!app?.producerId) issues.add('no_app_producer');
     else if (credit.userId && credit.userId !== app.producerId) {
       issues.add('producer_mismatch');
       tabs.add('producer_mismatch');
@@ -538,7 +588,7 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   if (base.match === 'app_only') tabs.add('not_in_dash');
   if (isDirect) tabs.add('review_1800');
 
-  const needsReview = [...tabs].some((tab) => REVIEW_TABS.has(tab));
+  const needsReview = asksForDecision([...tabs]);
 
   let producerKey = 'none';
   if (dash) {
@@ -584,7 +634,7 @@ export interface ProducerSummaryRaw {
 
 type SummaryRow = Pick<
   ReconciledRow,
-  'isSale' | 'dash' | 'app' | 'tabs' | 'producerKey' | 'credit'
+  'isSale' | 'dash' | 'app' | 'tabs' | 'issues' | 'producerKey' | 'credit'
 >;
 
 export function summarize(rows: readonly SummaryRow[]): {
@@ -674,8 +724,14 @@ export function summarize(rows: readonly SummaryRow[]): {
     if (tabs.has('producer_mismatch')) totals.producerMismatch += 1;
 
     // The per-producer table is the agency's own business: 1-800 lines are
-    // nobody's to capture.
-    if (row.isSale && !tabs.has('review_1800')) {
+    // nobody's to capture — in review, set up for service (`direct_1800`), or
+    // a serviced policy Dash left out.
+    const allstateDirect =
+      tabs.has('review_1800') ||
+      row.issues.includes('direct_1800') ||
+      (row.app?.origin === 'carrier_direct' && !row.app.dealId);
+    if (allstateDirect) continue;
+    if (row.isSale) {
       const entry = producer(row);
       entry.dashSales += 1;
       entry.dashPremium += premium;

@@ -14,6 +14,7 @@ import {
   premiumTermSuffix,
   termExpirationDate,
 } from "@sfa/shared";
+import { POLICY_ORIGIN_LABELS } from "@sfa/shared";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
 /**
@@ -70,6 +71,12 @@ export interface DisplayPolicy {
    * so.
    */
   term: string;
+  /**
+   * Where the policy came from when it was not the agency's own sale —
+   * "Allstate direct (1-800)" for a policy Allstate sold and the agency
+   * services (PAC-173). Absent for the agency's own.
+   */
+  origin?: string;
   icon: LucideIcon;
   /** Foreground class for {@link DisplayPolicy.icon}. */
   iconTone: string;
@@ -184,6 +191,7 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
   const style = LINE_STYLES[(policy.policyType ?? "").toLowerCase()] ?? DEFAULT_STYLE;
   return {
     id: policy.id,
+    origin: policy.origin ? POLICY_ORIGIN_LABELS[policy.origin] : undefined,
     line: policy.policyType ?? "Policy",
     policyNumber: policy.policyNumber ?? NOT_AVAILABLE,
     premium: `$${policy.premium.toLocaleString()}`,
