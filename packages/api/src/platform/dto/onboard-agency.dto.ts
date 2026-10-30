@@ -7,6 +7,10 @@ import {
 } from '@sfa/shared';
 import { z } from 'zod';
 import { timeZoneSchema } from '../../common/dates/time-zone.schema';
+import {
+  allstateBindIdField,
+  allstateSubProducerCodeField,
+} from '../../users/dto/allstate-codes.dto';
 
 /**
  * `POST /platform/agencies` — onboard a whole tenant (PAC-69).
@@ -141,6 +145,13 @@ export const onboardAgencySchema = z.object({
     firstName: personName('First name'),
     lastName: personName('Last name'),
     email: z.string().trim().email('Enter a valid email address.').max(160),
+    /**
+     * The owner's own Allstate codes (PAC-173), when the operator has them —
+     * an owner who writes business is a producer in Dash too. Optional: the
+     * owner confirms or enters them while accepting the invite.
+     */
+    allstateBindId: allstateBindIdField.optional(),
+    allstateSubProducerCode: allstateSubProducerCodeField.optional(),
   }),
 });
 

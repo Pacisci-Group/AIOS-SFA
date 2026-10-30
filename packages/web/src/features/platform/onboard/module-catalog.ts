@@ -87,6 +87,11 @@ export const MODULE_CATALOG: Record<ModuleKey, ModuleDescriptor> = {
     description:
       "Sales and service analytics — breakdowns by producer, lead source, line, carrier, branch and ZIP, trends over time and goal pacing.",
   },
+  [ModuleKey.CarrierReconciliation]: {
+    label: "Dash Reconciliation",
+    description:
+      "Matching Allstate's monthly new-business report against the agency's sales — missing policies, unreported policies and 1-800 business to review.",
+  },
 };
 
 /** The catalog in a stable display order, grouped the way the nav groups pages. */
@@ -118,6 +123,6 @@ export const MODULE_GROUPS: { title: string; modules: ModuleKey[] }[] = [
   },
   {
     title: "Data",
-    modules: [ModuleKey.DataExport],
+    modules: [ModuleKey.DataExport, ModuleKey.CarrierReconciliation],
   },
 ];

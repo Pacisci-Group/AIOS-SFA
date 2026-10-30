@@ -1,0 +1,90 @@
+meta {
+  name: Review Row
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "resolved",
+    "resolution": "service_set_up",
+    "note": "Allstate 1-800 policy; set up for service by Bruno"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("records the decision and who made it", function () {
+    const review = res.getBody().review;
+    expect(review.status).to.equal("resolved");
+    expect(review.resolution).to.equal("service_set_up");
+    expect(review.reviewedBy.name).to.be.a("string");
+    expect(review.reviewedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # PATCH /carrier-reconciliation/runs/:id/rows/:rowId/review — decide a row
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+
+  ## Body
+  - `status` — `open` | `resolved` | `dismissed`
+  - `resolution` — required with `resolved`: `entered_in_app`,
+    `number_corrected`, `credit_corrected`, `premium_corrected`,
+    `carrier_figure_wrong`, `service_set_up`, `timing`, `not_ours`,
+    `duplicate`, `other`. The page offers the ones that fit the row's tabs:
+    - Missing from app — `entered_in_app`, `number_corrected`, `not_ours`, `other`
+    - Not in Dash — `number_corrected`, `timing`, `not_ours`, `duplicate`, `other`
+    - 1-800 review — `service_set_up`, `not_ours`, `other`
+    - Premium differs — `premium_corrected`, `carrier_figure_wrong`, `other`
+    - Producer mismatch — `credit_corrected`, `other`
+
+    `confirmed_1800` is retired (a 1-800 policy is now set up for service):
+    a review can no longer set it, a row decided with it still reads back with
+    its label, and a re-upload reopens that row instead of carrying it.
+
+    `sold_recorded`, `cancel_rewrite_recorded` and `other_recorded` are
+    refused too (`400`): only an assignee's finished outcome writes them
+    (PAC-173 PR 4), and a row decided that way reads back with them.
+  - `note` — optional, ≤ 2000 characters; omitted keeps the current note
+
+  Reopening (`open`) clears the resolution and the reviewer. A decision on a
+  superseded run's row is carried to the new run only if the row still has
+  the same match and issues.
+
+  ## The assignee's outcome (PAC-173 PR 4)
+  - **Reopening** clears the outcome, finished or not: the row asks again,
+    and the decision an outcome wrote is the one being taken back. A deal it
+    booked stays booked.
+  - **Deciding by hand** (`resolved` / `dismissed`) while an outcome is
+    still under way clears it, so a sale booked on it later changes nothing
+    here.
+  - A **finished** outcome is otherwise left as the record of what was done,
+    whatever the row is now decided as.
+
+  ## Errors
+  - `400` — validation (an outcome resolution included), or `resolved`
+    without a `resolution`
+  - `404` — no such run or row in the agency
+  - `409` — the assignee recorded something on the row at the same moment;
+    reload and decide again
+}

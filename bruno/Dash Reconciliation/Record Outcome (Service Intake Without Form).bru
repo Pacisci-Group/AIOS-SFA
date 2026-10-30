@@ -1,0 +1,44 @@
+meta {
+  name: Record Outcome (Service Intake Without Form)
+  type: http
+  seq: 54
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}/outcome
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "kind": "service_intake"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("set up for service starts from its form", function () {
+    expect(res.getBody().code).to.equal("RECONCILIATION_OUTCOME_NOT_ALLOWED");
+  });
+}
+
+docs {
+  # PATCH …/outcome `{ "kind": "service_intake" }` with nothing under way — 400
+
+  A service intake carries the client and the policy, so it is **started
+  only by its form** (`Service Intake (as CSR)`). Through this endpoint the
+  kind only **resumes** one saved at `start_onboarding` — the household and
+  policy in, the welcome call not yet open — which is the page's Continue.
+}

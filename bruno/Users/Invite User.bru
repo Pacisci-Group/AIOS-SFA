@@ -24,6 +24,9 @@ script:pre-request {
   // fail on every subsequent `bru run`. **Revoke Invite** deletes this row again
   // at the end of the folder, so the collection leaves no residue either way.
   bru.setVar("inviteEmail", `pac58-invite-${Date.now()}@sfa.local`);
+  // Unique per run for the same reason (Allstate codes are unique within the
+  // agency); sent lower-case to show it is stored as Dash prints it.
+  bru.setVar("inviteBindId", `bru${Date.now().toString(36)}`);
 }
 
 body:json {
@@ -32,7 +35,8 @@ body:json {
     "roleIds": ["{{inviteRoleId}}"],
     "branchId": "{{inviteBranchId}}",
     "firstName": "Pending",
-    "lastName": "Invitee"
+    "lastName": "Invitee",
+    "allstateBindId": "{{inviteBindId}}"
   }
 }
 
@@ -80,6 +84,13 @@ docs {
   | branchId  | string?  | a branch **of this agency**; omit to leave unplaced |
   | firstName | string?  | ≤ 100 chars                                   |
   | lastName  | string?  | ≤ 100 chars                                   |
+  | allstateBindId | string? | Allstate portal login (PAC-173); letters, digits, `.` `_` `-`, ≤ 32; stored upper-cased; blank = none |
+  | allstateSubProducerCode | string? | ≤ 3 digits, stored zero-padded (`34` → `034`); `000` is refused (Allstate's "no sub-producer"); blank = none |
+
+  The codes are what Dash Reconciliation credits a producer by, and a Bind ID
+  on no user that Dash prints no name for marks a policy as Allstate's own
+  1-800 business (a named one reads as a former employee's). Each is unique
+  within the agency.
 
   The UI assigns exactly one role, but the contract stays an array to match
   `PATCH /users/:userId/roles`.
@@ -110,6 +121,9 @@ docs {
   - `409` — the address is taken. The message distinguishes **already a member**
     from **already has a pending invite**, because the owner's next action
     differs (nothing vs. resend).
+  - `409` `ALLSTATE_CODE_DUPLICATE` — another user of the agency holds the code:
+    `{ "code": "ALLSTATE_CODE_DUPLICATE", "field": "allstateBindId", "message": "Allstate Bind ID SOK5PE0T is already on Jessica Yates." }`.
+    Nothing is created.
 
   ## Chaining
   `inviteRoleId` comes from **List Roles (for the invite picker)** and

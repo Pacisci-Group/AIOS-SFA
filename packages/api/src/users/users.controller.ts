@@ -32,6 +32,10 @@ import {
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { InviteUserDto } from './dto/invite-user.dto';
 import {
+  updateUserDetailsSchema,
+  type UpdateUserDetailsDto,
+} from './dto/update-user-details.dto';
+import {
   listAgencyUsersSchema,
   type ListAgencyUsersDto,
 } from './dto/list-users.dto';
@@ -300,6 +304,21 @@ export class UsersController {
       userId,
       body.roleIds,
     );
+  }
+
+  /**
+   * Correct someone's name or Allstate codes (PAC-173). 409
+   * `ALLSTATE_CODE_DUPLICATE` when another user holds the code.
+   */
+  @Patch(':userId/details')
+  @RequirePermissions(AgencyPermission.UsersWrite)
+  updateDetails(
+    @AgencyId() agencyId: string,
+    @Param('userId') userId: string,
+    @Body(new ZodValidationPipe(updateUserDetailsSchema))
+    body: UpdateUserDetailsDto,
+  ) {
+    return this.usersService.updateDetails(agencyId, userId, body);
   }
 
   @Patch(':userId/permissions')

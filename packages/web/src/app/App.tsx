@@ -25,6 +25,15 @@ const ManagementDashboardPage = lazy(
   () => import('@/features/management/ManagementDashboardPage'),
 );
 const AnalyticsPage = lazy(() => import('@/features/analytics/AnalyticsPage'));
+const ReconciliationPage = lazy(
+  () => import('@/features/reconciliation/ReconciliationPage'),
+);
+const AssignedRowsPage = lazy(
+  () => import('@/features/reconciliation/AssignedRowsPage'),
+);
+const ServiceIntakePage = lazy(
+  () => import('@/features/reconciliation/ServiceIntakePage'),
+);
 const DataExportPage = lazy(
   () => import('@/features/data-export/DataExportPage'),
 );
@@ -385,6 +394,62 @@ export function App() {
                   element={
                     <LazyPage>
                       <DataExportPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The Dash Reconciliation page. The owner holds it through
+                  enabled modules; no other role does by default — the owner
+                  grants it from the role matrix. */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.CarrierReconciliation}:read`} />
+                }
+              >
+                <Route
+                  path="/reconciliation"
+                  element={
+                    <LazyPage>
+                      <ReconciliationPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The rows of it handed to someone (PAC-173), where the
+                  `reconciliation.row_assigned` notification lands. Outside the
+                  gate above: the Producers and CSRs it is for hold no
+                  reconciliation permission, so `leads:read` admits them too,
+                  mirroring `GET /carrier-reconciliation/assigned`. No nav
+                  item — the notification and the Producer Dashboard panel
+                  link here. */}
+              <Route
+                element={
+                  <RequirePermission
+                    anyOf={[
+                      `${ModuleKey.CarrierReconciliation}:read`,
+                      `${ModuleKey.Leads}:read`,
+                    ]}
+                  />
+                }
+              >
+                <Route
+                  path="/reconciliation/assigned"
+                  element={
+                    <LazyPage>
+                      <AssignedRowsPage />
+                    </LazyPage>
+                  }
+                />
+                {/* Set up for service (PAC-173 PR 5): a 1-800 row's assignee
+                    records the client and the policy and hands it to a CSR.
+                    The page itself says when the row is not theirs to set up. */}
+                <Route
+                  path="/reconciliation/assigned/:rowId/service-intake"
+                  element={
+                    <LazyPage>
+                      <ServiceIntakePage />
                     </LazyPage>
                   }
                 />

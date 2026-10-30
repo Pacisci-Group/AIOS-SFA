@@ -1,0 +1,76 @@
+meta {
+  name: Get Run
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts every tab", function () {
+    const counts = res.getBody().tabCounts;
+    expect(counts).to.have.keys([
+      "missing_from_app",
+      "not_in_dash",
+      "review_1800",
+      "premium_mismatch",
+      "producer_mismatch",
+      "matched",
+      "ignored",
+    ]);
+  });
+
+  test("counts the open rows that are with someone", function () {
+    expect(res.getBody().assigned).to.be.a("number");
+  });
+
+  test("and of those, the ones with an outcome under way", function () {
+    const run = res.getBody();
+    expect(run.inProgress).to.be.a("number");
+    expect(run.inProgress).to.be.at.most(run.assigned);
+  });
+
+  test("totals the premium differences", function () {
+    const totals = res.getBody().totals;
+    expect(totals.premiumMismatch).to.be.a("number");
+    expect(totals.premiumMismatchDelta).to.be.a("number");
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id — one run, summarized
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  The run with its totals, the per-producer summary (capture rate, missing
+  premium, app-only policies, credit mismatches), each tab's row count and
+  how many still need a decision, and any parser warnings.
+
+  `totals.premiumMismatch` counts the matched policies whose premium differs
+  from Dash's, and `totals.premiumMismatchDelta` sums how far apart they are
+  (`Σ |Dash − app|`, so an over and an under never cancel). A run classified
+  before premiums were compared reads `0` for both until it is re-checked.
+
+  `assigned` counts the rows still waiting on a decision that the owner has
+  handed to a Producer or CSR; `inProgress` (PAC-173 PR 4) counts those whose
+  assignee has an outcome under way — a Sold or Cancel rewrite started and
+  not yet booked (see `Record Outcome (Sold)`). A finished outcome decides
+  its row, so it is in neither.
+
+  ## Errors
+  - `400` — `:id` is not an ObjectId
+  - `404` — no such run in the agency
+}

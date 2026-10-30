@@ -8,6 +8,11 @@ import {
   ONBOARDING_DEFAULT_MODULES,
 } from "@sfa/shared";
 import { z } from "zod";
+import {
+  allstateCodesForCreate,
+  allstateCodesShape,
+  EMPTY_ALLSTATE_CODES,
+} from "@/components/allstate-codes/allstate-codes-schema";
 import type { OnboardAgencyInput } from "@/lib/platform-api";
 
 /**
@@ -83,6 +88,12 @@ export const onboardFormSchema = z.object({
       .min(1, "Email is required")
       .email("Enter a valid email")
       .max(160),
+    /**
+     * Optional (PAC-173): an owner who also sells has a Bind ID like any
+     * producer, and the operator may have it to hand. They can add or correct
+     * it when they accept the invite.
+     */
+    ...allstateCodesShape,
   }),
 });
 
@@ -104,7 +115,7 @@ export const EMPTY_ONBOARD: OnboardFormValues = {
     address: { street: "", city: "", state: "", zip: "" },
   },
   modules: [...ONBOARDING_DEFAULT_MODULES],
-  owner: { firstName: "", lastName: "", email: "" },
+  owner: { firstName: "", lastName: "", email: "", ...EMPTY_ALLSTATE_CODES },
 };
 
 /**
@@ -153,6 +164,7 @@ export function toOnboardInput(values: OnboardFormValues): OnboardAgencyInput {
       firstName: values.owner.firstName.trim(),
       lastName: values.owner.lastName.trim(),
       email: values.owner.email.trim().toLowerCase(),
+      ...allstateCodesForCreate(values.owner),
     },
   };
 }

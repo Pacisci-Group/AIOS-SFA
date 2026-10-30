@@ -1,0 +1,85 @@
+meta {
+  name: List Run Rows (1-800 Review)
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?tab=review_1800&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  tab: review_1800
+  pageSize: 25
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().items.length) {
+    bru.setVar("reconRowId", res.getBody().items[0].id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the 1-800 line, flagged by a Bind ID on no user", function () {
+    const row = res.getBody().items.find((item) => item.dash.bindId === "OSCVANJ");
+    expect(row).to.not.equal(undefined);
+    expect(row.bindIdStatus).to.equal("not_staff");
+    expect(row.issues).to.include("not_staff_bind_id");
+    expect(row.tabs).to.include("review_1800");
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/rows — a run's rows
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  ## Query
+  - `tab` — `missing_from_app` | `not_in_dash` | `review_1800` |
+    `premium_mismatch` | `producer_mismatch` | `matched` | `ignored`
+    (omitted: every row)
+  - `producer` — a summary row's `producerKey`: `user:<id>` (whose Bind ID
+    bound it), `bind:<Bind ID>` (a former employee Dash names), `none` (no Bind
+    ID); `code:<nnn>` only on a run classified before 28 Oct 2026, until it is
+    re-checked
+  - `reviewStatus` — `open` | `resolved` | `dismissed` (rows needing review only)
+  - `assignee` — a user id, `me` or `unassigned`
+  - `outcome` — what the assignee recorded (PAC-173 PR 4): `in_progress` or
+    `done` (by where it stands), or `sold` | `cancel_rewrite` |
+    `service_intake` | `other` (by kind). Anything else is a `400`. See
+    `List Run Rows (Outcome Done)` and `List Run Rows (Outcome Service Intake)`
+  - `q` — policy number, customer or client name, Bind ID (substring)
+  - `page`, `pageSize` (≤ 100, default 25)
+
+  ## Response `200`
+
+  Paged `ReconciliationRowView`s: `dash` (the line as parsed), `app` (the
+  matched or app-only policy, with its deal, producer and sold day),
+  `issues`, `tabs`, `needsReview`, `credit` (who Dash credits), `suggestions`
+  (likely counterparts of an unmatched row — usually a mistyped number),
+  `review`, `runId`, `assignment` (who the owner handed it to, or `null`) and
+  `outcome` (what the assignee recorded, or is recording, or `null` — shape in
+  `Record Outcome (Sold)`).
+
+  A matched row in the 1-800 tab also carries `direct_recorded_as_sale` when
+  the app has the policy on a deal: a 1-800 policy is serviced, never sold. A
+  Bind ID Dash names (`former_staff`) never raises it.
+
+  A 1-800 policy already **set up for service** (`app.origin:
+  "carrier_direct"`, PAC-173 PR 5) is the answer to that tab's question: its
+  line matches it clean — tab `matched`, context issue `direct_1800`, no
+  producer to check — and leaves the 1-800 tab. A re-upload carries the
+  finished outcome and its decision across to it. (`Reclassify Run` does not
+  re-match, so only a new upload moves the row.)
+}

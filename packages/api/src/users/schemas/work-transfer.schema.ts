@@ -47,6 +47,10 @@ export class WorkTransferTouched {
 
   @Prop({ type: [ObjectIdType], default: [] })
   rotationsDeactivated: Types.ObjectId[];
+
+  /** Dash Reconciliation rows still waiting on a decision (PAC-173). */
+  @Prop({ type: [ObjectIdType], default: [] })
+  reconciliationRows: Types.ObjectId[];
 }
 
 const WorkTransferTouchedSchema =

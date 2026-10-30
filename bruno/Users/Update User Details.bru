@@ -1,0 +1,88 @@
+meta {
+  name: Update User Details
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/users/{{invitedUserId}}/details
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  // Two digits, sent unpadded to show it is stored zero-padded. 60–98 stays
+  // clear of the demo producers' 101–105; Revoke Invite deletes this user, and
+  // the code with it, at the end of the folder.
+  bru.setVar("inviteSubProducer", String(60 + Math.floor(Math.random() * 39)));
+}
+
+body:json {
+  {
+    "lastName": "Invitee",
+    "allstateSubProducerCode": "{{inviteSubProducer}}"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("stores the sub-producer code zero-padded", function () {
+    expect(res.getBody().allstateSubProducerCode).to.equal(
+      `0${bru.getVar("inviteSubProducer")}`,
+    );
+  });
+
+  test("leaves the fields it was not sent alone", function () {
+    const body = res.getBody();
+    expect(body.firstName).to.equal("Pending");
+    expect(body.allstateBindId).to.equal(
+      bru.getVar("inviteBindId").toUpperCase(),
+    );
+  });
+}
+
+docs {
+  # PATCH /users/:userId/details — correct someone's name or Allstate codes (PAC-173)
+
+  **Module** — none (`@SkipModule`). **Permission** — `agency:users:write`
+  (Agency Owner). The user must belong to the caller's agency (`404`
+  otherwise). Works on active users, pending invites and removed users alike:
+  a leaver's Bind ID still names who bound their old sales.
+
+  **Body** — every field `clearable`: a value sets, `null` or `""` clears,
+  omitting the key leaves it alone.
+
+  | field | type | rules |
+  |---|---|---|
+  | firstName | string \| null | trimmed, ≤ 100 |
+  | lastName | string \| null | trimmed, ≤ 100 |
+  | allstateBindId | string \| null | Allstate portal login; letters, digits, `.` `_` `-`, ≤ 32; stored upper-cased |
+  | allstateSubProducerCode | string \| null | ≤ 3 digits, stored zero-padded (`34` → `034`); `000` refused |
+
+  The codes are what Dash Reconciliation credits a producer by, and a Bind ID
+  on no user that Dash prints no name for marks a policy as Allstate's own
+  1-800 business (a named one reads as a former employee's) — after setting
+  one, re-check the month's run (`POST /carrier-reconciliation/runs/:id/reclassify`).
+
+  **Response `200`** — the user, exactly as `GET /users/:userId` returns it
+  (codes absent when unset).
+
+  **Errors**
+  - `400` — a malformed code, or `000` as a sub-producer code (see
+    **Update User Details (000 Sub-producer)**)
+  - `403` — caller lacks `agency:users:write`
+  - `404` — no such user in this agency
+  - `409` `ALLSTATE_CODE_DUPLICATE` — another user holds the code (see
+    **Update User Details (Duplicate Code)**)
+}

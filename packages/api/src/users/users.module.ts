@@ -57,6 +57,14 @@ import { UserWorkReleaseService } from './user-work-release.service';
 import { WorkTransferService } from './work-transfer.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import {
+  ReconciliationRow,
+  ReconciliationRowSchema,
+} from '../carrier-reconciliation/schemas/reconciliation-row.schema';
+import {
+  ReconciliationRun,
+  ReconciliationRunSchema,
+} from '../carrier-reconciliation/schemas/reconciliation-run.schema';
 
 @Module({
   imports: [
@@ -91,6 +99,10 @@ import { UsersService } from './users.service';
       { name: ShareLink.name, schema: ShareLinkSchema },
       { name: Activity.name, schema: ActivitySchema },
       { name: WorkTransfer.name, schema: WorkTransferSchema },
+      // Dash Reconciliation rows assigned to someone move or are released
+      // with the rest of their work (PAC-173). Schemas only.
+      { name: ReconciliationRun.name, schema: ReconciliationRunSchema },
+      { name: ReconciliationRow.name, schema: ReconciliationRowSchema },
     ]),
   ],
   controllers: [UsersController],

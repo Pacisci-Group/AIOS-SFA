@@ -1,0 +1,45 @@
+meta {
+  name: Record Outcome (Other Without Note)
+  type: http
+  seq: 38
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconPremiumRowId}}/outcome
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "kind": "other",
+    "note": "   "
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("names the missing note", function () {
+    expect(res.getBody().message).to.equal("Validation failed");
+    expect(res.getBody().errors.fieldErrors.note).to.be.an("array").that.is.not.empty;
+  });
+}
+
+docs {
+  # PATCH …/assigned/:rowId/outcome — Other with no note (400)
+
+  Other **is** the note — what became of the row — so it needs one. The note
+  is trimmed first, so blanks are no note. Refused before the row is read.
+
+  ```json
+  { "message": "Validation failed",
+    "errors": { "formErrors": [], "fieldErrors": { "note": ["say what became of it"] } } }
+  ```
+}

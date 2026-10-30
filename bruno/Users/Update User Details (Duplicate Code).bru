@@ -1,0 +1,57 @@
+meta {
+  name: Update User Details (Duplicate Code)
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/users/{{invitedUserId}}/details
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "allstateBindId": "sokdemop"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("names the field and who holds the code", function () {
+    const body = res.getBody();
+    expect(body.code).to.equal("ALLSTATE_CODE_DUPLICATE");
+    expect(body.field).to.equal("allstateBindId");
+    expect(body.message).to.equal(
+      "Allstate Bind ID SOKDEMOP is already on Pat Producer.",
+    );
+  });
+}
+
+docs {
+  # PATCH /users/:userId/details — a code someone else holds (PAC-173)
+
+  Gives the pending invitee Pat Producer's Bind ID (the demo seed's
+  `SOKDEMOP`, sent lower-case — the clash is found after normalising). Codes
+  are unique within the agency, so the save is refused and nothing changes.
+
+  **Response `409`**
+  ```json
+  {
+    "code": "ALLSTATE_CODE_DUPLICATE",
+    "field": "allstateBindId",
+    "message": "Allstate Bind ID SOKDEMOP is already on Pat Producer."
+  }
+  ```
+}

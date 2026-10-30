@@ -1,0 +1,38 @@
+meta {
+  name: Assign Row (Already Decided)
+  type: http
+  seq: 34
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{currentUserId}}"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # PATCH …/assignment — a row already decided (409)
+
+  `Review Row` resolved the 1-800 line, so there is nothing left for anyone
+  to do on it. Only a row still waiting on a decision can be assigned.
+}

@@ -59,6 +59,14 @@ interface PolicyDraftStepperProps {
    * fresh touched-state.
    */
   initialValues?: SoldPolicyFormValues;
+  /**
+   * Values to start a **new** policy from — the Dash line a reconciliation
+   * outcome records (PAC-173). Unlike `initialValues` it is not an edit: the
+   * header does not say "Editing", Cancel reads "Cancel policy", and the form
+   * is not dirty until the producer changes something. Read once, at mount,
+   * like `initialValues`, which wins when both are given.
+   */
+  seed?: SoldPolicyFormValues;
   /** 1-based position of this policy on the sale, for the progress header. */
   position: number;
   /** The last step's button — "Add to sale", "Save policy". */
@@ -104,6 +112,7 @@ export function PolicyDraftStepper({
   staff,
   uploadScope,
   initialValues,
+  seed,
   position,
   commitLabel,
   busy = false,
@@ -138,7 +147,11 @@ export function PolicyDraftStepper({
    * `discounts.defensiveDriver.drivers`.
    */
   const [defaultValues] = useState<SoldPolicyFormValues>(() =>
-    initialValues ? structuredClone(initialValues) : emptyPolicy(variant),
+    initialValues
+      ? structuredClone(initialValues)
+      : seed
+        ? structuredClone(seed)
+        : emptyPolicy(variant),
   );
 
   /**

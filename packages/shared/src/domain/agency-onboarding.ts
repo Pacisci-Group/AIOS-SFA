@@ -64,6 +64,12 @@ export const ONBOARDING_DEFAULT_MODULES: readonly ModuleKey[] = [
    * `analytics:read`, which a disabled module would filter away.
    */
   ModuleKey.Analytics,
+  /*
+   * Dash Reconciliation. On by default so the owner — who holds every
+   * enabled module — has the page from day one; no other role template
+   * carries it.
+   */
+  ModuleKey.CarrierReconciliation,
 ];
 
 /** `GET /platform/agencies/availability` — live checks for the wizard's fields. */

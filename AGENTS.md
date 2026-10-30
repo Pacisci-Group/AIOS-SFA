@@ -221,6 +221,26 @@ temperature/aging that aren't first-class in legacy payloads. See
   `mailerImportRuns` collection by hand (`db.mailerImportRuns.drop()`): no code
   references it any more, so nothing will.
 
+- `docs/plans/pac-173-dash-reconciliation-implementation-plan.md` — the Dash
+  Reconciliation page (PAC-173) (`/reconciliation`, module `carrier_reconciliation`):
+  the owner uploads Allstate's monthly "New Business Details" export and a run
+  matches it to the agency's policies **by policy number**, listing what is
+  missing from the app, what Dash does not show, **1-800 policies** (bound by
+  an Allstate login that is on no staff user **and** has no Bind ID Name in
+  Dash — a named login on no user is a former employee, never 1-800) and
+  credit mismatches.
+  A Dash line belongs to the user whose **`allstateBindId`** (who bound it)
+  it carries — Dash's sub-producer column is not read (owner, 28 Oct 2026; it
+  listed people twice). The Bind ID and `allstateSubProducerCode` are fields
+  on the **user**, entered at invite / accept-invite, editable on the profile
+  and by the owner (`PATCH /users/:userId/details`), unique per agency,
+  normalised by `@sfa/shared`'s `allstate-codes.ts`. There is no code
+  registry. The engine
+  lives in `packages/api/src/common/carrier-reconciliation/` and splits
+  matching from classification, so setting someone's code re-classifies a
+  stored run without re-reading the file. Agency-wide by design: data scope is
+  not applied.
+
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
 > and the backend is **NestJS/Mongo**. Do not build localStorage mocks.

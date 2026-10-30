@@ -43,6 +43,10 @@ import {
   ServiceTicketSchema,
 } from '../../crm/schemas/service-ticket.schema';
 import {
+  Onboarding,
+  OnboardingSchema,
+} from '../../crm/schemas/onboarding.schema';
+import {
   DealAudit,
   DealAuditSchema,
 } from '../../deal-audits/schemas/deal-audit.schema';
@@ -126,6 +130,7 @@ import { DemoSeedService } from './demo-seed.service';
       { name: Contact.name, schema: ContactSchema },
       { name: Policy.name, schema: PolicySchema },
       { name: ServiceTicket.name, schema: ServiceTicketSchema },
+      { name: Onboarding.name, schema: OnboardingSchema },
       { name: DealAudit.name, schema: DealAuditSchema },
       { name: InterestedParty.name, schema: InterestedPartySchema },
       { name: PriorInsurance.name, schema: PriorInsuranceSchema },

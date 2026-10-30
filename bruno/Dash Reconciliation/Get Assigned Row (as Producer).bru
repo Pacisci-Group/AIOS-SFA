@@ -1,0 +1,105 @@
+meta {
+  name: Get Assigned Row (as Producer)
+  type: http
+  seq: 32
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row, its assignment and its upload", function () {
+    const row = res.getBody();
+    expect(row.id).to.equal(bru.getVar("reconAssignRowId"));
+    expect(row.assignment.note).to.equal("Enter the deal from the Dash line");
+    expect(row.run.id).to.equal(bru.getVar("reconRunId"));
+  });
+
+  test("nothing recorded on it yet", function () {
+    expect(res.getBody().outcome).to.equal(null);
+  });
+
+  test("the Dash line as the New Lead and Sold forms want it", function () {
+    // The fixture's 900299990: AVERY QUINN, Homeowners, written and issued
+    // 12 Oct 2026, $2,210.50, one item, on the Allstate run.
+    expect(res.getBody().prefill).to.deep.equal({
+      lead: { firstName: "Avery", lastName: "Quinn", createdDate: "2026-10-12" },
+      policy: {
+        policyNumber: "900299990",
+        policyType: "Home",
+        carrier: "Allstate",
+        premium: 2210.5,
+        itemCount: 1,
+        effectiveDate: "2026-10-12",
+        soldDate: "2026-10-12",
+      },
+      // A row missing from the app offers no service intake (PR 5).
+      serviceIntake: null,
+    });
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId — one of my rows
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read`
+
+  What the notification opens. Returned whatever the row's state — decided
+  since, or on a run a re-upload replaced — so an old notification still
+  shows what happened, as long as the row is still assigned to the caller.
+  The row carries `outcome` (what the caller recorded on it, or `null`).
+
+  ## `prefill` (PAC-173 PR 4)
+
+  The Dash line as the New Lead and Sold forms want it, so the assignee who
+  records it as sold confirms what Dash says rather than retyping it. `null`
+  on a row with no Dash line; any Dash field missing reads as `null`.
+
+  - `lead` — `firstName` / `lastName` from Dash's `FIRST LAST`: the first
+    token, then the rest, title-cased across spaces, hyphens and apostrophes
+    (`MARY-JANE O'NEIL` → `Mary-Jane` / `O'Neil`; one token leaves the last
+    name `""`). `null` without a customer name. `createdDate` is the sold
+    date, because a sale may not predate its lead.
+  - `policy`
+    - `policyNumber`, `premium` (Dash's written premium)
+    - `policyType` — Dash's product mapped to the app's type (`Standard` /
+      `Non Standard Auto` → `Auto`, `Specialty Auto` → `Auto - Special`,
+      `Homeowners` → `Home`, `Renters`, `Landlords` → `Landlord`, `Inland
+      Marine Boatowners` → `Boat Owners`, `Personal Umbrella Policy` →
+      `Umbrella`, `Valuable Items Protection` → `Valuable Item Protection`, or
+      a product that already is an app type); `null` otherwise — the form asks
+    - `carrier` — the catalog name of the carrier the run is for; `null` if
+      the catalog no longer has it
+    - `itemCount` — Dash's, at least 1
+    - `soldDate` — Dash's date written, else issued; `effectiveDate` — issued,
+      else written (`YYYY-MM-DD`)
+  - `serviceIntake` (PAC-173 PR 5) — `{ openingNote }`, the welcome call's
+    first line written from the Dash line ("1-800 policy from Dash — bound by
+    OSCVANJ on 2026-10-15 through 1-800, Standard Auto, written premium
+    $793.08."), on a row that offers **Set up for service** — a 1-800 policy
+    the app does not have — while the agency has CRM service on. `null`
+    otherwise; on a 1-800 row it means CRM service is off. See `Get Assigned
+    Row (as CSR)`.
+
+  ```json
+  { "prefill": {
+      "lead": { "firstName": "Avery", "lastName": "Quinn", "createdDate": "2026-10-12" },
+      "policy": { "policyNumber": "900299990", "policyType": "Home",
+        "carrier": "Allstate", "premium": 2210.5, "itemCount": 1,
+        "effectiveDate": "2026-10-12", "soldDate": "2026-10-12" },
+      "serviceIntake": null } }
+  ```
+
+  ## Errors
+  - `400` — `:rowId` is not an ObjectId
+  - `404` — no such row, or it is not assigned to the caller (unless they
+    hold `carrier_reconciliation:read`)
+}

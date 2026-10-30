@@ -15,6 +15,12 @@ import {
   type AccessContext,
 } from '@sfa/shared';
 import { Activity } from '../activities/schemas/activity.schema';
+import { ReconciliationRow } from '../carrier-reconciliation/schemas/reconciliation-row.schema';
+import { ReconciliationRun } from '../carrier-reconciliation/schemas/reconciliation-run.schema';
+import {
+  currentRunIds,
+  openAssignmentsFilter,
+} from '../common/carrier-reconciliation/assignment-scope';
 import { currentUserObjectId } from '../common/context/request-context';
 import { TransactionRunner } from '../common/mongo/transaction.runner';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
@@ -62,6 +68,8 @@ export interface WorkTransferCounts {
   rotationsTakenOver: number;
   /** Slots switched off because the successor already has one for that producer. */
   rotationsDeactivated: number;
+  /** Dash Reconciliation rows assigned to them that still wait on a decision. */
+  reconciliationRows: number;
 }
 
 export interface WorkTransferResult extends WorkTransferCounts {
@@ -124,6 +132,14 @@ type Plan = WorkTransferTouched;
  *   their sales. Once a producer leaves, every outstanding checklist item is
  *   the successor's to chase (product owner, 2026-10-05). Resolved items keep
  *   the name — `resolvedById` records who actually cleared them.
+ * - `reconciliationRows.assignment` on Dash rows still waiting on a decision,
+ *   on current runs (PAC-173). The hand-over stamps `assignedById` /
+ *   `assignedAt`; a decided row keeps the name of whoever worked it. An
+ *   outcome under way on one (PAC-173 PR 4) is **kept**: its lead moves to the
+ *   successor with the open leads above, so they resume it where it stood —
+ *   unlike a release, which clears it along with the lead's owner. Its
+ *   `startedById` stays the person who started it (attribution); whoever
+ *   finishes it is `completedById`.
  *
  * **Seeds** — not tasks themselves, but the fields the system reads when it
  * mints the *next* task. Moving the tickets without these undoes itself: the
@@ -179,6 +195,10 @@ export class WorkTransferService {
     private readonly activityModel: Model<Activity>,
     @InjectModel(WorkTransfer.name)
     private readonly transferModel: Model<WorkTransferDocument>,
+    @InjectModel(ReconciliationRun.name)
+    private readonly reconciliationRunModel: Model<ReconciliationRun>,
+    @InjectModel(ReconciliationRow.name)
+    private readonly reconciliationRowModel: Model<ReconciliationRow>,
     private readonly transactions: TransactionRunner,
     private readonly roleAssignments: RoleAssignmentsService,
   ) {}
@@ -425,6 +445,7 @@ export class WorkTransferService {
       soldDealIds,
       shareLinks,
       rotations,
+      reconciliationRows,
     ] = await runAll(session, [
       () =>
         idsOf(this.ticketModel, {
@@ -487,6 +508,16 @@ export class WorkTransferService {
           .sort({ order: 1, _id: 1 })
           .session(session)
           .lean<RotationRow[]>(),
+      // `assignment.userId` is a string on these rows, never the ObjectId.
+      async () =>
+        idsOf(
+          this.reconciliationRowModel,
+          openAssignmentsFilter(
+            agencyId,
+            fromId.toString(),
+            await currentRunIds(this.reconciliationRunModel, agencyId, session),
+          ),
+        ),
     ]);
 
     const { rotationsTakenOver, rotationsDeactivated } =
@@ -517,6 +548,7 @@ export class WorkTransferService {
       shareLinks,
       rotationsTakenOver,
       rotationsDeactivated,
+      reconciliationRows,
     };
   }
 
@@ -694,6 +726,23 @@ export class WorkTransferService {
           { $set: { activeForProducer: false } },
           opts,
         ),
+      () =>
+        plan.reconciliationRows.length &&
+        this.reconciliationRowModel.updateMany(
+          {
+            ...byIds(plan.reconciliationRows),
+            'assignment.userId': fromId.toString(),
+          },
+          {
+            $set: {
+              'assignment.userId': toId.toString(),
+              'assignment.assignedById':
+                currentUserObjectId()?.toString() ?? null,
+              'assignment.assignedAt': now,
+            },
+          },
+          opts,
+        ),
     ]);
   }
 
@@ -762,6 +811,7 @@ export class WorkTransferService {
       shareLinks: plan.shareLinks.length,
       rotationsTakenOver: plan.rotationsTakenOver.length,
       rotationsDeactivated: plan.rotationsDeactivated.length,
+      reconciliationRows: plan.reconciliationRows.length,
     };
   }
 }

@@ -1,0 +1,110 @@
+meta {
+  name: Get Options
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/options
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+script:post-response {
+  // A CSR who cannot book a sale, for `Assign Row (Cannot Sell)`: the demo's
+  // CSRs hold the CSR template, which has no `deal_audits:write`.
+  const csr = (res.getBody().assignees || []).find(
+    (person) => person.roles.includes("csr") && !person.canRecordSale,
+  );
+  if (csr) bru.setVar("reconCsrId", csr.id);
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the Producers and CSRs a row can be assigned to", function () {
+    const assignees = res.getBody().assignees;
+    expect(assignees).to.be.an("array").that.is.not.empty;
+    expect(assignees[0]).to.have.keys([
+      "id",
+      "name",
+      "email",
+      "roles",
+      "canRecordSale",
+      "canSetUpService",
+    ]);
+    for (const person of assignees) {
+      expect(person.roles.some((role) => ["producer", "csr"].includes(role))).to.equal(true);
+    }
+    // Auth/Login's producer is in the pool; the owner is not.
+    const ids = assignees.map((person) => person.id);
+    expect(ids).to.include(bru.getVar("currentUserId"));
+    expect(ids).to.not.include(bru.getVar("reconOwnerId"));
+  });
+
+  test("marks who can book a sale", function () {
+    const pat = res.getBody().assignees.find((person) => person.id === bru.getVar("currentUserId"));
+    expect(pat.canRecordSale).to.equal(true);
+    for (const person of res.getBody().assignees) {
+      expect(person.canRecordSale).to.be.a("boolean");
+    }
+  });
+
+  test("marks who can set a 1-800 policy up for service", function () {
+    // Both templates hold `leads:write`, so every default Producer and CSR can.
+    for (const person of res.getBody().assignees) {
+      expect(person.canSetUpService).to.be.a("boolean");
+    }
+    const pat = res.getBody().assignees.find((person) => person.id === bru.getVar("currentUserId"));
+    expect(pat.canSetUpService).to.equal(true);
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/options — who a row can be assigned to
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+  - **Data scope:** none — the page is agency-wide by design.
+
+  The assignee picker: the agency's **active Producers and CSRs** — users
+  holding a role with slug `producer` or `csr` — by first, then last name.
+  Pending invites, deactivated users and platform admins are left out. The
+  same pool is what `Assign Row` accepts.
+
+  `canRecordSale` (PAC-173 PR 4) says whether the person can **book a sale**
+  — `leads:write` **and** `deal_audits:write` — by their effective
+  permissions (role defaults, plus their own grants, less revokes, within the
+  agency's enabled modules), never by role name. Only they can be given a row
+  **missing from the app**, because recording one as Sold or a Cancel rewrite
+  means entering the lead and the sale; the picker greys the rest out on
+  those rows ("Can't book a sale"). A standard CSR is `false` (the CSR
+  template has no `deal_audits:write`) and still takes rows in any other tab,
+  which only ever take Other. A CSR the agency lets sell is `true`.
+
+  `canSetUpService` (PAC-173 PR 5) says whether the person can **set a 1-800
+  policy up for service** — `leads:write`, which both the Producer and the
+  CSR templates hold — again by effective permission. Only they can be given
+  a 1-800 row the app does not have yet (`review_1800`, `dash_only`): its
+  outcome creates the client's household as a lead intake does. The picker
+  greys the rest out on those rows ("Can't set up service").
+
+  ## Response `200`
+
+  ```json
+  { "assignees": [
+      { "id": "6a95…", "name": "Pat Producer", "email": "producer@demoagency.local",
+        "roles": ["producer"], "canRecordSale": true, "canSetUpService": true },
+      { "id": "6a96…", "name": "Casey Kim", "email": "casey.kim@demoagency.local",
+        "roles": ["csr"], "canRecordSale": false }] }
+  ```
+
+  Captures `reconCsrId` — a CSR with `canRecordSale: false` — for
+  `Assign Row (Cannot Sell)`.
+}

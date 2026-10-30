@@ -6,6 +6,18 @@ import {
   terminalLeadStatusValues,
 } from '@sfa/shared';
 import { Activity } from '../activities/schemas/activity.schema';
+import {
+  ReconciliationRow,
+  type ReconciliationRowDocument,
+} from '../carrier-reconciliation/schemas/reconciliation-row.schema';
+import {
+  ReconciliationRun,
+  type ReconciliationRunDocument,
+} from '../carrier-reconciliation/schemas/reconciliation-run.schema';
+import {
+  currentRunIds,
+  openAssignmentsFilter,
+} from '../common/carrier-reconciliation/assignment-scope';
 import { currentUserObjectId } from '../common/context/request-context';
 import {
   CrmRotation,
@@ -36,6 +48,8 @@ export interface ReleasedWork {
   householdsUnassigned: number;
   /** Open leads returned to the unclaimed pool. */
   leadsUnassigned: number;
+  /** Dash Reconciliation rows back with the owner, assigned to nobody. */
+  reconciliationRowsUnassigned: number;
 }
 
 /**
@@ -103,11 +117,15 @@ export class UserWorkReleaseService {
     @InjectModel(Activity.name)
     private readonly activityModel: Model<Activity>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectModel(ReconciliationRun.name)
+    private readonly reconciliationRunModel: Model<ReconciliationRunDocument>,
+    @InjectModel(ReconciliationRow.name)
+    private readonly reconciliationRowModel: Model<ReconciliationRowDocument>,
   ) {}
 
   /** Count what {@link release} would free, without changing anything. */
   async preview(agencyId: string, userId: string): Promise<ReleasedWork> {
-    const f = this.filters(agencyId, userId);
+    const f = await this.filters(agencyId, userId);
     const [
       ticketsUnassigned,
       rotationsDeactivated,
@@ -115,6 +133,7 @@ export class UserWorkReleaseService {
       renewalCyclesUnassigned,
       householdsUnassigned,
       leadsUnassigned,
+      reconciliationRowsUnassigned,
     ] = await Promise.all([
       this.ticketModel.countDocuments(f.tickets),
       this.rotationModel.countDocuments(f.rotations),
@@ -122,6 +141,7 @@ export class UserWorkReleaseService {
       this.renewalCycleModel.countDocuments(f.renewalCycles),
       this.householdModel.countDocuments(f.households),
       this.leadModel.countDocuments(f.leads),
+      this.reconciliationRowModel.countDocuments(f.reconciliationRows),
     ]);
     return {
       ticketsUnassigned,
@@ -130,11 +150,12 @@ export class UserWorkReleaseService {
       renewalCyclesUnassigned,
       householdsUnassigned,
       leadsUnassigned,
+      reconciliationRowsUnassigned,
     };
   }
 
   async release(agencyId: string, userId: string): Promise<ReleasedWork> {
-    const f = this.filters(agencyId, userId);
+    const f = await this.filters(agencyId, userId);
 
     // Captured first so each released lead gets its own timeline entry — after
     // the write they are indistinguishable from every other pooled lead.
@@ -144,52 +165,90 @@ export class UserWorkReleaseService {
         .lean<{ _id: Types.ObjectId }[]>()
     ).map((lead) => lead._id);
 
-    const [tickets, rotations, onboardings, cycles, households, , leads] =
-      await Promise.all([
-        // `assignedRep` is a denormalized display name
-        // (`crm/schemas/service-ticket.schema.ts`), so clearing the id alone
-        // would leave the board still showing a departed rep against an
-        // unassigned ticket. The two fields have to move together.
-        this.ticketModel.updateMany(f.tickets, {
-          $set: { assignedUserId: null, assignedRep: '' },
-        }),
+    const [
+      tickets,
+      rotations,
+      onboardings,
+      cycles,
+      households,
+      ,
+      leads,
+      reconciliationRows,
+    ] = await Promise.all([
+      // `assignedRep` is a denormalized display name
+      // (`crm/schemas/service-ticket.schema.ts`), so clearing the id alone
+      // would leave the board still showing a departed rep against an
+      // unassigned ticket. The two fields have to move together.
+      this.ticketModel.updateMany(f.tickets, {
+        $set: { assignedUserId: null, assignedRep: '' },
+      }),
 
-        // Load-bearing, and easy to miss.
-        //
-        // `CrmAssignmentService` builds its round-robin pool from
-        // `{ agencyId, producerId, activeForProducer: true }` and never checks
-        // whether the CRM behind `crmId` is still an active user. Releasing
-        // this person's current tickets while leaving them in the rotation
-        // would hand them a fresh one on the next sold deal — the work would
-        // leak straight back to somebody who no longer has an account.
-        this.rotationModel.updateMany(f.rotations, {
-          $set: { activeForProducer: false },
-        }),
+      // Load-bearing, and easy to miss.
+      //
+      // `CrmAssignmentService` builds its round-robin pool from
+      // `{ agencyId, producerId, activeForProducer: true }` and never checks
+      // whether the CRM behind `crmId` is still an active user. Releasing
+      // this person's current tickets while leaving them in the rotation
+      // would hand them a fresh one on the next sold deal — the work would
+      // leak straight back to somebody who no longer has an account.
+      this.rotationModel.updateMany(f.rotations, {
+        $set: { activeForProducer: false },
+      }),
 
-        this.onboardingModel.updateMany(f.onboardings, {
-          $set: { assignedCsrId: null },
-        }),
-        this.renewalCycleModel.updateMany(f.renewalCycles, {
-          $set: { assignedCsrId: null },
-        }),
+      this.onboardingModel.updateMany(f.onboardings, {
+        $set: { assignedCsrId: null },
+      }),
+      this.renewalCycleModel.updateMany(f.renewalCycles, {
+        $set: { assignedCsrId: null },
+      }),
 
-        // `$unset`, not `null`: `CrmAssignmentService`'s conditional claim
-        // matches `{ $in: [null, undefined] }`, and absent is what a household
-        // that never had a CSR looks like.
-        this.householdModel.updateMany(f.households, {
-          $unset: { assignedCrmId: 1 },
-        }),
-        // The deal mirror follows, or the two drift apart for good.
-        this.dealModel.updateMany(f.deals, { $unset: { assignedCrmId: 1 } }),
+      // `$unset`, not `null`: `CrmAssignmentService`'s conditional claim
+      // matches `{ $in: [null, undefined] }`, and absent is what a household
+      // that never had a CSR looks like.
+      this.householdModel.updateMany(f.households, {
+        $unset: { assignedCrmId: 1 },
+      }),
+      // The deal mirror follows, or the two drift apart for good.
+      this.dealModel.updateMany(f.deals, { $unset: { assignedCrmId: 1 } }),
 
-        // Not `lastActivityAt` — a removal is not activity on the lead.
-        leadIds.length
-          ? this.leadModel.updateMany(
-              { _id: { $in: leadIds }, producerId: f.leads.producerId },
-              { $set: { producerId: null } },
-            )
-          : { modifiedCount: 0 },
-      ]);
+      // Not `lastActivityAt` — a removal is not activity on the lead.
+      leadIds.length
+        ? this.leadModel.updateMany(
+            { _id: { $in: leadIds }, producerId: f.leads.producerId },
+            { $set: { producerId: null } },
+          )
+        : { modifiedCount: 0 },
+
+      // Back to the owner's list as unassigned. A decided row keeps its
+      // assignee: that is the record of who worked it, not open work. An
+      // outcome they had under way goes too (PAC-173 PR 4): its lead just went
+      // back to the pool above, so whoever takes the row next starts over.
+      // Rows on a person's list hold no finished outcome (`openAssignmentsFilter`
+      // leaves those out), so nothing finished is cleared here.
+      //
+      // Except a 1-800 service intake waiting on its welcome call (PR 5): its
+      // household and policy are saved, so the outcome stays as their only
+      // link. The owner deciding or handing the row on opens the call, as does
+      // a re-upload of the same period; the call then re-checks its CSR, so it
+      // never goes to the person just removed.
+      (async () => {
+        const pendingIntake = {
+          'outcome.kind': 'service_intake',
+          'outcome.step': 'start_onboarding',
+        };
+        const [cleared, kept] = await Promise.all([
+          this.reconciliationRowModel.updateMany(
+            { ...f.reconciliationRows, $nor: [pendingIntake] },
+            { $set: { assignment: null, outcome: null } },
+          ),
+          this.reconciliationRowModel.updateMany(
+            { ...f.reconciliationRows, ...pendingIntake },
+            { $set: { assignment: null } },
+          ),
+        ]);
+        return { modifiedCount: cleared.modifiedCount + kept.modifiedCount };
+      })(),
+    ]);
 
     await this.recordLeadActivities(leadIds, userId);
 
@@ -200,6 +259,7 @@ export class UserWorkReleaseService {
       renewalCyclesUnassigned: cycles.modifiedCount,
       householdsUnassigned: households.modifiedCount,
       leadsUnassigned: leads.modifiedCount,
+      reconciliationRowsUnassigned: reconciliationRows.modifiedCount,
     };
 
     this.logger.log(
@@ -212,9 +272,10 @@ export class UserWorkReleaseService {
   /**
    * Every filter in one place, each in its collection's `agencyId` type:
    * tickets, onboardings and renewal cycles store an **ObjectId**, every
-   * `TenantRecord` collection a **string**.
+   * `TenantRecord` collection a **string** — and so do reconciliation rows,
+   * whose `assignment.userId` is a string too.
    */
-  private filters(agencyId: string, userId: string) {
+  private async filters(agencyId: string, userId: string) {
     const agencyOid = new Types.ObjectId(agencyId);
     const user = new Types.ObjectId(userId);
     return {
@@ -249,6 +310,12 @@ export class UserWorkReleaseService {
         producerId: user,
         status: { $nin: terminalLeadStatusValues() },
       },
+      /** Dash rows on current runs that still wait on a decision. */
+      reconciliationRows: openAssignmentsFilter(
+        agencyId,
+        userId,
+        await currentRunIds(this.reconciliationRunModel, agencyId),
+      ),
     };
   }
 

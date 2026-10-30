@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { AddressFields } from "@/components/address/AddressFields";
-import { FormError, FormGrid, FormSection } from "@/components/form";
+import { FormError, FormSection } from "@/components/form";
 import { PolicyList } from "@/components/policies/PolicyList";
 import { Button } from "@/components/ui/button";
 import { ownsPath } from "@/lib/field-paths";
@@ -12,6 +12,7 @@ import {
   emptyMember,
 } from "./HouseholdMembersField";
 import { IntakeProgress } from "./IntakeProgress";
+import { PrimaryContactFields } from "./PrimaryContactFields";
 import { LeadPolicySheet } from "./LeadPolicySheet";
 import {
   emptyLeadIntake,
@@ -253,59 +254,7 @@ export function LeadIntakeForm({
       </form.AppField>
     ),
     primaryContact: (
-      <FormGrid>
-          <form.AppField name="primaryContact.firstName">
-            {(f) => (
-              <f.TextField
-                label="First name"
-                autoComplete="given-name"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="primaryContact.lastName">
-            {(f) => (
-              <f.TextField
-                label="Last name"
-                autoComplete="family-name"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="primaryContact.dateOfBirth">
-            {(f) => (
-              <f.TextField
-                label="Date of birth"
-                type="date"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="primaryContact.phone">
-            {(f) => (
-              <f.TextField
-                label="Phone"
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="(555) 123-4567"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-          <form.AppField name="primaryContact.email">
-            {(f) => (
-              <f.TextField
-                label="Email"
-                type="email"
-                inputMode="email"
-                autoComplete="email"
-                className="sm:col-span-2"
-                inputClassName="bg-card border-border"
-              />
-            )}
-          </form.AppField>
-      </FormGrid>
+      <PrimaryContactFields form={form} fields="primaryContact" />
     ),
 
     address: (

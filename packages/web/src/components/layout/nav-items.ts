@@ -1,7 +1,7 @@
 import {
   BarChart3,
-  Bell,
   ChartColumn,
+  FileCheck2,
   FileDown,
   Home,
   LayoutDashboard,
@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { ModuleKey } from "@sfa/shared";
 import { SETTINGS_PERMISSIONS } from "@/features/settings/settings-sections";
-import { NOTIFICATIONS_PATH } from "@/lib/notifications-api";
 
 export type NavItem = {
   to: string;
@@ -143,6 +142,12 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: FileDown,
         module: ModuleKey.DataExport,
       },
+      {
+        to: "/reconciliation",
+        label: "Dash Reconciliation",
+        icon: FileCheck2,
+        module: ModuleKey.CarrierReconciliation,
+      },
     ],
   },
   {
@@ -158,13 +163,10 @@ export const NAV_SECTIONS: NavSection[] = [
      */
     title: "Workspace",
     items: [
-      // No gate (PAC-154): a notification is addressed to you, whatever you
-      // may do. The row carries the unread badge — see `SidebarNavItem`.
-      {
-        to: NOTIFICATIONS_PATH,
-        label: "Notifications",
-        icon: Bell,
-      },
+      // No Notifications entry here. A notification is addressed to *you*,
+      // not to the workspace, so the row lives in the sidebar footer under
+      // the profile chip and status switch — `NOTIFICATIONS_ITEM` in
+      // `SidebarBody.tsx`, which is also where the unread badge is wired.
       {
         to: "/settings",
         label: "Workspace Settings",

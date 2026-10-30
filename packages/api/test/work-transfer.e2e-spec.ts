@@ -1,12 +1,19 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { AgencyPermission, DataScope } from '@sfa/shared';
+import {
+  AgencyPermission,
+  DataScope,
+  type ReconciliationAssignedRowDetail,
+} from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Activity } from '../src/activities/schemas/activity.schema';
 import { Branch } from '../src/branches/schemas/branch.schema';
+import { ReconciliationRow } from '../src/carrier-reconciliation/schemas/reconciliation-row.schema';
+import { ReconciliationRun } from '../src/carrier-reconciliation/schemas/reconciliation-run.schema';
+import type { RowOutcome } from '../src/common/carrier-reconciliation/carry-forward';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
 import { CrmRotation } from '../src/crm-rotations/schemas/crm-rotation.schema';
 import { Onboarding } from '../src/crm/schemas/onboarding.schema';
@@ -54,6 +61,7 @@ describe('Work transfer (e2e)', () => {
   let app: INestApplication<App>;
   let ctx: TestSeedContext;
   let ownerToken: string;
+  let ownerId: string;
   let fromId: string;
   let toId: string;
 
@@ -70,6 +78,8 @@ describe('Work transfer (e2e)', () => {
   let rotations: Model<CrmRotation>;
   let activities: Model<Activity>;
   let transfers: Model<WorkTransfer>;
+  let reconciliationRuns: Model<ReconciliationRun>;
+  let reconciliationRows: Model<ReconciliationRow>;
   let branches: Model<Branch>;
   let roles: Model<AgencyRole>;
   let roleAssignments: RoleAssignmentsService;
@@ -105,6 +115,8 @@ describe('Work transfer (e2e)', () => {
     rotations = model(CrmRotation.name);
     activities = model(Activity.name);
     transfers = model(WorkTransfer.name);
+    reconciliationRuns = model(ReconciliationRun.name);
+    reconciliationRows = model(ReconciliationRow.name);
     branches = model(Branch.name);
     roles = model(AgencyRole.name);
     roleAssignments = app.get(RoleAssignmentsService);
@@ -115,6 +127,8 @@ describe('Work transfer (e2e)', () => {
     await dropTestDatabase(app);
     ctx = await seedTestData(app);
     ownerToken = (await login(app, ctx.ownerEmail, TEST_PASSWORD)).accessToken;
+    const owner = await users.findOne({ email: ctx.ownerEmail }).lean();
+    ownerId = owner!._id.toString();
     const producer = await users.findOne({ email: ctx.producerEmail }).lean();
     fromId = producer!._id.toString();
     const second = await users.create({
@@ -157,6 +171,8 @@ describe('Work transfer (e2e)', () => {
         shareLinks,
         rotations,
         transfers,
+        reconciliationRuns,
+        reconciliationRows,
       ].map((m) => (m as Model<unknown>).deleteMany({})),
     );
     await households.updateMany({}, { $unset: { assignedCrmId: 1 } });
@@ -414,6 +430,229 @@ describe('Work transfer (e2e)', () => {
             activeForProducer: true,
           }),
         ).toBe(1);
+      });
+    });
+
+    /**
+     * PAC-173: a Dash Reconciliation row the owner handed them, still waiting
+     * on a decision, is the successor's to work. Ids on these rows are
+     * **strings**, so every assertion compares against the string id — an
+     * ObjectId written by mistake would fail `toMatchObject` here.
+     */
+    describe('Dash rows', () => {
+      /** Whoever handed the row over first — not the owner, so the transfer's stamp shows. */
+      const firstAssignerId = new Types.ObjectId().toHexString();
+      const handedOverAt = new Date('2026-09-01T12:00:00.000Z');
+
+      /** A finished upload, current unless a re-upload replaced it. */
+      async function seedRun(extra: Partial<ReconciliationRun> = {}) {
+        const run = await reconciliationRuns.create({
+          agencyId: ctx.agencyId,
+          carrierId: new Types.ObjectId(),
+          status: 'ready',
+          file: {
+            storageKey: `agencies/${ctx.agencyId}/carrier-reconciliation/wt-${++seq}.xlsx`,
+            filename: 'dash.xlsx',
+            size: 1,
+          },
+          fileMeta: {
+            agentNumber: null,
+            agentName: null,
+            downloadedBy: null,
+            downloadedAt: null,
+            startDate: '2026-09-01',
+            endDate: '2026-09-30',
+            sheetName: 'Sheet1',
+            headerRowNumber: 1,
+            rowCount: 1,
+          },
+          ...extra,
+        });
+        return run._id;
+      }
+
+      /** A row assigned to `from`, still waiting on a decision unless told otherwise. */
+      async function seedRow(
+        runId: Types.ObjectId,
+        extra: Partial<ReconciliationRow> = {},
+      ) {
+        const row = await reconciliationRows.create({
+          agencyId: ctx.agencyId,
+          runId,
+          rowKey: `wt-row-${++seq}`,
+          side: 'dash',
+          credit: { name: null, userId: null, via: 'none' },
+          producerKey: 'none',
+          tabs: ['missing_from_app'],
+          needsReview: true,
+          review: {
+            status: 'open',
+            resolution: null,
+            note: null,
+            reviewedById: null,
+            reviewedAt: null,
+            carriedForwardFromRowId: null,
+          },
+          assignment: {
+            userId: fromId,
+            assignedById: firstAssignerId,
+            assignedAt: handedOverAt,
+            note: 'Check the premium',
+          },
+          ...extra,
+        });
+        return row._id;
+      }
+
+      const decided = () => ({
+        status: 'resolved' as const,
+        resolution: 'entered_in_app' as const,
+        note: null,
+        reviewedById: fromId,
+        reviewedAt: new Date(),
+        carriedForwardFromRowId: null,
+      });
+
+      it('moves an open row to the successor, stamped as handed over by whoever ran the transfer', async () => {
+        const open = await seedRow(await seedRun());
+
+        const res = await transfer().expect(201);
+        expect(res.body).toMatchObject({ reconciliationRows: 1 });
+
+        const moved = (await reconciliationRows.findById(open).lean())
+          ?.assignment;
+        expect(moved).toMatchObject({
+          userId: toId,
+          assignedById: ownerId,
+          // The owner's note travels with the row.
+          note: 'Check the premium',
+        });
+        expect(moved!.assignedAt.getTime()).toBeGreaterThan(
+          handedOverAt.getTime(),
+        );
+
+        const record = await transfers
+          .findOne({ fromUserId: oid(fromId) })
+          .lean();
+        expect(record?.touched.reconciliationRows.map(String)).toEqual([
+          open.toString(),
+        ]);
+      });
+
+      /**
+       * A decided row is the record of who worked it, a replaced run's rows
+       * are history, and a row needing no decision is no one's work — the
+       * same set the assignee's own page leaves out.
+       */
+      it.each([
+        [
+          'a decided row',
+          async () => seedRow(await seedRun(), { review: decided() }),
+        ],
+        [
+          'a row on a run a re-upload replaced',
+          async () =>
+            seedRow(await seedRun({ supersededByRunId: new Types.ObjectId() })),
+        ],
+        [
+          'a row that needs no decision',
+          async () => seedRow(await seedRun(), { needsReview: false }),
+        ],
+      ])('leaves %s with the departing person', async (_label, seed) => {
+        const id = await seed();
+
+        const res = await transfer().expect(201);
+        expect(res.body).toMatchObject({ reconciliationRows: 0 });
+
+        const row = await reconciliationRows.findById(id).lean();
+        expect(row?.assignment).toMatchObject({
+          userId: fromId,
+          assignedById: firstAssignerId,
+          assignedAt: handedOverAt,
+        });
+      });
+
+      /**
+       * PAC-173 PR 4: an outcome the departing person had under way stays on
+       * the row, and its lead moves with their other open leads — so the
+       * successor resumes it where it stood, unlike a release, which clears
+       * it. Who started it stays as attribution.
+       */
+      it('keeps an outcome under way on the row, and the successor resumes it with the lead', async () => {
+        const lead = await leads.create({
+          ...tenant(),
+          status: 'New',
+          producerId: oid(fromId),
+        });
+        const outcome: RowOutcome = {
+          kind: 'sold',
+          status: 'in_progress',
+          step: 'record_sale',
+          note: 'Booking it Monday',
+          leadId: lead._id.toString(),
+          dealId: null,
+          policyId: null,
+          householdId: null,
+          replacementPolicyId: null,
+          chargebackId: null,
+          startedById: fromId,
+          startedAt: handedOverAt,
+          completedById: null,
+          completedAt: null,
+        };
+        const open = await seedRow(await seedRun(), { outcome });
+
+        const res = await transfer().expect(201);
+        expect(res.body).toMatchObject({ reconciliationRows: 1, leads: 1 });
+
+        const row = await reconciliationRows.findById(open).lean();
+        expect(row?.assignment?.userId).toBe(toId);
+        expect(row?.outcome).toEqual(outcome);
+        expect(
+          (await leads.findById(lead._id).lean())?.producerId?.toString(),
+        ).toBe(toId);
+
+        // The successor carries on: the same outcome, resumed, not restarted.
+        const token = (await login(app, SUCCESSOR_EMAIL, TEST_PASSWORD))
+          .accessToken;
+        const resumed = await api()
+          .patch(
+            `/api/v1/carrier-reconciliation/assigned/${open.toString()}/outcome`,
+          )
+          .set(authHeader(token))
+          .send({ kind: 'sold' })
+          .expect(200);
+        expect(
+          (resumed.body as ReconciliationAssignedRowDetail).outcome,
+        ).toMatchObject({
+          kind: 'sold',
+          status: 'in_progress',
+          step: 'record_sale',
+          leadId: lead._id.toString(),
+          startedBy: { id: fromId },
+          startedAt: handedOverAt.toISOString(),
+        });
+      });
+
+      it('previews the count the transfer then moves, without moving anything', async () => {
+        const runId = await seedRun();
+        const open = [await seedRow(runId), await seedRow(runId)];
+        await seedRow(runId, { review: decided() });
+
+        const preview = await api()
+          .get(`/api/v1/users/${fromId}/work-transfer/preview`)
+          .query({ toUserId: toId })
+          .set(authHeader(ownerToken))
+          .expect(200);
+        expect(preview.body).toMatchObject({ reconciliationRows: 2 });
+        for (const id of open) {
+          expect(
+            (await reconciliationRows.findById(id).lean())?.assignment?.userId,
+          ).toBe(fromId);
+        }
+
+        const res = await transfer().expect(201);
+        expect(res.body).toMatchObject({ reconciliationRows: 2 });
       });
     });
 

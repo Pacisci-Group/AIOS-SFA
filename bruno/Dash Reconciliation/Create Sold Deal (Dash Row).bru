@@ -1,0 +1,99 @@
+meta {
+  name: Create Sold Deal (Dash Row)
+  type: http
+  seq: 45
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "leadId": "{{reconLeadId}}",
+    "soldDate": "2026-10-12",
+    "submissionToken": "{{reconSoldToken}}",
+    "reconciliationRowId": "{{reconAssignRowId}}",
+    "policies": [
+      {
+        "policyType": "Home",
+        "effectiveDate": "2026-10-12",
+        "carrier": "Allstate",
+        "policyNumber": "900299990",
+        "premium": 2210.50,
+        "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "{{reconNbaKey}}",
+          "filename": "avery-quinn-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+script:pre-request {
+  // One submission per run: a replayed token returns the deal it booked, so
+  // a fixed one would hand back the first run's deal for ever after.
+  bru.setVar("reconSoldToken", "bruno-dash-sale-" + Date.now());
+}
+
+script:post-response {
+  if (res.getStatus() === 201) bru.setVar("reconDealId", res.getBody().id);
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("an ordinary sale on the Dash lead", function () {
+    const body = res.getBody();
+    expect(body.leadId).to.equal(bru.getVar("reconLeadId"));
+    expect(body.premium).to.equal(2210.5);
+    expect(body.policyTypes).to.deep.equal(["Home"]);
+    expect(body.leadStatus).to.equal("Sold");
+  });
+}
+
+docs {
+  # POST /sold-deals with `reconciliationRowId` — step 2 of recording a Dash sale
+
+  The Sold form an assignee reaches from the Dash row, seeded from `prefill`:
+  sold date, effective date, carrier, policy number, type, premium and items
+  as Dash has them. The endpoint is `Sold Deals/Create Sold Deal`, and the
+  sale books exactly as it would without the row: same validation, same NBA
+  rule, same credit (the seller — here the assignee), same response.
+
+  What `reconciliationRowId` adds (PAC-173 PR 4), **after** the sale commits,
+  on a `submissionToken` replay too:
+
+  - **Sold** at `record_sale` → `done`, linking the lead, the deal, its
+    household and the deal's policy that is the Dash line (matched by the
+    policy number's key, else the deal's first policy); the row is decided
+    `sold_recorded` by the seller.
+  - **Cancel rewrite** at `record_sale` → the same links, then
+    `write_replacement`. At `write_replacement`, a sale whose policy
+    replaced the Dash policy (`transferredFromPolicyId`) — the replacement
+    lead's sale — finishes it, linking the replacement and the chargeback;
+    decided `cancel_rewrite_recorded`.
+  - **Validated, never trusted.** Only the row's assignee, on a current run,
+    waiting on a decision, with that step under way; a row id from an upload
+    replaced since is followed to its current copy. Anything else is logged
+    and left alone. Idempotent on the deal.
+  - **Never fails the sale.** The deal is booked either way; a hook that
+    died after the commit is made good the next time the assignee resumes
+    the outcome (`Record Outcome (Sold)` again).
+
+  `Get Assigned Row (Done)` checks what it did. A fresh `submissionToken` per
+  run (pre-request script).
+}

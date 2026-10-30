@@ -1,0 +1,60 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("reconToken", res.getBody().accessToken);
+    bru.setVar("reconAgencyId", res.getBody().user.agencyId);
+    // The owner is not a Producer or CSR: the "not eligible" assignment case.
+    bru.setVar("reconOwnerId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the owner holds carrier_reconciliation:write", function () {
+    // Through `grantsAllEnabledModules`, once the module is enabled — by the
+    // demo seed on a fresh database, by the `carrier_reconciliation_module`
+    // migration on an older one.
+    expect(res.getBody().user.permissions).to.include("carrier_reconciliation:write");
+  });
+}
+
+docs {
+  # Sign in as the Agency Owner (Dash Reconciliation)
+
+  The collection's default token belongs to the **producer**, who holds no
+  `carrier_reconciliation` permission — no default role does. The owner has
+  it through every enabled module, so every request in this folder uses the
+  token captured here (`reconToken`) instead of `auth: inherit`.
+
+  Also captures `reconAgencyId`, which the foreign-key and missing-upload
+  requests use to build object keys.
+
+  If the permission assertion fails, the module is not enabled on the demo
+  agency: start the API once (it applies the `carrier_reconciliation_module`
+  migration at boot).
+}

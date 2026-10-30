@@ -1,0 +1,64 @@
+meta {
+  name: Export Exceptions (CSV)
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/export?format=csv
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  format: csv
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a named CSV attachment with the header row", function () {
+    expect(res.getHeader("content-type")).to.contain("text/csv");
+    expect(res.getHeader("content-disposition")).to.match(
+      /attachment; filename="dash-reconciliation_2026-09-01_2026-10-31_exceptions\.csv"/,
+    );
+    expect(String(res.getBody())).to.contain("policy_number");
+    expect(String(res.getBody())).to.contain("premium_delta");
+  });
+
+  test("what the assignee recorded, beside who has the row", function () {
+    expect(String(res.getBody())).to.contain("assigned_to,outcome,outcome_note");
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/export — the exception list
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  Streams the rows of one tab, or of every tab that asks someone to act
+  (missing from app, not in Dash, 1-800 review, premium differs, producer
+  mismatch), as CSV (UTF-8 with a BOM) or XLSX — what the owner hands to
+  producers. Columns: Dash row, tabs, review status, resolution and note,
+  policy number, Dash customer and app client, Dash producer, sub-producer
+  code, Bind ID, app producer, product, transaction, channel, dates, premiums,
+  `premium_delta` (app minus Dash, to the cent, on a matched row), items,
+  `assigned_to` (who the owner handed the row to), `outcome` and
+  `outcome_note` (what the assignee recorded — PAC-173 PR 4), issues, deal id.
+
+  `outcome` reads `<Kind> — done` or `<Kind> — <step>`: `Sold — done`,
+  `Sold — recording the sale`, `Cancel rewrite — recording the sale`,
+  `Cancel rewrite — writing the replacement`, `Cancel rewrite — done`,
+  `Other — done`; blank with no outcome.
+
+  ## Query
+  - `format` — `csv` | `xlsx` (default `xlsx`)
+  - `tab` — one tab (optional)
+}

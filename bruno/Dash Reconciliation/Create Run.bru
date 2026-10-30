@@ -1,0 +1,122 @@
+meta {
+  name: Create Run
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "storageKey": "{{reconUploadKey}}",
+    "uploadedFilename": "dash-new-business-demo.xlsx",
+    "size": 24072
+  }
+}
+
+script:post-response {
+  // A run the first time; on a database that already reconciled these exact
+  // bytes, the duplicate refusal names the run that did.
+  const body = res.getBody();
+  if (res.getStatus() === 201) bru.setVar("reconRunId", body.id);
+  if (res.getStatus() === 409) bru.setVar("reconRunId", body.runId);
+}
+
+tests {
+  test("reconciles the report, or finds it reconciled", function () {
+    expect([201, 409]).to.include(res.getStatus());
+  });
+
+  test("a finished run with its totals", function () {
+    if (res.getStatus() !== 201) {
+      expect(res.getBody().code).to.equal("RECONCILIATION_DUPLICATE_FILE");
+      return;
+    }
+    const run = res.getBody();
+    expect(run.status).to.equal("ready");
+    expect(run.fileMeta.startDate).to.equal("2026-09-01");
+    expect(run.fileMeta.endDate).to.equal("2026-10-31");
+    expect(run.totals.dashRows).to.equal(7);
+    expect(run.totals.dashSales).to.equal(5);
+    expect(run.totals.ignored).to.equal(2);
+    // OSCVANJ, the fixture's unnamed login. Named lines never land here, even
+    // when the demo producers carry no Allstate codes.
+    expect(run.tabCounts.review_1800.total).to.be.at.least(1);
+    // 900200000: Dash says $1,928.01, the app $1,928.00. A cent is enough.
+    expect(run.tabCounts.premium_mismatch.total).to.be.at.least(1);
+    expect(run.totals.premiumMismatch).to.equal(run.tabCounts.premium_mismatch.total);
+    expect(run.totals.premiumMismatchDelta).to.be.at.least(0.01);
+    expect(run.warnings.join(" ")).to.contain("agent number");
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs — reconcile an uploaded report (step 3 of 3)
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+  - **Data scope:** none — a carrier report is the agency's whole book.
+
+  Processed **in the request** (a month's report is a few hundred lines). The
+  API checks the key is this agency's, the object exists with the declared
+  size and under 10 MB, the file is a Dash "New Business Details" report, and
+  — when it names one — that its agent number is one of the agency's Allstate
+  codes. It then matches every line to the app's policies by policy number
+  and classifies it against the Allstate codes on the agency's users: a Bind
+  ID on no user that Dash prints **no Bind ID Name** for ⇒ 1-800; a Bind ID on
+  no user that Dash *names* ⇒ a former employee (`bindIdStatus:
+  "former_staff"`), never 1-800. Each line belongs to the user whose Bind ID
+  bound it, by their name in the app; Dash's sub-producer column is not read
+  (owner, 28 Oct 2026).
+
+  A matched policy is then checked against the app's, which is the source of
+  truth: a premium that differs **by any amount, even a cent**
+  (`premium_mismatch` tab; `totals.premiumMismatch` and
+  `totals.premiumMismatchDelta`), a different producer (`producer_mismatch`
+  tab), a different item count (context only), and a 1-800 policy the app has
+  on a deal (`direct_recorded_as_sale`, in the 1-800 tab — a 1-800 policy is
+  serviced, never sold).
+
+  Uploading the same period again **supersedes** the earlier run and carries
+  its review decisions to rows that still say the same thing.
+
+  ## Body
+  - `storageKey` — the key from `Presign Upload`
+  - `uploadedFilename`, `size`
+
+  ## Response `201` — `ReconciliationRunDetail`
+
+  ```json
+  { "id": "…", "status": "ready", "filename": "…", "fileMeta": { "agentNumber": "0B9049",
+    "startDate": "2026-09-01", "endDate": "2026-09-30", "rowCount": 618, … },
+    "totals": { "dashSales": 108, "matched": 96, "missing": 12, "appOnly": 6,
+      "review1800": 0, "producerMismatch": 0, "missingPremium": 19231.51, "captureRate": 0.889, … },
+    "openReviews": 18, "byProducer": [{ "name": "Jessica Yates", "dashSales": 52, … }],
+    "tabCounts": { "missing_from_app": { "total": 12, "open": 12 }, … },
+    "warnings": [], "supersedesRunId": null, … }
+  ```
+
+  ## Errors
+  - `400` — a key that is not this agency's; nothing uploaded; size mismatch
+  - `409` `RECONCILIATION_DUPLICATE_FILE` — these exact bytes were reconciled
+    already; `runId` names that run
+  - `413` — over 10 MB
+  - `422` `RECONCILIATION_UNREADABLE_FILE` — not an `.xlsx`, or not a Dash report
+    (`reason`: `no_report_sheet` | `missing_columns` | `too_many_rows`)
+  - `422` `RECONCILIATION_WRONG_AGENCY` — the report's agent number is not the agency's
+  - `422` `RECONCILIATION_NO_APPOINTMENT` — the agency has no Allstate code on file
+
+  A refused upload's stored object is deleted.
+}

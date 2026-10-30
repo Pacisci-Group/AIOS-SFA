@@ -6,8 +6,10 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  DEFAULT_ONBOARDING_STEP_DEFINITIONS,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
+  nextRenewalDate,
   type StoredAddress,
 } from '@sfa/shared';
 import type { DealAuditStatus, ServiceTicketStatus } from '@sfa/shared';
@@ -35,6 +37,8 @@ import { InterestedParty } from '../../interested-parties/schemas/interested-par
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
 import { ServiceTicket } from '../../crm/schemas/service-ticket.schema';
+import { Onboarding } from '../../crm/schemas/onboarding.schema';
+import { scheduleSteps } from '../../crm/onboarding/onboarding-scheduling';
 import { ProducerAssignment } from '../../producer-assignments/schemas/producer-assignment.schema';
 import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';
@@ -256,6 +260,8 @@ export class DemoSeedService {
     private readonly priorPolicyModel: Model<PriorPolicy>,
     @InjectModel(ServiceTicket.name)
     private readonly serviceTicketModel: Model<ServiceTicket>,
+    @InjectModel(Onboarding.name)
+    private readonly onboardingModel: Model<Onboarding>,
     @InjectModel(ProducerAssignment.name)
     private readonly producerAssignmentModel: Model<ProducerAssignment>,
     @InjectModel(CrmRotation.name)
@@ -343,6 +349,7 @@ export class DemoSeedService {
     await this.seedPriorPolicies(ctx, deals, rng);
 
     await this.seedServiceTickets(ctx, crms, households, policies, rng);
+    await this.seedServicedPolicy(ctx, crms, households);
     await this.seedProducerAssignments(ctx, producers, crms, rng);
     await this.seedCrmRotations(ctx, producers, crms);
     await this.seedTimeOffRequests(ctx, producers, rng);
@@ -494,7 +501,16 @@ export class DemoSeedService {
             // toggle flipped during a demo must not survive into the next one.
             availability: spec.availability ?? DEFAULT_USER_AVAILABILITY,
             legacySmartSuiteId: userLegacyId(spec.key),
+            // So a Dash reconciliation run credits a producer's lines and
+            // keeps them out of 1-800 review (PAC-173).
+            ...(spec.dash && {
+              allstateBindId: spec.dash.bindId,
+              allstateSubProducerCode: spec.dash.subProducer,
+            }),
           },
+          ...(!spec.dash && {
+            $unset: { allstateBindId: 1, allstateSubProducerCode: 1 },
+          }),
           $setOnInsert: { passwordHash },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true },
@@ -1652,6 +1668,197 @@ export class DemoSeedService {
     }
   }
 
+  /**
+   * One 1-800 policy set up for service (PAC-173 PR 5), so the Service
+   * Dashboard and `/crm/tickets` show a 1-800 welcome call: a policy Allstate
+   * sold directly (`origin: 'carrier_direct'`, **no deal** — never a sale, so
+   * nothing on the leaderboard moves), on a main-branch household, with the
+   * onboarding a service intake starts and its open welcome call for Casey.
+   *
+   * Written field for field as `ServicedPolicyIntakeService` and
+   * `startOnboarding` write them, after the service tickets so the welcome
+   * call's number sits past theirs (`ONBD-117` on a fresh seed). Its number is outside the
+   * Bruno Dash fixture's, so the fixture's own 1-800 line stays one the app
+   * does not have. Keyed, like the rest of the seed, so a re-run converges.
+   */
+  private async seedServicedPolicy(
+    ctx: Ctx,
+    crms: TeamMember[],
+    households: HouseholdRef[],
+  ): Promise<void> {
+    const csr =
+      crms.find((c) => c.spec.roleSlug === 'csr' && c.branchSlug === 'main') ??
+      crms.find((c) => c.spec.roleSlug === 'csr');
+    const hh =
+      households.find((h) => h.branchSlug === csr?.branchSlug) ?? households[0];
+    if (!csr || !hh) return;
+
+    const household = await this.householdModel
+      .findById(hh.id)
+      .select('primaryContactId')
+      .lean<{ primaryContactId?: Types.ObjectId }>();
+    const primary = household?.primaryContactId
+      ? await this.contactModel
+          .findById(household.primaryContactId)
+          .select('firstName lastName phone email')
+          .lean<{
+            firstName?: string;
+            lastName?: string;
+            phone?: string;
+            email?: string;
+          }>()
+      : null;
+    const clientName = primary
+      ? [primary.firstName, primary.lastName].filter(Boolean).join(' ')
+      : `${hh.clientFirst} ${hh.clientLast}`;
+
+    // A calendar date, at UTC midnight like every effective date.
+    const effectiveDate = new Date(
+      `${this.daysAgo(5).toISOString().slice(0, 10)}T00:00:00.000Z`,
+    );
+    const policyNumber = '900800001';
+    const policyId = await this.upsert(
+      this.policyModel,
+      { agencyId: ctx.agencyId, legacySmartSuiteId: 'demo:policy:direct' },
+      {
+        agencyId: ctx.agencyId,
+        branchId: hh.branchId,
+        legacySmartSuiteId: 'demo:policy:direct',
+        policyNumber,
+        policyNumberKey: policyNumber,
+        policyType: 'Auto',
+        carrier: 'Allstate',
+        active: true,
+        effectiveDate,
+        renewalDate: nextRenewalDate(effectiveDate, 'Auto', this.now),
+        premium: 793.08,
+        items: 1,
+        policyStatus: 'Active',
+        householdId: hh.id,
+        legacyHouseholdId: hh.legacyId,
+        origin: 'carrier_direct',
+        isTestRecord: false,
+      },
+    );
+    this.inc('policies');
+    const active = await this.policyModel.countDocuments({
+      householdId: hh.id,
+      active: true,
+    });
+    await this.householdModel.updateOne(
+      { _id: hh.id },
+      { $set: { totalActivePolicies: active } },
+    );
+
+    const startedAt = this.daysAgo(1);
+    const openingNote =
+      '1-800 policy from Dash — bound by OSCVANJ through 1-800, Standard Auto, written premium $793.08.';
+    const salesProducerName = 'Allstate 1-800 (OSCVANJ)';
+    const onboardingId = await this.upsert(
+      this.onboardingModel,
+      { agencyId: ctx.agencyObjectId, policyId },
+      {
+        agencyId: ctx.agencyObjectId,
+        branchId: new Types.ObjectId(hh.branchId),
+        householdId: hh.id,
+        clientName,
+        salesProducerName,
+        dealId: null,
+        dealAuditId: null,
+        assignedCsrId: csr.userId,
+        startedAt,
+        currentStepKey: 'welcome_call',
+        completedAt: null,
+        policyId,
+        policyNumber,
+        policyType: 'Auto',
+        householdName: hh.name,
+        phone: primary?.phone ?? '',
+        email: primary?.email ?? '',
+        createdByUserId: csr.userId,
+        createdByName: csr.fullName,
+        openingNote,
+      },
+    );
+    this.inc('onboardings');
+
+    const [welcome] = scheduleSteps(
+      DEFAULT_ONBOARDING_STEP_DEFINITIONS,
+      startedAt,
+    );
+    const availableAt = welcome?.availableAt ?? startedAt;
+    // The seeded call keeps its number across runs. A first run takes the
+    // next free one from where the CRM's allocator counts (documents + 101),
+    // so it never lands on a ticket the app has already opened.
+    const ticketKey = 'demo:ticket:direct-welcome';
+    const seededTicket = await this.serviceTicketModel
+      .findOne({ agencyId: ctx.agencyObjectId, legacySmartSuiteId: ticketKey })
+      .select('ticketNumber')
+      .lean<{ ticketNumber?: string }>();
+    let ticketNumber = seededTicket?.ticketNumber;
+    if (!ticketNumber) {
+      let n =
+        101 +
+        (await this.serviceTicketModel.countDocuments({
+          agencyId: ctx.agencyObjectId,
+        }));
+      const prefix = SERVICE_TICKET_CATEGORY_PREFIX.Onboarding;
+      while (
+        await this.serviceTicketModel.exists({
+          agencyId: ctx.agencyObjectId,
+          ticketNumber: `${prefix}-${n}`,
+        })
+      ) {
+        n += 1;
+      }
+      ticketNumber = `${prefix}-${n}`;
+    }
+    await this.upsert(
+      this.serviceTicketModel,
+      { agencyId: ctx.agencyObjectId, legacySmartSuiteId: ticketKey },
+      {
+        agencyId: ctx.agencyObjectId,
+        branchId: new Types.ObjectId(hh.branchId),
+        legacySmartSuiteId: ticketKey,
+        ticketNumber,
+        clientName,
+        category: 'Onboarding',
+        status: 'open',
+        statusOverriddenAt: null,
+        priority: 'medium',
+        assignedRep: csr.fullName,
+        assignedUserId: csr.userId,
+        createdByUserId: csr.userId,
+        createdByName: csr.fullName,
+        policyNumber,
+        policyType: 'Auto',
+        household: hh.name,
+        policyId,
+        householdId: hh.id,
+        leadId: null,
+        phone: primary?.phone ?? '',
+        email: primary?.email ?? '',
+        openedAt: availableAt,
+        lastActivityAt: availableAt,
+        resolvedAt: null,
+        timeline: [{ type: 'created', content: openingNote, at: availableAt }],
+        onboarding: {
+          onboardingId,
+          stepKey: 'welcome_call',
+          sequence: 1,
+          availableAt,
+          dueAt: welcome?.dueAt ?? null,
+          completedAt: null,
+          completedBy: null,
+          completedByName: '',
+        },
+        renewal: null,
+        isTestRecord: false,
+      },
+    );
+    this.inc('serviceTickets');
+  }
+
   private async seedProducerAssignments(
     ctx: Ctx,
     producers: TeamMember[],
@@ -2117,6 +2324,18 @@ export class DemoSeedService {
       this.timeOffRequestModel,
       this.activityModel,
     ] as Model<unknown>[];
+    // A seeded onboarding has no `legacySmartSuiteId` of its own; it goes
+    // with the 1-800 policy it was started for, before that is purged.
+    const directPolicies = await this.policyModel
+      .find({ ...demoFilter, origin: 'carrier_direct' })
+      .select('_id')
+      .lean<{ _id: Types.ObjectId }[]>();
+    if (directPolicies.length) {
+      await this.onboardingModel.deleteMany({
+        agencyId: new Types.ObjectId(agencyId),
+        policyId: { $in: directPolicies.map((p) => p._id) },
+      });
+    }
     for (const model of models) {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }

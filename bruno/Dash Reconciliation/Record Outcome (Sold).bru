@@ -1,0 +1,134 @@
+meta {
+  name: Record Outcome (Sold)
+  type: http
+  seq: 40
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}/outcome
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "kind": "sold",
+    "note": "Booked from the Dash line"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a sale under way, waiting on the lead and the sale", function () {
+    const outcome = res.getBody().outcome;
+    expect(outcome.kind).to.equal("sold");
+    expect(outcome.status).to.equal("in_progress");
+    expect(outcome.step).to.equal("record_sale");
+    expect(outcome.note).to.equal("Booked from the Dash line");
+    expect(outcome.leadId).to.equal(null);
+    expect(outcome.dealId).to.equal(null);
+    expect(outcome.startedBy.id).to.equal(bru.getVar("currentUserId"));
+    expect(outcome.completedAt).to.equal(null);
+  });
+
+  test("the row still waits on a decision", function () {
+    expect(res.getBody().review.status).to.equal("open");
+  });
+
+  test("with the prefill the forms open with", function () {
+    const prefill = res.getBody().prefill;
+    expect(prefill.lead).to.deep.equal({
+      firstName: "Avery",
+      lastName: "Quinn",
+      createdDate: "2026-10-12",
+    });
+    expect(prefill.policy.policyNumber).to.equal("900299990");
+    expect(prefill.policy.soldDate).to.equal("2026-10-12");
+  });
+}
+
+docs {
+  # PATCH /carrier-reconciliation/assigned/:rowId/outcome — record what became of my row
+
+  - **Module:** `carrier_reconciliation` (enabled for the agency)
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read` — the
+    assignee's class gate, and **no** `:write`: there is no module whose
+    write means "work a row given to me", and the service clamps every write
+    to the row's assignee. **Sold** and **Cancel rewrite** book a sale, so
+    they also need `leads:write` **and** `deal_audits:write`, checked on
+    every call (permissions can change after the row was handed over).
+  - **Data scope:** the row's assignee only — the owner reads every row and
+    records on none (decision 2, owner 28 Oct 2026).
+
+  PAC-173 PR 4. The assignee says what the Dash row turned out to be:
+
+  | `kind` | on | what happens |
+  |---|---|---|
+  | `sold` | Missing from app | `in_progress` at `record_sale`. The assignee enters it as an ordinary sale — `Create Lead (Dash Row)`, then `Create Sold Deal (Dash Row)`, both prefilled and both carrying `reconciliationRowId` — and the sale finishes it: `done`, the row decided `sold_recorded`. |
+  | `cancel_rewrite` | Missing from app | The same start; the sale moves it to `write_replacement`, and its replacement, written through the normal cancel-rewrite chain (`POST /leads` with `replacementIntent` + `reconciliationRowId`, then the sale), finishes it — linking the replacement policy and the chargeback the rewrite wrote; the row decided `cancel_rewrite_recorded`. |
+  | `service_intake` | 1-800 review, `dash_only` | **Started only by its form** — `Service Intake (as CSR)`, which creates the household, the `carrier_direct` policy and the CSR's welcome call, and finishes it: the row decided `service_intake_recorded`. Sent here with nothing under way it is a `400` `RECONCILIATION_OUTCOME_NOT_ALLOWED`; at `start_onboarding` (saved, but the welcome call did not open) it is the **Continue** that opens it. Needs `leads:write`. |
+  | `other` | any row | `done` at once, the row decided `other_recorded` with the note. See `Record Outcome (Other)`. |
+
+  - **Starting the same kind again resumes it**: the note is kept unless one
+    is sent, and anything the sale hooks missed is made good — a sale booked
+    on the linked lead, or a replacement booked on the Dash policy, finishes
+    the step it belongs to. This is the page's **Continue**. Asking again for
+    a finished outcome answers `200` with the row unchanged.
+  - **Switching kind** is allowed only while nothing is booked (`record_sale`,
+    no deal, none on the linked lead); the lead is kept. Otherwise `409`
+    `RECONCILIATION_OUTCOME_LOCKED`.
+  - The **owner** reopening the row clears the outcome; deciding it by hand,
+    reassigning it or taking it back clears one still under way (`Review
+    Row`, `Assign Row`). Removing the person clears it too; transferring
+    their work keeps it, for the successor to resume with the lead.
+  - Writes name the row they were given: one on a run a re-upload replaced
+    is a `409` (open it from the list again). The sale hooks, by contrast,
+    follow a replaced row to its current copy.
+
+  ## Body
+  - `kind` — `sold` | `cancel_rewrite` | `service_intake` | `other`
+  - `note` — ≤ 2000 characters, trimmed; **required** for `other`, optional
+    otherwise (shown to the owner, and becomes the decision's note)
+
+  ## Response `200` — the row as `GET assigned/:rowId` answers it, prefill included
+
+  ```json
+  { "id": "…", "tabs": ["missing_from_app"], "review": { "status": "open", … },
+    "assignment": { … }, "run": { … }, "prefill": { "lead": { … }, "policy": { … } },
+    "outcome": {
+      "kind": "sold", "status": "in_progress", "step": "record_sale",
+      "note": "Booked from the Dash line",
+      "leadId": null, "dealId": null, "policyId": null, "householdId": null,
+      "replacementPolicyId": null, "chargebackId": null,
+      "onboardingId": null, "ticketId": null,
+      "startedBy": { "id": "…", "name": "Pat Producer" }, "startedAt": "2026-10-28T15:04:05.000Z",
+      "completedBy": null, "completedAt": null } }
+  ```
+
+  `step` is `null` once done and for `other`. The ids link what the outcome
+  created: the lead and deal of the sale, its household, the deal's policy
+  that **is** the Dash line (matched by policy-number key, else the deal's
+  first), and — for a cancel rewrite — the replacement policy and the
+  chargeback; for a service intake, the household, the policy, and the
+  onboarding with its welcome-call ticket (`onboardingId`, `ticketId`).
+
+  ## Errors
+  - `400` — validation (`Validation failed`, e.g. Other without a note);
+    `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the kind is not offered on the
+    row's tab
+  - `403` `RECONCILIATION_OUTCOME_FORBIDDEN` — Sold or Cancel rewrite without
+    `leads:write` + `deal_audits:write`; a service intake without
+    `leads:write`
+  - `404` — no such row in the agency, or it is not assigned to the caller
+  - `409` — the row was decided or needs no decision; its run was replaced
+    by a re-upload or did not finish; someone changed the row at the same
+    moment; `RECONCILIATION_OUTCOME_LOCKED` — switching kind once a sale is
+    booked
+}

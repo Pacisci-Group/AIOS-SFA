@@ -1,4 +1,4 @@
-import { LogOut } from "lucide-react";
+import { Bell, LogOut } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/auth-context";
@@ -110,6 +110,7 @@ function SidebarNavItem({
   collapsed,
   onNavigate,
   badge,
+  footer = false,
 }: {
   item: NavItem;
   collapsed: boolean;
@@ -120,6 +121,12 @@ function SidebarNavItem({
    * Omitted or zero renders nothing.
    */
   badge?: number;
+  /**
+   * Render in the footer's quieter register — the smaller, muted text the
+   * status, theme and log-out rows share — instead of the nav's. The active
+   * state and the badge behave the same either way.
+   */
+  footer?: boolean;
 }) {
   const { pathname } = useLocation();
   const isActive = isNavItemActive(pathname, item.to);
@@ -136,9 +143,13 @@ function SidebarNavItem({
         className={cn(
           "group flex w-full items-center gap-2.5 rounded-md py-2 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           collapsed ? "justify-center px-0" : "px-2.5",
+          footer && "text-sm",
           isActive
             ? "bg-primary/10 text-primary"
-            : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            : cn(
+                "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                footer ? "text-muted-foreground" : "text-sidebar-foreground",
+              ),
         )}
       >
         <span className="relative flex shrink-0">
@@ -171,7 +182,9 @@ function SidebarNavItem({
                 was the difference between "Producer Dashboard" fitting and
                 reading "Producer Dashbo…" on the one row that is always
                 selected. */}
-            <span className="flex-1 truncate text-base">{item.label}</span>
+            <span className={cn("flex-1 truncate", !footer && "text-base")}>
+              {item.label}
+            </span>
             {badgeLabel && (
               <Badge
                 size="sm"
@@ -188,6 +201,19 @@ function SidebarNavItem({
   );
 }
 
+/**
+ * The notifications row (PAC-154). Not a `NAV_SECTIONS` entry: a notification
+ * is addressed to *you*, whatever you may do, so the row has no permission
+ * gate and sits with the other per-person controls in the footer — under the
+ * profile chip and the status switch — rather than under "Workspace", where
+ * it read as something shared by the agency.
+ */
+const NOTIFICATIONS_ITEM: NavItem = {
+  to: NOTIFICATIONS_PATH,
+  label: "Notifications",
+  icon: Bell,
+};
+
 interface SidebarBodyProps {
   /** Icon-rail mode. Always `false` inside the mobile sheet. */
   collapsed?: boolean;
@@ -197,7 +223,8 @@ interface SidebarBodyProps {
 
 /**
  * Everything below the sidebar's own header: the permission-filtered nav, the
- * user chip, the availability switch, the theme switch and log out.
+ * user chip, the availability switch, notifications, the theme switch and log
+ * out.
  *
  * Shared verbatim by the desktop rail (`AppSidebar`) and the mobile drawer
  * (`MobileNav`) so the two can't drift — the drawer is the same sidebar, just
@@ -210,8 +237,8 @@ export function SidebarBody({
   const { user, logout, isAuthenticated } = useAuth();
   const { canRead, can, canAny } = usePermissions();
   const navigate = useNavigate();
-  // The one badge in the nav (PAC-154). Polled while PR1's polling is all
-  // there is; PR2's stream invalidates the same query on each event.
+  // The one badge in the sidebar (PAC-154), on the footer's notifications
+  // row. The stream invalidates the same query on each event.
   const { data: unreadData } = useUnreadCount(isAuthenticated);
   const unread = unreadData?.unread ?? 0;
 
@@ -265,7 +292,6 @@ export function SidebarBody({
                 item={item}
                 collapsed={collapsed}
                 onNavigate={onNavigate}
-                badge={item.to === NOTIFICATIONS_PATH ? unread : undefined}
               />
             ))}
           </div>
@@ -320,6 +346,14 @@ export function SidebarBody({
         {/* Directly under the chip, on every page (PAC-139 §6): "they don't
             need to go to three pages to set their status." */}
         <AvailabilityToggle collapsed={collapsed} />
+
+        <SidebarNavItem
+          item={NOTIFICATIONS_ITEM}
+          collapsed={collapsed}
+          onNavigate={onNavigate}
+          badge={unread}
+          footer
+        />
 
         <ThemeToggle collapsed={collapsed} />
 

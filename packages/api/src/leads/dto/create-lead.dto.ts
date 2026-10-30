@@ -69,6 +69,17 @@ const address = z.object({
 });
 
 /**
+ * The household half of a lead, shared with the 1-800 service intake
+ * (PAC-173 PR 5), which captures a household exactly as a lead does — DOB,
+ * phone and email on the primary — but creates no lead.
+ */
+export {
+  person as intakePersonSchema,
+  member as intakeMemberSchema,
+  address as intakeAddressSchema,
+};
+
+/**
  * One requested policy. Canonical labels only — a raw SmartSuite code is a 400,
  * the same rule the Quote Recap DTO applies: `normalizePolicyType` exists to
  * *read* legacy data, not to launder input.
@@ -172,6 +183,21 @@ export const createLeadSchema = leadIntakeBaseSchema.extend({
         .regex(/^[a-f0-9]{24}$/i, 'policyId must be a record id'),
       reason: z.enum(POLICY_REPLACEMENT_REASONS),
     })
+    .optional(),
+  /**
+   * The Dash Reconciliation row this lead records (PAC-173 PR 4): the
+   * assignee's Sold or Cancel rewrite outcome, step one of two. The lead skips
+   * the address dedupe, and is stamped on the row after it is created —
+   * best-effort, and only on a row assigned to the caller with a sale under
+   * way and no lead yet. The lead is created either way.
+   *
+   * Absent from `publicCreateLeadSchema`: an outside submitter has no row.
+   */
+  reconciliationRowId: z
+    .string()
+    .trim()
+    .regex(/^[a-f0-9]{24}$/i, 'reconciliationRowId must be a record id')
+    .transform((value) => value.toLowerCase())
     .optional(),
 });
 

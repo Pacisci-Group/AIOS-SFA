@@ -26,6 +26,14 @@ export interface InvitePreview {
   firstName: string | null;
   lastName: string | null;
   /**
+   * The Allstate codes the inviter typed (PAC-173), prefilled the same way so
+   * the invitee confirms rather than retypes them. Not in the email, unlike
+   * the names — but a login id is not a credential, and whoever holds this
+   * link can accept the invite outright, which discloses far more.
+   */
+  allstateBindId: string | null;
+  allstateSubProducerCode: string | null;
+  /**
    * Whether accepting this invite leads into the agency's own first-run setup —
    * true only for the owner of a freshly onboarded agency (PAC-69).
    *

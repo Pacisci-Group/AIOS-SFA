@@ -284,6 +284,8 @@ export class AgencyProvisioningService {
         roleIds: [ownerRole._id.toString()],
         firstName: input.owner.firstName.trim(),
         lastName: input.owner.lastName.trim(),
+        allstateBindId: input.owner.allstateBindId,
+        allstateSubProducerCode: input.owner.allstateSubProducerCode,
         invitedByUserId: operator.userId,
         // Assigning the Agency Owner role is reserved for platform accounts by
         // `OwnerProtectionService`; this is one.

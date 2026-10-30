@@ -50,6 +50,28 @@ export class User {
   lastName?: string;
 
   /**
+   * The Allstate portal login this person binds policies with (PAC-173), as
+   * Dash prints it — `SOK5PE0T`. Dash Reconciliation reads it to tell the
+   * agency's own business from Allstate's: a Bind ID on no user that Dash
+   * prints no name for is 1-800 (a named one is a former employee's).
+   *
+   * Flat and Allstate-named on purpose: it is an Allstate identifier, and the
+   * reconciliation that reads it is Allstate-only. Normalised by
+   * `normalizeAllstateCodes` (`users/allstate-codes.ts`) on every write path;
+   * unique within the agency, absent when unset (never `''`).
+   */
+  @Prop({ trim: true, uppercase: true })
+  allstateBindId?: string;
+
+  /**
+   * The three-digit code Allstate credits this person's sales to (PAC-173),
+   * zero-padded — `034`. `000` is Allstate's "no sub-producer" and is never
+   * stored. Unique within the agency, absent when unset.
+   */
+  @Prop({ trim: true })
+  allstateSubProducerCode?: string;
+
+  /**
    * Object key of the user's profile photo (PAC-81). A pointer only — the
    * bytes live in object storage and are streamed by `GET /me/avatar`. Keys
    * are per-user (`agencies/<scope>/avatars/<userId>/…`), so ownership checks
@@ -168,6 +190,26 @@ export class User {
 export const UserSchema = SchemaFactory.createForClass(User);
 UserSchema.index({ agencyId: 1, branchId: 1, createdAt: -1 });
 UserSchema.index({ legacySmartSuiteId: 1 }, { unique: true, sparse: true });
+/*
+ * One person per Allstate code within an agency (PAC-173). Partial on the
+ * field being a string, so the many users without a code never collide. Also
+ * built by the `user_allstate_code_indexes` migration, which checks for
+ * conflicts first — keep `ALLSTATE_CODE_INDEXES` there in step with these.
+ */
+UserSchema.index(
+  { agencyId: 1, allstateBindId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { allstateBindId: { $type: 'string' } },
+  },
+);
+UserSchema.index(
+  { agencyId: 1, allstateSubProducerCode: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { allstateSubProducerCode: { $type: 'string' } },
+  },
+);
 /*
  * The password-reset preview and completion endpoints are public and look a
  * user up by this field alone, so without an index every click on a reset link

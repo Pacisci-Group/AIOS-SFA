@@ -1,6 +1,10 @@
 import { USER_AVAILABILITIES } from '@sfa/shared';
 import { z } from 'zod';
 import { clearable, trimmedText } from '../../common/dto/clearable';
+import {
+  allstateBindIdField,
+  allstateSubProducerCodeField,
+} from '../../users/dto/allstate-codes.dto';
 
 /**
  * Image types a user may upload as a profile photo.
@@ -22,6 +26,9 @@ export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 export const updateMyProfileSchema = z.object({
   firstName: clearable(trimmedText(60)),
   lastName: clearable(trimmedText(60)),
+  /** Own Allstate codes (PAC-173); unique within the agency. */
+  allstateBindId: clearable(allstateBindIdField),
+  allstateSubProducerCode: clearable(allstateSubProducerCodeField),
 });
 export type UpdateMyProfileDto = z.infer<typeof updateMyProfileSchema>;
 

@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { userStatus, type AgencyUser } from "@/lib/users-api";
 import { UserRowMenu } from "../UserRowMenu";
+import { UserCodes } from "./UserCodes";
 import {
   branchLabel,
   displayName,
@@ -12,10 +13,10 @@ import {
   STATUS_BADGE,
 } from "./user-display";
 
-/** User · Role · Branch · Status · Actions */
-const GRID_COLS = "1.6fr 1fr 1fr 110px 40px";
+/** User · Role · Branch · Allstate codes · Status · Actions */
+const GRID_COLS = "1.6fr 1fr 1fr 1fr 110px 40px";
 /** Without the branch column, which needs `agency:branches:read` to populate. */
-const GRID_COLS_NO_BRANCH = "1.6fr 1fr 110px 40px";
+const GRID_COLS_NO_BRANCH = "1.6fr 1fr 1fr 110px 40px";
 
 interface UsersTableProps {
   users: AgencyUser[];
@@ -40,6 +41,10 @@ interface UsersTableProps {
  * branch it is also the one most likely to be wrong — but populating it needs
  * `agency:branches:read`, which the directory itself does not require. When
  * that read is refused the column is dropped rather than filled with ids.
+ *
+ * **Allstate codes** (PAC-173) are the Bind ID and sub-producer code Dash
+ * Reconciliation identifies staff by; they are set at the invite and fixed
+ * through the row menu's "Edit details".
  */
 export function UsersTable({
   users,
@@ -50,12 +55,12 @@ export function UsersTable({
 }: UsersTableProps) {
   const columns = showBranch ? GRID_COLS : GRID_COLS_NO_BRANCH;
   const headers = showBranch
-    ? ["User", "Role", "Branch", "Status", ""]
-    : ["User", "Role", "Status", ""];
+    ? ["User", "Role", "Branch", "Allstate codes", "Status", ""]
+    : ["User", "Role", "Allstate codes", "Status", ""];
 
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[760px] overflow-hidden rounded-xl border border-border bg-card">
+      <div className="min-w-[880px] overflow-hidden rounded-xl border border-border bg-card">
         <div
           className="grid gap-3 border-b border-border px-5 py-2.5 text-xs font-medium tracking-wide text-muted-foreground uppercase"
           style={{ gridTemplateColumns: columns }}
@@ -81,6 +86,7 @@ export function UsersTable({
                 </div>
                 <Skeleton className="h-5 w-20 rounded-full" />
                 {showBranch && <Skeleton className="h-3 w-24" />}
+                <Skeleton className="h-3 w-24" />
                 <Skeleton className="h-5 w-16 rounded-full" />
                 <span />
               </div>
@@ -164,6 +170,8 @@ export function UsersTable({
                       {branchLabel(user, branchNames)}
                     </span>
                   )}
+
+                  <UserCodes user={user} layout="stack" />
 
                   <Badge
                     size="sm"

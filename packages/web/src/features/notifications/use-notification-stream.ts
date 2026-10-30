@@ -11,6 +11,7 @@ import {
   getAccessTokenExpiry,
   refreshAccessToken,
 } from '@/lib/api-client';
+import { reconciliationAssignedKey } from '@/lib/carrier-reconciliation-api';
 import { notificationsKey } from '@/lib/notifications-api';
 import { setNotificationStreamConnected } from './notification-stream-status';
 
@@ -157,6 +158,13 @@ export function useNotificationStream(): void {
         }
         // A query, never a counter: the badge and the list re-ask the server.
         invalidate();
+        // A Dash row handed to this user (PAC-173): their "Assigned to me"
+        // page and the Producer Dashboard panel re-ask as well.
+        if (record.type === 'reconciliation.row_assigned') {
+          void queryClient.invalidateQueries({
+            queryKey: reconciliationAssignedKey,
+          });
+        }
         toast(record.title, {
           description: record.body,
           action: {

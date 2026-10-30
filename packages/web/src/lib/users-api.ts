@@ -14,6 +14,13 @@ export interface AgencyUser {
   email: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * Allstate codes (PAC-173) — absent when unset. Dash Reconciliation credits
+   * a producer's policies by these; without a Bind ID they read as a former
+   * employee's (or as 1-800 on a line Dash leaves unnamed).
+   */
+  allstateBindId?: string;
+  allstateSubProducerCode?: string;
   /** Taking leads or not (PAC-139 §6). Set by the user, never from the directory. */
   availability: UserAvailability;
   isActive: boolean;
@@ -54,6 +61,7 @@ export interface ReleasedWork {
   renewalCyclesUnassigned: number;
   householdsUnassigned: number;
   leadsUnassigned: number;
+  reconciliationRowsUnassigned: number;
 }
 
 /**
@@ -72,6 +80,7 @@ export interface WorkTransferCounts {
   shareLinks: number;
   rotationsTakenOver: number;
   rotationsDeactivated: number;
+  reconciliationRows: number;
 }
 
 export interface WorkTransferResult extends WorkTransferCounts {
@@ -107,6 +116,9 @@ export interface InviteUserInput {
   branchId?: string;
   firstName?: string;
   lastName?: string;
+  /** Omitted when blank — the invitee can add their own when they accept. */
+  allstateBindId?: string;
+  allstateSubProducerCode?: string;
 }
 
 export interface InviteResponse {
@@ -373,6 +385,32 @@ export function updateUserRoles(userId: string, roleIds: string[]) {
   return apiFetch<AgencyUserDetail>(`/users/${userId}/roles`, {
     method: 'PATCH',
     body: JSON.stringify({ roleIds }),
+  });
+}
+
+/**
+ * `PATCH /users/:userId/details` body (PAC-173). Every key is clearable:
+ * `null` (or `''`) clears it, an absent key leaves it as it is.
+ */
+export interface UpdateUserDetailsInput {
+  firstName?: string | null;
+  lastName?: string | null;
+  allstateBindId?: string | null;
+  allstateSubProducerCode?: string | null;
+}
+
+/**
+ * The owner correcting someone's name or Allstate codes (PAC-173). Needs
+ * `agency:users:write`; a code another user of the agency already holds is a
+ * `409` naming them (`ALLSTATE_CODE_DUPLICATE`, with the `field`).
+ */
+export function updateUserDetails(
+  userId: string,
+  input: UpdateUserDetailsInput,
+) {
+  return apiFetch<AgencyUserDetail>(`/users/${userId}/details`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
   });
 }
 

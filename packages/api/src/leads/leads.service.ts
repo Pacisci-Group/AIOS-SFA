@@ -33,6 +33,7 @@ import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { LeadSourcesService } from '../lead-sources/lead-sources.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
 import { PoliciesService } from '../policies/policies.service';
+import { ReconciliationOutcomesService } from '../carrier-reconciliation/reconciliation-outcomes.service';
 import { LeadAccessService } from './lead-access.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsDto } from './dto/list-leads.dto';
@@ -136,6 +137,8 @@ export class LeadsService {
      */
     private readonly policies: PoliciesService,
     private readonly leadSources: LeadSourcesService,
+    /** Stamps a lead made for a Dash row on that row (PAC-173 PR 4). */
+    private readonly reconciliationOutcomes: ReconciliationOutcomesService,
   ) {}
 
   /**
@@ -181,7 +184,24 @@ export class LeadsService {
       // schema does not accept it.
       householdId: replacement?.householdId ?? dto.householdId,
       replacementIntent: replacement?.intent,
+      reconciliationRowId: dto.reconciliationRowId,
     });
+
+    /*
+     * A lead made to record a Dash row (PAC-173 PR 4): stamp it on the row, so
+     * resuming the row goes on to the Sold form with this lead rather than
+     * making another. Post-commit and best-effort — `linkLead` never throws,
+     * and checks the row is the caller's with a sale under way — because the
+     * lead exists now either way. Run on a token replay too, which is how a
+     * request that created the lead and then died links it on retry.
+     */
+    if (dto.reconciliationRowId) {
+      await this.reconciliationOutcomes.linkLead(
+        access,
+        dto.reconciliationRowId,
+        outcome.leadId.toString(),
+      );
+    }
     return { id: outcome.leadId.toString() };
   }
 

@@ -1,0 +1,34 @@
+meta {
+  name: Assign Row (Forbidden for Producer)
+  type: http
+  seq: 30
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{currentUserId}}"
+  }
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # PATCH …/assignment — as a producer (403)
+
+  Assigning needs `carrier_reconciliation:write`, which no Producer holds.
+  A producer works the rows handed to them from `List Assigned Rows`.
+}

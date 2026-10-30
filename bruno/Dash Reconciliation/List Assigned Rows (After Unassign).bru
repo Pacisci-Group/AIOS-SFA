@@ -1,0 +1,28 @@
+meta {
+  name: List Assigned Rows (After Unassign)
+  type: http
+  seq: 49
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row taken back is no longer listed", function () {
+    const ids = res.getBody().items.map((item) => item.id);
+    expect(ids).to.not.include(bru.getVar("reconAssignRowId"));
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned — after the owner took the row back
+
+  Same request as `List Assigned Rows (as Producer)`.
+}
