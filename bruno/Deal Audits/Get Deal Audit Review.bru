@@ -1,0 +1,210 @@
+meta {
+  name: Get Deal Audit Review
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/review
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // The item the verdict requests rule on, and a policy for Policies ›
+  // Download New Business Application. Runtime-only vars.
+  if (res.getStatus() === 200) {
+    const body = res.getBody();
+    if (body.items.length > 0) {
+      bru.setVar("reviewItemId", body.items[0].id);
+    }
+    if (body.policies.length > 0) {
+      bru.setVar("reviewPolicyId", body.policies[0].id);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the audit, the deal and every section of the page", function () {
+    const body = res.getBody();
+    expect(body.audit.dealId).to.equal(bru.getVar("auditDealId"));
+    expect(body.deal.id).to.equal(bru.getVar("auditDealId"));
+    expect(body.policies).to.be.an("array");
+    expect(body).to.have.property("quoteRecap");
+    expect(body).to.have.property("lead");
+    expect(body.items).to.be.an("array").and.not.be.empty;
+  });
+
+  test("the manager sees every item, manager-only ones included", function () {
+    // The producer's board would show only the producerVisible ones.
+    for (const item of res.getBody().items) {
+      expect(item.producerVisible).to.be.a("boolean");
+      expect(item.requiresUpload).to.be.a("boolean");
+      expect(item).to.have.property("review");
+    }
+  });
+
+  test("the tally and the approve gate agree", function () {
+    const { audit, items } = res.getBody();
+    const passed = items.filter((item) => item.review.verdict === "pass");
+    expect(audit.counts.passed).to.equal(passed.length);
+    expect(audit.unmet.length).to.equal(items.length - passed.length);
+    expect(audit.canApprove).to.equal(audit.canReview && audit.unmet.length === 0);
+  });
+
+  test("the producer just submitted it, so the manager may review", function () {
+    const audit = res.getBody().audit;
+    expect(audit.auditStatus).to.equal("Pending");
+    expect(audit.canReview).to.equal(true);
+  });
+
+  test("documents carry metadata, never a storage key", function () {
+    const body = res.getBody();
+    const raw = JSON.stringify(body);
+    expect(raw).to.not.match(/agencies\/[0-9a-f]{24}\//);
+  });
+}
+
+docs {
+  # GET /deal-audits/deals/:dealId/review — the Deal Audit page (PAC-106)
+
+  Everything the manager's Deal Audit page renders, in one request: the
+  workflow, the sale, the policies it bound (with their new business
+  applications), the quote it came from, the lead, and **every** checklist
+  item — manager-only ones included.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read` **and** `management:read`.
+  - **Data scope:** the audit must be in the caller's reach (branch / agency /
+    assignee-or-reviewer under `own`); else `404`.
+
+  Readable in any status. The page's actions are live only while
+  `audit.canReview` — `Pending`, and not the caller's own submission.
+
+  ## Response `200`
+  ```json
+  {
+    "audit": {
+      "id": "665f...9c1",
+      "dealId": "665f...a03",
+      "auditStatus": "Pending",
+      "assignee": { "type": "user", "id": "665f...b11", "name": "Pat Producer" },
+      "reviewer": { "type": "user", "id": "665f...b12", "name": "Morgan Manager" },
+      "submittedAt": "2026-10-15T14:20:00.000Z",
+      "sentBack": null,
+      "canSubmit": false,
+      "canReview": true,
+      "canApprove": false,
+      "canSendBack": false,
+      "unmet": [{ "id": "665f...ac1", "itemName": "Good Student" }],
+      "counts": { "passed": 6, "failed": 0, "remaining": 1 }
+    },
+    "deal": {
+      "id": "665f...a03",
+      "clientName": "Jane Homeowner",
+      "householdId": "665f...b20",
+      "householdName": "Homeowner Household",
+      "leadId": "665f...c30",
+      "soldDate": "2026-10-09T17:00:00.000Z",
+      "soldDay": "2026-10-09",
+      "dealType": "Auto",
+      "policyTypes": ["Auto"],
+      "premium": 1450,
+      "producerId": "665f...b11",
+      "producerName": "Pat Producer",
+      "businessDaysOpen": 6,
+      "aging": true
+    },
+    "policies": [
+      {
+        "id": "665f...d40",
+        "policyNumber": "804 123 456",
+        "policyType": "Auto",
+        "carrier": "Allstate",
+        "premium": 1450,
+        "effectiveDate": "2026-10-10",
+        "newBusinessApplication": {
+          "filename": "application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048,
+          "uploadedAt": "2026-10-09T17:05:00.000Z"
+        }
+      }
+    ],
+    "quoteRecap": {
+      "id": "665f...e50",
+      "quoteDate": "2026-10-06T15:00:00.000Z",
+      "premium": 1450,
+      "itemCount": 2,
+      "productsQuoted": ["Auto"],
+      "policies": [{ "policyType": "Auto", "premium": 1450, "itemCount": 2 }],
+      "notes": "Two cars, one teen driver.",
+      "producerName": "Pat Producer",
+      "document": { "filename": "quote.pdf", "contentType": "application/pdf", "size": 4096, "uploadedAt": null }
+    },
+    "lead": {
+      "id": "665f...c30",
+      "name": "Jane Homeowner",
+      "status": "Sold",
+      "temperature": "Hot",
+      "leadSourceName": "Mailer",
+      "createdDate": "2026-10-01T15:00:00.000Z",
+      "producerName": "Pat Producer",
+      "phone": "5125550100",
+      "email": "jane@example.com"
+    },
+    "items": [
+      {
+        "id": "665f...ac1",
+        "itemName": "Good Student",
+        "category": "Auto",
+        "subjectName": null,
+        "producerVisible": true,
+        "requiresUpload": true,
+        "open": false,
+        "isResolved": true,
+        "resolvedAt": "2026-10-14T10:00:00.000Z",
+        "producerNote": "Transcript attached.",
+        "attachments": [
+          { "index": 0, "filename": "transcript.pdf", "contentType": "application/pdf", "size": 30720, "uploadedAt": "2026-10-14T10:00:00.000Z" }
+        ],
+        "review": { "verdict": null, "note": null, "reviewedAt": null, "reviewedByName": null }
+      }
+    ]
+  }
+  ```
+
+  - **Two truths per item**: the producer's claim (`isResolved`,
+    `producerNote`, `attachments`) and the manager's verification
+    (`review.verdict` / `review.note`). The Approve gate reads only the
+    verdict.
+  - `unmet` lists every item whose verdict is not `pass`; `canApprove` is
+    `canReview && unmet is empty`; `canSendBack` is `canReview && counts.failed > 0`.
+  - `quoteRecap` is the recap the deal names (`quoteRecapId`), else the
+    lead's most recent recap on or before the sold day — `null` when there is
+    none. Its document opens through **Download Quote Recap Document**.
+  - A policy's `newBusinessApplication` is metadata only; the file opens
+    through **Policies › Download New Business Application**. `null` when none
+    was uploaded (every migrated policy).
+  - `lead.phone` / `lead.email` come from the lead's primary contact (else the
+    household's).
+  - `items` sort by category (Common, Prior Insurance, Auto, Home, Landlord),
+    then name.
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — missing `deal_audits:read` or `management:read`.
+  - `404 Not Found` — no audit for that deal, or out of the caller's reach.
+}

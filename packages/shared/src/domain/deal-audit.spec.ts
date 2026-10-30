@@ -74,10 +74,10 @@ describe('canSubmitAudit', () => {
     expect(canSubmitAudit('Pending')).toBe(false);
   });
 
-  it('allows re-opening a passed audit', () => {
-    // Deliberate: a pass discovered to be wrong has to be correctable, and
-    // nothing else in the machine can move it off `Pass`.
-    expect(canSubmitAudit('Pass')).toBe(true);
+  it('rejects an approved audit — a pass is the manager’s sign-off', () => {
+    // PAC-106 review: a submit on `Pass` flipped it back to `Pending` and
+    // cleared the manager's failed verdicts on the producer's say-so.
+    expect(canSubmitAudit('Pass')).toBe(false);
   });
 });
 

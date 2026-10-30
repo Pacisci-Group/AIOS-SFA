@@ -1,0 +1,140 @@
+meta {
+  name: Set Item Verdict
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/deal-audits/{{reviewItemId}}/verdict
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "verdict": "pass",
+    "note": "Matches the application."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("records the ruling and who made it", function () {
+    const review = res.getBody().item.review;
+    expect(review.verdict).to.equal("pass");
+    expect(review.note).to.equal("Matches the application.");
+    expect(review.reviewedAt).to.be.a("string");
+    expect(review.reviewedByName).to.be.a("string");
+  });
+
+  test("a pass verifies the item", function () {
+    // The manager's verification is the stronger fact, and the only way a
+    // manager-only item ever closes.
+    const item = res.getBody().item;
+    expect(item.isResolved).to.equal(true);
+    expect(item.open).to.equal(false);
+  });
+
+  test("returns the page's running tally", function () {
+    const body = res.getBody();
+    expect(body.counts.passed).to.be.at.least(1);
+    expect(body.unmet).to.be.an("array");
+    expect(body.canApprove).to.equal(body.unmet.length === 0);
+    expect(body.canSendBack).to.equal(body.counts.failed > 0);
+  });
+}
+
+docs {
+  # PATCH /deal-audits/:itemId/verdict — the manager rules on one item (PAC-106)
+
+  The Pass / Fail toggle and the note box on each checklist row of the Deal
+  Audit page.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:write` **and** `management:read`.
+  - **Data scope:** the item's audit must be in the caller's reach; else `404`.
+
+  Only while the audit is **Pending** (`409` otherwise — a sent-back audit is
+  the producer's until they resubmit), and never by the person who submitted it
+  (`403`).
+
+  ## Body
+  At least one field.
+
+  | field   | type | rules |
+  |---------|------|-------|
+  | verdict | `"pass"` \| `"fail"` \| `null` | `null` withdraws a ruling. Omitted leaves the ruling as it is — so the page can save a note on its own. |
+  | note    | string | ≤ 2000 chars, trimmed. `""` clears it; omitted leaves it. On a `fail` it is what the producer reads. |
+
+  ## Effect
+  - Stores `reviewVerdict`, `reviewNote`, `reviewedAt`, `reviewedById` on the
+    item — **beside** the producer's `isResolved` / `notes`, never instead of
+    them: the producer's claim and the manager's verification are two facts.
+  - **`pass` resolves the item** (`isResolved: true`, *Verified - Complete*),
+    keeping an existing `resolvedAt`. It is the only way a manager-only item
+    closes, so without it the audit's open-items count never reaches zero.
+  - **`fail` changes nothing else yet** — the item reopens for the producer
+    when the manager sends the audit back (**Review Audit**,
+    `request_changes`).
+  - Withdrawing a pass (`null`) does not un-resolve the item; the Approve gate
+    reads verdicts, never `isResolved`.
+  - Recomputes the audit's roll-up counters. Idempotent.
+
+  ## Response `200`
+  ```json
+  {
+    "item": {
+      "id": "665f...ac1",
+      "itemName": "Good Student",
+      "category": "Auto",
+      "subjectName": null,
+      "producerVisible": true,
+      "requiresUpload": true,
+      "open": false,
+      "isResolved": true,
+      "resolvedAt": "2026-10-14T10:00:00.000Z",
+      "producerNote": "Transcript attached.",
+      "attachments": [],
+      "review": {
+        "verdict": "pass",
+        "note": "Matches the application.",
+        "reviewedAt": "2026-10-19T15:01:00.000Z",
+        "reviewedByName": "Morgan Manager"
+      }
+    },
+    "counts": { "passed": 7, "failed": 0, "remaining": 0 },
+    "canApprove": true,
+    "canSendBack": false,
+    "unmet": []
+  }
+  ```
+
+  `item` is the same shape as **Get Deal Audit Review**'s `items[]`; the page
+  swaps it in place and updates the summary bar from the rest.
+
+  `canApprove` / `canSendBack` are computed exactly as on **Get Deal Audit
+  Review** — `canReview` and every item passed / at least one failed — by one
+  server helper, so the page drops them in without re-deriving anything
+  (PAC-106 review; they used to differ, and the web re-clamped this one).
+
+  ## Errors
+  - `400 Bad Request` — neither field sent, an unknown verdict, or a note over
+    2000 characters.
+  - `403 Forbidden` — missing `deal_audits:write` or `management:read`, or the
+    caller submitted this audit.
+  - `404 Not Found` — no such item, it belongs to an older audit of the deal,
+    or it is out of reach.
+  - `409 Conflict` — the audit is not awaiting review.
+}

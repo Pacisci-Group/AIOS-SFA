@@ -1,0 +1,32 @@
+meta {
+  name: Review Queue (Forbidden for Producer)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/queue
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 403 Forbidden for a producer", function () {
+    // The producer holds deal_audits:read but not management:read, and the
+    // queue's gate is the AND of both.
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /deal-audits/queue — refused to a producer (PAC-106)
+
+  Runs as the collection's default bearer, the demo **producer**. They hold
+  `deal_audits:read` — enough for their own hand-off board — but not
+  `management:read`, and the queue requires both
+  (`@RequirePermissions(deal_audits:read, management:read)` is an AND-set,
+  and handler-level metadata overrides the controller's `deal_audits:read`).
+
+  Proves the gate is the capability, not the module: a producer reaching the
+  manager's queue would see every deal in the branch.
+}

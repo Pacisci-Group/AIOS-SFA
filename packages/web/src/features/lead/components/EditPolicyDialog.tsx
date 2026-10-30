@@ -8,6 +8,11 @@ import { useUpdatePolicy } from "./useUpdatePolicy";
 interface EditPolicyDialogProps {
   leadId: string;
   policy: LeadDetailPolicy;
+  /**
+   * The sale's audit is approved or with a reviewer (`auditLocked`), so the
+   * server refuses the correction until it is sent back (PAC-106 review).
+   */
+  locked?: boolean;
 }
 
 /**
@@ -27,8 +32,16 @@ interface EditPolicyDialogProps {
  * requires: correcting what that form wrote is the same act as writing it. The
  * household card deliberately answers that question differently — a CSR holds no
  * `deal_audits` permission at all — which is why the gate is a prop.
+ *
+ * Not offered while the sale's audit is locked: the manager has passed, or is
+ * ruling on, the policies as they stand. The household card's edit is not
+ * locked — once the sale is approved the policy is the service team's.
  */
-export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
+export function EditPolicyDialog({
+  leadId,
+  policy,
+  locked = false,
+}: EditPolicyDialogProps) {
   const { canWrite } = usePermissions();
   const mutation = useUpdatePolicy(leadId, policy.id);
 
@@ -43,7 +56,7 @@ export function EditPolicyDialog({ leadId, policy }: EditPolicyDialogProps) {
       label={label}
       title="Edit sold policy"
       description="Corrections to what was recorded at sale. This does not re-run the sold form or regenerate the service hand-off."
-      canEdit={canWrite(ModuleKey.DealAudits)}
+      canEdit={canWrite(ModuleKey.DealAudits) && !locked}
       isPending={mutation.isPending}
       onSave={mutation.mutateAsync}
     />
