@@ -64,7 +64,8 @@ function isReplacementReason(
  * ## Also step 1 of a Dash row's sale (PAC-173)
  *
  * `?reconciliationRowId=<id>` is the same two-form chain for the assignee of a
- * Dash Reconciliation row recording it as Sold or a Cancel rewrite: the policy
+ * Dash Reconciliation row recording it as Sold, a Cancel rewrite or a
+ * Chargeback: the policy
  * Dash shows the agency sold, entered late. Read through the row's own query
  * key, the row seeds the form with Dash's customer name and dates the lead the
  * day Dash says the policy was written — a sale may not predate its lead, so a
@@ -329,7 +330,9 @@ export default function NewLeadPage() {
               from Dash too.
               {dashOutcome.kind === "cancel_rewrite"
                 ? " Once it is booked, you write its replacement from the row."
-                : ""}
+                : dashOutcome.kind === "chargeback"
+                  ? " Once it is booked, you cancel it from the row, which records the chargeback."
+                  : ""}
             </p>
           )}
 

@@ -1,9 +1,15 @@
 import {
+  POLICY_CANCELLATION_REASONS,
   normalizeCarrier,
   normalizePolicyStatus,
   normalizePolicyType,
 } from '@sfa/shared';
-import type { LeadDetailPolicy, PolicySummary } from '@sfa/shared';
+import type {
+  LeadDetailPolicy,
+  PolicyCancellationReason,
+  PolicyCancellationView,
+  PolicySummary,
+} from '@sfa/shared';
 import { Policy } from './schemas/policy.schema';
 import { PolicyDocument } from './schemas/policy.schema';
 
@@ -72,6 +78,32 @@ export function toPolicySummary(
     effectiveDate: toIso(policy.effectiveDate),
     expirationDate: toIso(policy.expirationDate),
     renewalDate: toIso(policy.renewalDate),
+    cancellation: toCancellationView(policy.cancellation),
+  };
+}
+
+/**
+ * The stored reason → the wire's. A reason outside the vocabulary (a hand-edited
+ * row) is passed through as `'other'` with the stored value as its note, so it
+ * still reads as *a* reason rather than vanishing.
+ */
+function toCancellationView(
+  cancellation: Policy['cancellation'],
+): PolicyCancellationView | null {
+  if (!cancellation?.cancelledAt) return null;
+  const known = (POLICY_CANCELLATION_REASONS as readonly string[]).includes(
+    cancellation.reason,
+  );
+  return {
+    reason: known ? (cancellation.reason as PolicyCancellationReason) : 'other',
+    note: known ? (cancellation.note ?? null) : cancellation.reason,
+    cancelledAt: new Date(cancellation.cancelledAt).toISOString(),
+    // The carrier's day and the ledger row, only with a chargeback (PAC-173
+    // PR 6). A calendar date, so `YYYY-MM-DD` like the other policy dates.
+    cancelledOn: policyDate(cancellation.cancelledOn),
+    chargebackId: cancellation.chargebackId
+      ? String(cancellation.chargebackId)
+      : null,
   };
 }
 

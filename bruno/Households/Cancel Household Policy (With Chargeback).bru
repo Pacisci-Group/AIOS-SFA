@@ -1,0 +1,67 @@
+meta {
+  name: Cancel Household Policy (With Chargeback)
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{baseUrl}}/households/{{policyCancelHouseholdId}}/policies/{{policyCancelPolicyId}}/cancel
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "reason": "changed_carrier",
+    "chargeback": { "cancelledOn": "{{policyChargebackDay}}" }
+  }
+}
+
+script:pre-request {
+  /*
+   * The carrier's date: the UTC day twelve hours ago. For a US agency (UTC-4
+   * to UTC-10) that is never after the agency's today, which the API checks,
+   * and it is today or yesterday on its calendar — after any demo-seed sale,
+   * which the seed dates days back. A date-only input, so no time zone in it.
+   */
+  const day = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  bru.setVar("policyChargebackDay", day);
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the policy is off the books, on the carrier's date", function () {
+    const body = res.getBody();
+    expect(body.policyStatus).to.equal("Cancelled");
+    expect(body.active).to.equal(false);
+    expect(body.cancellation.reason).to.equal("changed_carrier");
+    expect(body.cancellation.cancelledOn).to.equal(bru.getVar("policyChargebackDay"));
+  });
+
+  test("with the chargeback it raised", function () {
+    expect(res.getBody().cancellation.chargebackId).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /households/:id/policies/:policyId/cancel — with a chargeback
+
+  The Cancel dialog with **Record a chargeback** ticked (PAC-173 PR 6): the
+  policy is cancelled and a `chargebacks` row is written in the same
+  transaction, charged to the producer on the policy's deal and dated on the
+  carrier's day. The premium is charged back; whether the producer's sold
+  credit is reversed too depends on whether the demo sale is less than a
+  month old.
+
+  Each run adds a ledger row for this policy: the ledger is append-only, and
+  `Reinstate After Chargeback`, next, does not remove it. See
+  `Cancel Household Policy` for the endpoint.
+}

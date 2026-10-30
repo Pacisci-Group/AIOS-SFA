@@ -43,6 +43,53 @@ export const NewBusinessApplicationSchema = SchemaFactory.createForClass(
 );
 
 /**
+ * Why a policy was cancelled — written by the household page's Cancel button
+ * (`POST /households/:id/policies/:policyId/cancel`) and by nothing else.
+ *
+ * Absent on every policy cancelled before the button existed, the migrated ones
+ * included: they record that the client left and not why, and inventing a
+ * reason for them would be worse than the gap. Cleared when a policy is
+ * reinstated, so a live policy never carries a stale reason for leaving.
+ */
+@Schema({ _id: false })
+export class PolicyCancellation {
+  /** One of `POLICY_CANCELLATION_REASONS`. */
+  @Prop({ required: true })
+  reason: string;
+
+  /** The free-text reason; only ever set for `'other'`. */
+  @Prop({ trim: true })
+  note?: string;
+
+  /** When it was recorded — server time, never the client's claim. */
+  @Prop({ type: Date, required: true })
+  cancelledAt: Date;
+
+  /**
+   * The **carrier's** cancellation date — UTC midnight of the calendar day the
+   * person entered (`parseFormDate`). Set only when a chargeback was recorded
+   * with the cancellation (PAC-173 PR 6): it is the day that chargeback's
+   * one-month window was judged on, and the only time it is asked for.
+   */
+  @Prop({ type: Date })
+  cancelledOn?: Date;
+
+  /** The chargeback ledger row the cancellation raised, when it raised one. */
+  @Prop({ type: ObjectIdType, ref: 'Chargeback' })
+  chargebackId?: Types.ObjectId;
+
+  /**
+   * Who recorded it. Its own field rather than `updatedBy`, which the next
+   * unrelated edit to the policy overwrites.
+   */
+  @Prop({ type: ObjectIdType, ref: 'User' })
+  cancelledBy?: Types.ObjectId;
+}
+
+export const PolicyCancellationSchema =
+  SchemaFactory.createForClass(PolicyCancellation);
+
+/**
  * Migrated from SmartSuite "The Policies Table" (6941fc5b08644a5fbf05a781).
  */
 @Schema({ timestamps: true, collection: 'policies' })
@@ -182,6 +229,10 @@ export class Policy extends TenantRecord {
    */
   @Prop({ type: NewBusinessApplicationSchema })
   newBusinessApplication?: NewBusinessApplication;
+
+  /** Why it was cancelled, when it went through the Cancel button. */
+  @Prop({ type: PolicyCancellationSchema })
+  cancellation?: PolicyCancellation;
 
   @Prop({ default: false, index: true })
   isTestRecord: boolean;

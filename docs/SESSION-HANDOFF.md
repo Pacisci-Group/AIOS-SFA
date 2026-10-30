@@ -1743,3 +1743,48 @@ load-bearing.
   close ratio should follow it; whether a year is the right backlog bound.
 - A requoted lead's earlier recap reads as *open* once the later recap takes the sale — visible by
   its Sold badge in the drawer; ~6 leads a year.
+
+## 26. PAC-170 — Household page: Cancel policy, address book, cancelled policies folded, contact details (handoff, 2026-10-22)
+
+Asked for in chat by Abu Bakar on 22 Oct 2026, ticketed as **PAC-170**. Settled with him: an **address
+book** (not a read-only list), the address prompt after **every** cancellation, and **`Cancelled`
+removed from the Edit dialog**.
+
+### What exists now
+- **Cancel policy** on the household policy card and the policy page:
+  `POST /households/:id/policies/:policyId/cancel` with `{ reason: sold | changed_carrier | other,
+  note }` (`note` required for `other`, dropped otherwise). It sets `Cancelled` + `active: false`,
+  stores `Policy.cancellation { reason, note, cancelledAt, cancelledBy }`, recounts
+  `Household.totalActivePolicies`, and writes a "Policy cancelled" edit-log row. Gate: `clients:write`
+  **or** `crm_service:write`, like the household policy edit. 409 if already off the books; Pending
+  may be cancelled. Vocabulary in `shared/src/domain/policy-cancellation.ts`.
+- **`Cancelled` is flow-only** (`FLOW_ONLY_POLICY_STATUSES`), so both PATCH endpoints refuse to
+  *set* it. Re-sending a status the policy already holds is accepted (the Edit dialog seeds it), and
+  `Active` reinstates and clears `cancellation`. `applyUpdate` now also recounts the household when
+  `active` flips. The Lead Detail Sold card therefore can no longer cancel; its hint points to the
+  household page.
+- **Address book**: `Household.otherAddresses[]`. The primary stays `propertyAddress`, so no reader
+  changed. `POST /households/:id/addresses` (`makePrimary` demotes the old primary to "Previous
+  address"), `POST …/addresses/:addressId/primary` (a swap), and `DELETE …/addresses/:addressId`.
+  The same OR gate applies. 409 on a duplicate (street + unit + ZIP) or past 20 entries.
+- Web: `CancelPolicyDialog` → page-owned `UpdateAddressPrompt` → `AddAddressDialog`. They are
+  owned by the page because the cancelled card unmounts on save. `HouseholdAddressBook` shows a
+  dropdown when there is more than one address. Cancelled and Lapsed policies fold into a collapsed
+  "Cancelled & lapsed (N)" section. Roster rows show DOB + age and open a read-only
+  `ContactDetailsSheet`.
+
+### Verified
+shared 310, API unit 1,425, API e2e 1,428 (new "Household policy cancel" and "Household address
+book" blocks), Bruno `Auth/Login` + `Households` 21/21 against a live local API, web tsc + build.
+
+### Still open
+- ⚠ **Not checked in a browser** (light + dark, the Dialog → AlertDialog → Dialog hand-off, narrow
+  widths).
+- ~~A plain cancel raises no chargeback~~ — **answered by PAC-173 PR 6 (30 Oct 2026):** the Cancel
+  dialog now offers **Record a chargeback** (unticked by default). Ticked, it asks for the carrier's
+  cancellation date and writes a `cancellation` chargeback with the rewrite's one-month window. A
+  plain cancel is unchanged. See the as-built box in
+  `docs/plans/pac-173-dash-reconciliation-implementation-plan.md`.
+- No cancellation *date* is asked for on a plain cancel; `cancelledAt` is when it was recorded. With a
+  chargeback, `cancellation.cancelledOn` holds the carrier's date (PAC-173 PR 6).
+- Address-book changes are not written to an activity log. The contact sheet is read-only.

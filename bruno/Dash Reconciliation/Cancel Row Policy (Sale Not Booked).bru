@@ -1,0 +1,36 @@
+meta {
+  name: Cancel Row Policy (Sale Not Booked)
+  type: http
+  seq: 68
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}/cancel-policy
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "reason": "sold",
+    "cancelledOn": "2026-10-20"
+  }
+}
+
+tests {
+  test("returns 409 — there is no policy to cancel until the sale is booked", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/assigned/:rowId/cancel-policy — before the sale
+
+  The Chargeback is at `record_sale`: the policy this cancels is the one the
+  sale books, so there is nothing to cancel yet — **409**. See
+  `Cancel Row Policy`.
+}

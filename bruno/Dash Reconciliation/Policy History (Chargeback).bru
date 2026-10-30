@@ -1,0 +1,38 @@
+meta {
+  name: Policy History (Chargeback)
+  type: http
+  seq: 77
+}
+
+get {
+  url: {{baseUrl}}/policies/{{reconChargebackPolicyId}}/history
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a chain of one, charged back as a cancellation inside the month", function () {
+    const entries = res.getBody().entries;
+    expect(entries.length).to.equal(1);
+    expect(entries[0].policyId).to.equal(bru.getVar("reconChargebackPolicyId"));
+    expect(entries[0].reason).to.equal(null);
+    expect(entries[0].chargebackReason).to.equal("cancellation");
+    expect(entries[0].chargebackAmount).to.equal(2210.5);
+    expect(entries[0].withinClawbackWindow).to.equal(true);
+    expect(res.getBody().totalChargeback).to.equal(2210.5);
+  });
+}
+
+docs {
+  # GET /policies/:id/history — a policy cancelled with a chargeback
+
+  The policy page's history card. A policy cancelled outright has no
+  successor, so its chain is one entry with `reason: null` — but
+  `chargebackReason: "cancellation"` and the amount say what the cancel cost
+  (sold 2026-10-12, cancelled 2026-10-20: inside the month, so the credit was
+  reversed too). See `Policies/Policy History` for the endpoint.
+}

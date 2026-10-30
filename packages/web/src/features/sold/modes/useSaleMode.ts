@@ -206,6 +206,12 @@ export function useSaleMode({
         toast.success(
           `Sale booked — ${count}. Next, write its replacement from the Dash row.`,
         );
+      } else if (recordingDashSale && outcome?.kind === "chargeback") {
+        // The sale the carrier later cancelled (PAC-173 PR 6): half the job
+        // again, and nothing to celebrate.
+        toast.success(
+          `Sale booked — ${count}. Next, cancel it from the Dash row to record the chargeback.`,
+        );
       } else {
         toast.success(`Sale booked — ${count}`);
         /*
@@ -319,7 +325,9 @@ export function useSaleMode({
         ? `Prefilled from Dash${dashRow?.dash ? ` line ${dashRow.dash.rowNumber}` : ""} — check each card against the application, which is still required.${
             outcome?.kind === "cancel_rewrite"
               ? " Once this is booked, its replacement is written from the Dash row."
-              : ""
+              : outcome?.kind === "chargeback"
+                ? " Once this is booked, it is cancelled from the Dash row, which records the chargeback."
+                : ""
           }`
         : null,
       replacementReason

@@ -131,8 +131,9 @@ export class ReconciliationRow {
   assignment: RowAssignment | null;
 
   /**
-   * What the assignee recorded, or is recording: Sold, Cancel rewrite or
-   * Other (PAC-173 PR 4). Beside `assignment` rather than inside it, so taking
+   * What the assignee recorded, or is recording: Sold, Cancel rewrite,
+   * Chargeback, Service intake or Other (PAC-173 PR 4–6). Beside `assignment`
+   * rather than inside it, so taking
    * a row back and handing it on are separate decisions about the outcome —
    * see `ReconciliationOutcomesService` for the rules between the three
    * fields. A row stored before outcomes existed has no field at all, which

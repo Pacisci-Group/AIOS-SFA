@@ -5,7 +5,7 @@ Ticket: https://linear.app/paciscigroup/issue/PAC-173 (sub-issue of PAC-152).
 Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 `web/` = `packages/web/src/`, `shared/` = `packages/shared/src/`.
 
-> **Changed since this was written (v2, PRs 1–5 — 27–29 Oct 2026).** The notes
+> **Changed since this was written (v2, PRs 1–6 — 27–30 Oct 2026).** The notes
 > below describe v1. Where they disagree with this box, this box wins; the full
 > as-built rewrite follows the last v2 PR.
 >
@@ -228,7 +228,78 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >     `duplicate_in_app`.
 >   - The demo seed adds one `carrier_direct` policy (`900800001`) with its
 >     onboarding and open welcome call for Casey Kim (`ONBD-117`).
-> - Still to come (v2 plan): Chargeback (PR 6, after PAC-170 / #153).
+> - **The assignee records a chargeback (PR 6, 30 Oct 2026).** Built on
+>   PAC-170's Cancel button (#153).
+>   - A Missing-from-app row now offers **Chargeback** beside Sold, Cancel
+>     rewrite and Other. It books a sale first, so it is a sale kind: the
+>     assignee needs `leads:write` + `deal_audits:write`, as for the other two.
+>   - It starts at `record_sale`, exactly as Sold does (New Lead, then Sold,
+>     both prefilled and carrying the row). The sale moves it to a new step,
+>     `cancel_policy`, linking the lead, deal, household and Dash policy.
+>   - "Cancel the policy" opens the household page's Cancel dialog with
+>     **Record a chargeback** ticked and locked, plus **the carrier's
+>     cancellation date** (David, 27 Oct: it decides the one-month window).
+>     The dialog posts to the row:
+>     `POST carrier-reconciliation/assigned/:rowId/cancel-policy
+>     { reason, note?, cancelledOn }`.
+>   - That one request cancels the policy, writes the chargeback and finishes
+>     the outcome in **one transaction**. The row resolves
+>     `chargeback_recorded`, which the owner's review cannot pick.
+>   - Why a row endpoint, not the household endpoint carrying the row id as
+>     the Sold form does: `PoliciesModule` and `ClientsModule` sit under
+>     `CarrierReconciliationModule`, so they cannot call back into it without
+>     `forwardRef`. The reconciliation module imports `PoliciesModule` instead.
+>   - The ledger row has `reason: 'cancellation'` (label "Cancelled policy"),
+>     `amount` = the premium, and is charged to the producer on the policy's
+>     deal, never the person cancelling. It is dated `cancelledOn`.
+>     `rewriteFinancialOutcome` prices it from the deal's sold date: inside a
+>     calendar month the deal's `chargebackAdjustment` also moves by
+>     `-premium`. A policy with no deal is charged back with no window.
+>   - `cancelledOn` may not be in the future or before the sale, on the agency
+>     calendar (400). It is stored on `Policy.cancellation.cancelledOn` (UTC
+>     midnight, a calendar date) with `cancellation.chargebackId`.
+>   - One writer for the ledger: `policies/chargeback-ledger.ts`
+>     (`writeChargeback`), shared with Cancel Rewrite.
+>     `PoliciesService.cancel` now runs `applyCancellation` in a transaction,
+>     then `finishCancellation` (recount, edit log) after the commit.
+>   - **No unique index on `cancellation` rows.** One cancellation cannot
+>     write two: a second cancel conflicts on the policy inside the
+>     transaction and then reads it cancelled (409). A policy reinstated and
+>     cancelled again is a second event with its own row.
+>   - **The household page's Cancel dialog offers the same box**, unticked
+>     (user, 30 Oct 2026). Unticked, the cancel is what PAC-170 built: no date
+>     asked, nothing charged back. Ticked, the household endpoint takes
+>     `chargeback: { cancelledOn }` and does the same as the row's cancel.
+>   - **It cancels only a policy numbered as the Dash line** (review round 1).
+>     Sold and Cancel rewrite link the deal's policy keyed as Dash's, else its
+>     first. A Chargeback never guesses, because it charges money back: with
+>     no match it links the deal's only policy, and with several it links
+>     none. The row's cancel is then a 409
+>     `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` until the number is
+>     corrected on the sale; the retry, or Continue, links it. The row detail
+>     carries `chargebackPolicy` (number, type, carrier, premium), so the
+>     dialog names the booked policy, not the Dash number.
+>   - Continue at `cancel_policy` with nothing cancelled answers the row as it
+>     is. A policy cancelled **with** a cancellation chargeback from the
+>     household page finishes the outcome with that row, on Continue or on
+>     the row's cancel. One cancelled **without** a chargeback makes the
+>     row's cancel a 409; the owner decides that row by hand.
+>   - The policy page's history card now shows a cancellation chargeback on a
+>     policy with no successor ("Cancelled policy · $X charged back"). The
+>     chain entry gains `chargebackReason`. An entry reports only the
+>     chargeback for how it left: its rewrite's, none for a transfer, or the
+>     newest of any reason on the last link (newest by when it was written,
+>     not by the carrier's date). `totalChargeback` sums every
+>     ledger row on the chain, an older cancellation on a reinstated policy
+>     included. The household card and the policy
+>     drawer add "chargeback recorded" to the cancellation line. The edit log
+>     reads "Policy cancelled, chargeback recorded" with the carrier's date.
+>   - Known edges, not designed for: a re-upload between the sale and the
+>     cancel re-matches the row, so the unfinished outcome does not carry (the
+>     policy can still be cancelled with its chargeback from the household
+>     page). Reinstating a policy keeps its chargeback and the deal's
+>     adjustment, because the ledger is append-only and reversal rows are
+>     PAC-123's.
 
 ## What it is
 

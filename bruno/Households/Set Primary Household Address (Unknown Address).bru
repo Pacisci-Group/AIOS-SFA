@@ -1,0 +1,47 @@
+meta {
+  name: Set Primary Household Address (Unknown Address)
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{baseUrl}}/households/{{householdId}}/addresses/000000000000000000000000/primary
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 404 — not an entry in this household's book", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # POST /households/:id/addresses/:addressId/primary
+
+  Make an address from the book the household's **primary** — a **swap**, not a
+  copy: the entry leaves the book and becomes `propertyAddress`, and the primary
+  it replaces joins the book as **"Previous address"**. Each address lives in
+  exactly one place.
+
+  - **Module:** `clients` OR `crm_service`
+  - **Permission:** `clients:write` **OR** `crm_service:write`
+  - **Data scope:** `own` collapses to **branch**
+
+  This request names an id that is in no book, so it exercises the 404 and
+  changes nothing; the swap itself is covered by the e2e suite.
+
+  ## Response
+  The whole **`HouseholdView`**.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | Both modules disabled, or the caller holds neither write |
+  | 404 | Household outside scope, or `addressId` is not an entry in its book (the primary is not an entry) |
+}

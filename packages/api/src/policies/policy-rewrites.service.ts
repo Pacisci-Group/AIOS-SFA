@@ -7,6 +7,7 @@ import {
 } from '@sfa/shared';
 import type {
   AccessContext,
+  ChargebackReason,
   PolicyReplacementChain,
   PolicyReplacementChainEntry,
   PolicyReplacementReason,
@@ -16,7 +17,6 @@ import {
   Chargeback,
   ChargebackDocument,
 } from '../chargebacks/schemas/chargeback.schema';
-import { authorshipForInsert } from '../common/context/request-context';
 import { sessionOptions } from '../sold-deals/intake/sold-intake.types';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
@@ -26,6 +26,7 @@ import {
 } from '../leads/schemas/lead.schema';
 import type { SoldDealIntakeService } from '../sold-deals/intake/sold-deal-intake.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { chargedProducerName, writeChargeback } from './chargeback-ledger';
 import { PoliciesService } from './policies.service';
 import { Policy, PolicyDocument } from './schemas/policy.schema';
 
@@ -172,18 +173,26 @@ export class PolicyRewritesService {
        */
       const chargedProducerId = originalDeal?.producerId ?? null;
 
-      await this.writeChargeback({
-        deps,
-        cancelled,
-        replacementPolicyId,
-        originalDeal,
-        outcome,
-        cancelledAt,
-        producerId: chargedProducerId,
-        producerName: chargedProducerId
-          ? await this.actorName(String(chargedProducerId))
-          : '',
-      });
+      await writeChargeback(
+        { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
+        {
+          session: deps.session,
+          cancelled,
+          originalDeal,
+          reason: 'cancel_rewrite',
+          replacementPolicyId,
+          outcome,
+          occurredAt: cancelledAt,
+          producerId: chargedProducerId,
+          producerName: await chargedProducerName(
+            this.userModel,
+            chargedProducerId,
+          ),
+          // The branch the sale is being booked in — the same value the
+          // replacement policy's own insert used a moment earlier.
+          fallbackBranchId: deps.ctx.branchId,
+        },
+      );
     }
 
     await this.leadModel.updateOne(
@@ -266,21 +275,42 @@ export class PolicyRewritesService {
      */
     const chargebacks = await this.chargebackModel
       .find({ agencyId, policyId: { $in: chain.map((p) => p._id) } })
-      .select('policyId amount withinClawbackWindow')
+      .select('policyId amount withinClawbackWindow reason occurredAt')
+      // Oldest first by when each was WRITTEN, so the maps below keep each
+      // policy's newest: a policy reinstated and cancelled again with a
+      // chargeback has two (PAC-173 PR 6), and the latest written is what it
+      // cost when it last left. Not by `occurredAt` — for a cancellation that
+      // is the carrier's date someone typed, and a corrected re-cancel can
+      // carry an earlier one.
+      .sort({ createdAt: 1, _id: 1 })
       .lean<
         {
           policyId: Types.ObjectId;
           amount: number;
           withinClawbackWindow: boolean;
+          reason: ChargebackReason;
         }[]
       >();
-    const chargebackByPolicy = new Map(
+    /*
+     * Which row an entry reports depends on how it left. A policy replaced by
+     * a rewrite reports the rewrite's chargeback; one replaced by a transfer
+     * reports none (a transfer charges nothing); the last one — still in
+     * force, or cancelled outright — reports its newest of any reason. An
+     * older `cancellation` row on a policy later reinstated and replaced is
+     * history the entry does not describe, but it is money, so the total
+     * counts every row.
+     */
+    const newestByPolicy = new Map(
       chargebacks.map((row) => [String(row.policyId), row]),
+    );
+    const newestRewriteByPolicy = new Map(
+      chargebacks
+        .filter((row) => row.reason === 'cancel_rewrite')
+        .map((row) => [String(row.policyId), row]),
     );
 
     const requestedId = String(policy._id);
     const entries = chain.map((entry, index) => {
-      const chargeback = chargebackByPolicy.get(String(entry._id)) ?? null;
       /*
        * How this policy was left, derived from its status rather than stored a
        * second time. Only a policy with a successor was left at all — the last
@@ -294,6 +324,11 @@ export class PolicyRewritesService {
             RETIRED_POLICY_STATUS.cancel_rewrite
           ? 'cancel_rewrite'
           : 'company_transfer';
+      const chargeback = !hasSuccessor
+        ? (newestByPolicy.get(String(entry._id)) ?? null)
+        : reason === 'cancel_rewrite'
+          ? (newestRewriteByPolicy.get(String(entry._id)) ?? null)
+          : null;
 
       return {
         policyId: String(entry._id),
@@ -307,6 +342,7 @@ export class PolicyRewritesService {
         reason,
         chargebackAmount: chargeback?.amount ?? null,
         withinClawbackWindow: chargeback?.withinClawbackWindow ?? null,
+        chargebackReason: chargeback?.reason ?? null,
         dealId: entry.dealId ? String(entry.dealId) : null,
         isRequested: String(entry._id) === requestedId,
       } satisfies PolicyReplacementChainEntry;
@@ -314,90 +350,11 @@ export class PolicyRewritesService {
 
     return {
       entries,
+      // Every row on the chain — not only the ones the entries report.
       totalChargeback: roundCents(
-        entries.reduce((sum, entry) => sum + (entry.chargebackAmount ?? 0), 0),
+        chargebacks.reduce((sum, row) => sum + (row.amount ?? 0), 0),
       ),
     };
-  }
-
-  /**
-   * The ledger row, plus the deal adjustment it accounts for.
-   *
-   * Both writes are in the caller's transaction and must stay that way: the row
-   * is the explanation of the `$inc`, and one without the other is either an
-   * unexplained reduction in a producer's figures or a chargeback nobody was
-   * actually charged.
-   */
-  private async writeChargeback(args: {
-    deps: Parameters<
-      NonNullable<Parameters<SoldDealIntakeService['process']>[4]>
-    >[0];
-    cancelled: PolicyDocument;
-    replacementPolicyId: Types.ObjectId | null;
-    originalDeal: DealDocument | null;
-    outcome: ReturnType<typeof rewriteFinancialOutcome>;
-    cancelledAt: Date;
-    producerId: Types.ObjectId | null;
-    producerName: string;
-  }): Promise<void> {
-    const {
-      deps,
-      cancelled,
-      replacementPolicyId,
-      originalDeal,
-      outcome,
-      cancelledAt,
-      producerId,
-      producerName,
-    } = args;
-
-    await this.chargebackModel.create(
-      [
-        {
-          agencyId: String(cancelled.agencyId),
-          // `TenantRecord.branchId` is required and Mongoose rejects an empty
-          // string, so a policy row with no branch (migrated ones can lack it)
-          // takes the branch the sale is being booked in — the same value the
-          // replacement policy's own insert used a moment earlier.
-          branchId: cancelled.branchId ?? deps.ctx.branchId,
-          policyId: cancelled._id,
-          policyNumber: cancelled.policyNumber,
-          policyType: cancelled.policyType,
-          dealId: originalDeal?._id ?? null,
-          replacementPolicyId,
-          householdId: cancelled.householdId ?? null,
-          producerId,
-          producerName,
-          reason: 'cancel_rewrite',
-          source: 'app',
-          amount: outcome.chargebackAmount,
-          soldAdjustment: outcome.soldAdjustment,
-          withinClawbackWindow: outcome.withinClawbackWindow,
-          occurredAt: cancelledAt,
-          soldDate: originalDeal?.soldDate ?? null,
-          // `bulkWrite` is not the only thing that bypasses the authorship
-          // plugin — `create` inside a session does fire it, but the value is
-          // spread explicitly here so the row records its author even when the
-          // rewrite is driven by a job with no request context.
-          ...authorshipForInsert(),
-        },
-      ],
-      sessionOptions(deps.session),
-    );
-
-    /*
-     * Only inside the window is there anything to take back. `$inc` rather than
-     * `$set`: a deal can have more than one of its policies rewritten, and each
-     * clawback adds to the last. Outside the window this is a no-op by
-     * construction — `soldAdjustment` is 0 — and the guard just avoids a write.
-     */
-    if (originalDeal && outcome.soldAdjustment !== 0) {
-      await this.dealModel.updateOne(
-        { _id: originalDeal._id, agencyId: String(cancelled.agencyId) },
-        { $inc: { chargebackAdjustment: outcome.soldAdjustment } },
-        sessionOptions(deps.session),
-      );
-    }
   }
 
   /**
@@ -428,17 +385,6 @@ export class PolicyRewritesService {
     if (soldDate && resolved < soldDate) resolved = soldDate;
 
     return resolved;
-  }
-
-  /** A user's display name, or '' — never a throw on a deactivated account. */
-  private async actorName(userId: string): Promise<string> {
-    if (!Types.ObjectId.isValid(userId)) return '';
-    const user = await this.userModel
-      .findById(userId)
-      .select('firstName lastName')
-      .lean<{ firstName?: string; lastName?: string }>();
-    if (!user) return '';
-    return [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
   }
 }
 

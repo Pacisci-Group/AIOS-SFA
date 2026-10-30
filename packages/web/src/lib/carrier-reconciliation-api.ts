@@ -3,6 +3,8 @@ import type {
   ReclassifyRunResponse,
   ReconciliationAssignedListResponse,
   ReconciliationAssignedRowDetail,
+  ReconciliationCancelPolicyInput,
+  ReconciliationCancelPolicyResponse,
   ReconciliationOptionsResponse,
   ReconciliationOutcomeFilter,
   ReconciliationPresignResponse,
@@ -28,6 +30,8 @@ export type {
   ReconciliationAssignedRowDetail,
   ReconciliationAssignee,
   ReconciliationAssignment,
+  ReconciliationCancelPolicyInput,
+  ReconciliationCancelPolicyResponse,
   ReconciliationIssue,
   ReconciliationOutcome,
   ReconciliationOutcomeFilter,
@@ -219,8 +223,10 @@ export function getAssignedReconciliationRow(rowId: string) {
  * Record what became of an assigned row, as its assignee (PAC-173 PR 4).
  *
  * - `other` takes a note and is done at once: the row is resolved.
- * - `sold` and `cancel_rewrite` start an outcome that the New Lead and Sold
- *   forms finish (they carry `reconciliationRowId`). They need the caller to
+ * - `sold`, `cancel_rewrite` and `chargeback` start an outcome that the New
+ *   Lead and Sold forms carry on (they carry `reconciliationRowId`); a
+ *   chargeback then finishes with {@link cancelReconciliationPolicy}. They
+ *   need the caller to
  *   be able to book a sale — `RECONCILIATION_OUTCOME_FORBIDDEN` (403) — and a
  *   row Dash lists that the app is missing — `RECONCILIATION_OUTCOME_NOT_ALLOWED`
  *   (400).
@@ -238,6 +244,32 @@ export function recordReconciliationOutcome(
   return apiFetch<ReconciliationAssignedRowDetail>(
     `${BASE}/assigned/${rowId}/outcome`,
     { method: "PATCH", body: JSON.stringify(body) },
+  );
+}
+
+/**
+ * A Chargeback outcome's second step, as its assignee (PAC-173 PR 6): cancel
+ * the policy its sale booked, with the chargeback dated on the carrier's
+ * cancellation date, and finish the row — one transaction. Answers with the
+ * finished row and the cancelled policy as the household page lists it.
+ *
+ * 400 for a date in the future or before the sale, or
+ * `RECONCILIATION_OUTCOME_NOT_ALLOWED` (not a chargeback); 403
+ * `RECONCILIATION_OUTCOME_FORBIDDEN` without the permission to book a sale;
+ * 404 when the row is no longer the caller's; 409 before the sale is booked,
+ * `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` when no policy on the sale is
+ * numbered as the Dash line, for a policy already cancelled without a
+ * chargeback, a decided row, a
+ * replaced run, or a concurrent change. A row already finished answers as it
+ * is.
+ */
+export function cancelReconciliationPolicy(
+  rowId: string,
+  body: ReconciliationCancelPolicyInput,
+) {
+  return apiFetch<ReconciliationCancelPolicyResponse>(
+    `${BASE}/assigned/${rowId}/cancel-policy`,
+    { method: "POST", body: JSON.stringify(body) },
   );
 }
 

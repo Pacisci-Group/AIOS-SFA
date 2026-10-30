@@ -22,6 +22,12 @@ import {
   intakeMemberSchema,
   intakePersonSchema,
 } from '../../leads/dto/create-lead.dto';
+import {
+  OTHER_NEEDS_NOTE,
+  cancelPolicyFields,
+  cancellationNote,
+  otherHasNote,
+} from '../../policies/dto/cancel-policy.dto';
 
 /** `:id`, `:rowId`. */
 export const reconciliationIdSchema = objectId;
@@ -213,3 +219,20 @@ export const exportQuerySchema = z.object({
   tab: z.enum(RECONCILIATION_TABS).optional(),
 });
 export type ExportQueryDto = z.infer<typeof exportQuerySchema>;
+
+/**
+ * `POST assigned/:rowId/cancel-policy` — a Chargeback outcome's second step
+ * (PAC-173 PR 6): the household page's Cancel dialog, asked the same — the
+ * reason, with free text for `other` — plus **the carrier's** cancellation
+ * date, which a chargeback always needs: it decides the one-month clawback
+ * window.
+ */
+export const cancelRowPolicySchema = cancelPolicyFields
+  .extend({ cancelledOn: ymd })
+  .refine(otherHasNote, OTHER_NEEDS_NOTE)
+  .transform((value) => ({
+    reason: value.reason,
+    note: cancellationNote(value),
+    cancelledOn: value.cancelledOn,
+  }));
+export type CancelRowPolicyDto = z.infer<typeof cancelRowPolicySchema>;

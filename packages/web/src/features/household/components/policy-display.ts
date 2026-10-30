@@ -8,7 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { PolicySummary } from "@sfa/shared";
-import { normalizePolicyStatus } from "@sfa/shared";
+import { normalizePolicyStatus, policyCancellationSummary } from "@sfa/shared";
 import {
   policyTermMonths,
   premiumTermSuffix,
@@ -84,6 +84,12 @@ export interface DisplayPolicy {
   iconTint: string;
   carrier: string;
   deductible?: string;
+  /**
+   * Why it was cancelled and when — `"Sold · Oct 22, 2026"` — for a policy
+   * cancelled through the Cancel button. Absent otherwise, including on the
+   * migrated cancellations, which never recorded a reason.
+   */
+  cancellation?: string;
 }
 
 /**
@@ -187,6 +193,24 @@ function formatDate(iso: string | null) {
   });
 }
 
+/**
+ * Off the books — the cards the portfolio folds into its collapsed
+ * "Cancelled & lapsed" section, so a long-standing client's history does not
+ * bury the policies they hold today.
+ */
+export function isInactiveCardStatus(status: DisplayPolicy["status"]): boolean {
+  return status === "Cancelled" || status === "Lapsed";
+}
+
+/**
+ * Does the Cancel button apply? Only to a policy the card shows as Active or
+ * Pending — the same policies the server will cancel
+ * (`PoliciesService.cancel` refuses one already off the books).
+ */
+export function isCancellablePolicy(policy: PolicySummary): boolean {
+  return !isInactiveCardStatus(toCardStatus(policy));
+}
+
 export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
   const style = LINE_STYLES[(policy.policyType ?? "").toLowerCase()] ?? DEFAULT_STYLE;
   return {
@@ -214,6 +238,12 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     term: `${policyTermMonths(policy.policyType)} months`,
     carrier: policy.carrier ?? NOT_AVAILABLE,
     deductible: undefined,
+    // A cancellation recorded with a chargeback says so (PAC-173 PR 6).
+    cancellation: policy.cancellation
+      ? `${policyCancellationSummary(policy.cancellation)} · ${formatDate(policy.cancellation.cancelledAt)}${
+          policy.cancellation.chargebackId ? " · chargeback recorded" : ""
+        }`
+      : undefined,
     ...style,
   };
 }

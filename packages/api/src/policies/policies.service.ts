@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,22 +10,27 @@ import {
   DataScope,
   carrierPolicyNumberMatches,
   carrierSlug,
+  isActivePolicyStatus,
   isFlowOnlyPolicyStatus,
+  isTerminalPolicyStatus,
   nextRenewalDate,
   normalizeCarrier,
   normalizePolicyStatus,
   normalizePolicyType,
   policyActiveForStatus,
+  policyCancellationSummary,
   policyTypeQueryValues,
   resolveItemCount,
+  rewriteFinancialOutcome,
 } from '@sfa/shared';
+import type { PolicyCancellationReason } from '@sfa/shared';
 import type {
   AccessContext,
   PolicyCheckMatch,
   PolicyCheckResponse,
   UpdatePolicyResult,
 } from '@sfa/shared';
-import { FilterQuery, Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types, type ClientSession } from 'mongoose';
 import {
   Activity,
   ActivityDocument,
@@ -38,7 +44,16 @@ import {
   snapshot,
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
+import {
+  Chargeback,
+  ChargebackDocument,
+} from '../chargebacks/schemas/chargeback.schema';
 import { clientScopeFilter } from '../clients/client-scope';
+import {
+  assertNotBefore,
+  assertNotInFuture,
+} from '../common/dates/business-date-rules';
+import { TransactionRunner } from '../common/mongo/transaction.runner';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { loadPrimaryContacts } from '../households/primary-contact';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
@@ -46,7 +61,14 @@ import {
   Household,
   HouseholdDocument,
 } from '../households/schemas/household.schema';
-import { derivePersistedDealAggregates } from '../sold-deals/intake/sold.normalize';
+import {
+  derivePersistedDealAggregates,
+  parseFormDate,
+} from '../sold-deals/intake/sold.normalize';
+import { sessionOptions } from '../sold-deals/intake/sold-intake.types';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { chargedProducerName, writeChargeback } from './chargeback-ledger';
+import { CancelPolicyDto } from './dto/cancel-policy.dto';
 import { CheckPolicyDto } from './dto/check-policy.dto';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { normalizePolicyNumber, policyNumberKey } from './policy-number';
@@ -138,7 +160,64 @@ const POLICY_CHANGE_FIELDS: ChangeFieldSpec<PolicyDocument>[] = [
     // absent status still reads as absent.
     read: (policy) => changeText(normalizePolicyStatus(policy.policyStatus)),
   },
+  {
+    // Logged beside the status rather than folded into it, so the timeline row
+    // for a cancellation reads "Status: Active → Cancelled" and "Cancellation
+    // reason: Sold" — and a reinstatement shows the reason going away.
+    field: 'cancellationReason',
+    label: 'Cancellation reason',
+    kind: 'text',
+    read: (policy) =>
+      policy.cancellation?.reason
+        ? changeText(
+            policyCancellationSummary({
+              reason: policy.cancellation.reason as PolicyCancellationReason,
+              note: policy.cancellation.note ?? null,
+            }),
+          )
+        : null,
+  },
+  {
+    // Logged only when a chargeback was recorded with the cancellation — the
+    // only time the carrier's date is asked for (PAC-173 PR 6).
+    field: 'cancellationDate',
+    label: 'Carrier cancellation date',
+    kind: 'date',
+    read: (policy) => changeDate(policy.cancellation?.cancelledOn),
+  },
 ];
+
+/** A cancellation applied inside its transaction, for the bookkeeping after it. */
+export interface AppliedCancellation {
+  /** The policy as saved — cancelled. */
+  policy: PolicyDocument;
+  /** The edit log's "before", taken under the same read. */
+  before: ChangeSnapshot;
+  /** The ledger row, when a chargeback was recorded with it. */
+  chargeback: ChargebackDocument | null;
+}
+
+/** What `PATCH` says when asked for a status only a flow may write. */
+function flowOnlyStatusMessage(status: string): string {
+  return status === 'Cancelled'
+    ? '"Cancelled" is set with the Cancel button, which records why the policy was cancelled.'
+    : `"${status}" is set by cancelling and rewriting the policy, not by editing its status.`;
+}
+
+/**
+ * Can the Cancel button act on this policy? Not when it has already left the
+ * books — by status, or by being retired into a replacement — and otherwise
+ * only when it is live or pending. See `PoliciesService.cancel`.
+ */
+function isCancellable(policy: PolicyDocument): boolean {
+  if (isTerminalPolicyStatus(policy.policyStatus)) return false;
+  if (policy.transferredToPolicyId) return false;
+  return (
+    policy.active ||
+    isActivePolicyStatus(policy.policyStatus) ||
+    normalizePolicyStatus(policy.policyStatus) === 'Pending'
+  );
+}
 
 @Injectable()
 export class PoliciesService {
@@ -154,7 +233,13 @@ export class PoliciesService {
     private readonly activityModel: Model<ActivityDocument>,
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
+    // A cancellation with a chargeback writes the ledger row and resolves the
+    // charged producer's name (PAC-173 PR 6) — both registered in this module.
+    @InjectModel(Chargeback.name)
+    private readonly chargebackModel: Model<ChargebackDocument>,
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly carriers: CarriersService,
+    private readonly transactions: TransactionRunner,
   ) {}
 
   /**
@@ -400,19 +485,44 @@ export class PoliciesService {
      *    (`Quoted`, `Pending`, any uncatalogued migrated code), which is why
      *    this is a null check and not a boolean.
      */
+    const wasActive = policy.active;
     if (dto.status !== undefined) {
-      if (isFlowOnlyPolicyStatus(dto.status)) {
+      /*
+       * 3. **Only a move *to* a flow-only status is refused.** Re-sending the
+       *    status a policy already holds is not a change, so a cancelled
+       *    policy whose carrier is being corrected may arrive carrying
+       *    `'Cancelled'` — refusing that would make every policy that ever left
+       *    the books uneditable, and `'Cancelled'` became flow-only with
+       *    thousands of migrated rows already holding it. It still runs through
+       *    the assignment below, so the `active` flag is re-synced exactly as
+       *    before.
+       */
+      const changing =
+        normalizePolicyStatus(dto.status) !==
+        normalizePolicyStatus(policy.policyStatus);
+      if (changing && isFlowOnlyPolicyStatus(dto.status)) {
         throw new BadRequestException(
-          `"${normalizePolicyStatus(dto.status)}" is set by cancelling and rewriting the policy, not by editing its status.`,
+          flowOnlyStatusMessage(normalizePolicyStatus(dto.status)),
         );
       }
       policy.policyStatus = dto.status ?? undefined;
 
       const active = policyActiveForStatus(dto.status);
       if (active !== null) policy.active = active;
+      /*
+       * Reinstated: the reason it left no longer describes it. Not cleared on
+       * any other change, because Cancelled → Lapsed is a correction of *how*
+       * it left, and the reason still stands.
+       */
+      if (changing && isActivePolicyStatus(dto.status)) {
+        policy.cancellation = undefined;
+      }
     }
 
     await policy.save();
+    if (policy.active !== wasActive) {
+      await this.recountHouseholdPolicies(policy);
+    }
     await this.recomputeDealTotals(policy);
     await this.recordFieldChanges(
       access,
@@ -421,6 +531,248 @@ export class PoliciesService {
       before,
     );
     return policy;
+  }
+
+  /**
+   * Cancel a policy outright — the household page's Cancel button.
+   *
+   * Unlike the two replacements there is no new policy to book, so nothing here
+   * goes near the Sold pipeline or a lead. What it does is the part the Edit
+   * dialog's status select never could — **record why** — plus the bookkeeping
+   * a status change owes and `PATCH` used to skip:
+   *
+   *   - `active` goes false with the status, so the policy stops counting
+   *     towards the household and stops being scheduled for renewal calls;
+   *   - the household's stored `totalActivePolicies` is recounted, because the
+   *     Clients list sorts on it;
+   *   - the edit log gets a "Policy cancelled" row carrying the old and new
+   *     status and the reason.
+   *
+   * **With a chargeback** (PAC-173 PR 6) it also writes the ledger row, dated on
+   * the carrier's cancellation date — see {@link applyCancellation}. That is
+   * money, so the cancellation and the row commit together in one transaction,
+   * the same argument `SoldDealIntakeService.process` makes for its
+   * `afterSteps`: a policy cancelled with its chargeback lost would take
+   * nothing back and nobody would ever notice.
+   *
+   * Refused (409) for a policy that is already off the books — cancelled,
+   * lapsed, or retired into a replacement. Cancelling it again would overwrite
+   * the reason it actually left with a second one.
+   *
+   * Pending policies may be cancelled: a client backing out before coverage
+   * starts is a real cancellation. Anything else that is inactive is not
+   * something this can say anything true about.
+   *
+   * Re-reads the policy inside the transaction (`policy` only names it), so
+   * the document it answers with is the one saved.
+   */
+  async cancel(
+    access: AccessContext,
+    policy: PolicyDocument,
+    dto: CancelPolicyDto,
+  ): Promise<AppliedCancellation> {
+    const applied = await this.transactions.run((session) =>
+      this.applyCancellation(
+        access,
+        { agencyId: String(policy.agencyId), policyId: policy._id },
+        dto,
+        session,
+      ),
+    );
+    await this.finishCancellation(access, applied);
+    return applied;
+  }
+
+  /**
+   * The cancellation's writes, inside the caller's transaction — {@link cancel}'s
+   * own, or a Dash row's Chargeback outcome's, which commits the row's outcome
+   * with it (`ReconciliationOutcomesService.cancelPolicy`). Call
+   * {@link finishCancellation} after the commit.
+   *
+   * Reads the policy **under the session** and checks it is still cancellable
+   * there: two cancels racing write the same document, so the transaction
+   * that loses conflicts, is retried, and reads it cancelled — a 409, not a
+   * second ledger row. That is why a `cancellation` chargeback needs no unique
+   * index (and has none: a policy reinstated and cancelled again is a second
+   * event, with its own row).
+   *
+   * With `dto.chargeback`, the carrier's date is bounded on the agency's
+   * calendar — not in the future, not before the sale (400) — and then:
+   *
+   *   - `rewriteFinancialOutcome` prices it, measured from the deal's sold
+   *     date: the premium charged back always, and inside a calendar month of
+   *     the sale the producer's sold figure reduced too;
+   *   - the ledger row (`reason: 'cancellation'`, no replacement) is charged to
+   *     the producer credited on the **original** deal — never whoever records
+   *     the cancellation — with the deal's `chargebackAdjustment` moved inside
+   *     the window (`writeChargeback`);
+   *   - the policy's `cancellation` keeps the carrier's day and the row's id.
+   *
+   * A policy with no deal (migrated, household-only, a 1-800 one) is still
+   * charged back — the money comes back either way — with no window and no
+   * deal to reduce, like a rewrite.
+   */
+  async applyCancellation(
+    access: AccessContext,
+    target: { agencyId: string; policyId: Types.ObjectId | string },
+    dto: CancelPolicyDto,
+    session: ClientSession | null,
+  ): Promise<AppliedCancellation> {
+    const policy = await this.policyModel
+      .findOne({
+        _id: new Types.ObjectId(String(target.policyId)),
+        agencyId: target.agencyId,
+        isTestRecord: { $ne: true },
+      })
+      .session(session);
+    if (!policy) throw new NotFoundException('Policy not found');
+    if (!isCancellable(policy)) {
+      throw new ConflictException(
+        'This policy is already off the books, so there is nothing to cancel.',
+      );
+    }
+
+    const before = snapshot(POLICY_CHANGE_FIELDS, policy, {
+      timeZone: access.timeZone,
+    });
+
+    let chargeback: ChargebackDocument | null = null;
+    let cancelledOn: Date | undefined;
+    if (dto.chargeback) {
+      const day = dto.chargeback.cancelledOn;
+      const originalDeal = policy.dealId
+        ? await this.dealModel
+            .findOne({ _id: policy.dealId, agencyId: target.agencyId })
+            .select('soldDate producerId branchId')
+            .session(session)
+        : null;
+      assertNotInFuture('The cancellation date', day, access.timeZone);
+      assertNotBefore(
+        'The cancellation date',
+        day,
+        originalDeal?.soldDate,
+        'the sale',
+        access.timeZone,
+      );
+      cancelledOn = parseFormDate(day);
+      const producerId = originalDeal?.producerId ?? null;
+      chargeback = await writeChargeback(
+        { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
+        {
+          session,
+          cancelled: policy,
+          originalDeal,
+          reason: 'cancellation',
+          replacementPolicyId: null,
+          outcome: rewriteFinancialOutcome(
+            policy.premium,
+            originalDeal?.soldDate ?? null,
+            cancelledOn,
+          ),
+          occurredAt: cancelledOn,
+          producerId,
+          producerName: await chargedProducerName(this.userModel, producerId),
+          fallbackBranchId: await this.chargebackBranch(
+            policy,
+            originalDeal?.branchId,
+            access,
+            session,
+          ),
+        },
+      );
+    }
+
+    policy.policyStatus = 'Cancelled';
+    policy.active = false;
+    policy.cancellation = {
+      reason: dto.reason,
+      note: dto.note ?? undefined,
+      cancelledAt: new Date(),
+      cancelledBy: Types.ObjectId.isValid(access.userId)
+        ? new Types.ObjectId(access.userId)
+        : undefined,
+      ...(chargeback ? { cancelledOn, chargebackId: chargeback._id } : {}),
+    };
+
+    await policy.save(sessionOptions(session));
+    return { policy, before, chargeback };
+  }
+
+  /**
+   * After {@link applyCancellation} commits: the household recount and the
+   * edit log, best-effort as before. Never inside the transaction — the
+   * recount's own query would not see the uncommitted cancel.
+   */
+  async finishCancellation(
+    access: AccessContext,
+    applied: AppliedCancellation,
+  ): Promise<void> {
+    const { policy, before, chargeback } = applied;
+    await this.recountHouseholdPolicies(policy);
+    await this.recordFieldChanges(
+      access,
+      policy,
+      await this.leadIdForPolicy(policy),
+      before,
+      chargeback ? 'Policy cancelled, chargeback recorded' : 'Policy cancelled',
+    );
+  }
+
+  /**
+   * The branch a chargeback row takes when the policy has none (migrated ones
+   * can lack it; `TenantRecord.branchId` is required): the deal's, the
+   * caller's, else the household's.
+   */
+  private async chargebackBranch(
+    policy: PolicyDocument,
+    dealBranchId: string | undefined,
+    access: AccessContext,
+    session: ClientSession | null,
+  ): Promise<string> {
+    if (policy.branchId) return policy.branchId;
+    if (dealBranchId) return dealBranchId;
+    if (access.branchId) return access.branchId;
+    if (!policy.householdId) return '';
+    const household = await this.householdModel
+      .findOne({ _id: policy.householdId, agencyId: policy.agencyId })
+      .select('branchId')
+      .session(session)
+      .lean<{ branchId?: string }>();
+    return household?.branchId ?? '';
+  }
+
+  /**
+   * Bring the household's stored `totalActivePolicies` back in line after a
+   * policy's `active` flag moved.
+   *
+   * The same recount `SoldDealIntakeService` runs after a booking, for the same
+   * reason: the Clients list sorts on the stored figure, and until now a policy
+   * cancelled or reinstated from the household page left it where it was.
+   * Recounted rather than incremented so a retry is still right, and
+   * best-effort, because the policy itself is already saved.
+   */
+  private async recountHouseholdPolicies(
+    policy: PolicyDocument,
+  ): Promise<void> {
+    if (!policy.householdId) return;
+    try {
+      const active = await this.policyModel.countDocuments({
+        agencyId: policy.agencyId,
+        householdId: policy.householdId,
+        active: true,
+        isTestRecord: { $ne: true },
+      });
+      await this.householdModel.updateOne(
+        { _id: policy.householdId, agencyId: policy.agencyId },
+        { $set: { totalActivePolicies: active } },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Household policy recount failed for policy ${policy._id.toString()}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
@@ -469,6 +821,7 @@ export class PoliciesService {
     policy: PolicyDocument,
     leadId: Types.ObjectId | null,
     before: ChangeSnapshot,
+    summary = 'Policy edited',
   ): Promise<void> {
     const changes = diffSnapshots(
       POLICY_CHANGE_FIELDS,
@@ -496,7 +849,7 @@ export class PoliciesService {
         userId: new Types.ObjectId(access.userId),
         occurredAt: new Date(),
         // Value-free on purpose — see the `summary` docblock on the schema.
-        summary: 'Policy edited',
+        summary,
         // Explicit: the schema default is 'migration', which `toActivityOrigin`
         // renders as the "Imported" chip.
         source: 'internal',

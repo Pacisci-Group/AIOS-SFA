@@ -1,0 +1,104 @@
+meta {
+  name: Add Household Address
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/households/{{householdId}}/addresses
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "street": "1 Bruno Test Way",
+    "street2": "Unit 9",
+    "city": "Tulsa",
+    "state": "Oklahoma",
+    "zip": "74101",
+    "label": "Bruno test",
+    "makePrimary": false
+  }
+}
+
+script:post-response {
+  // For `Remove Household Address`, which takes it out again. Runtime-only.
+  if (res.getStatus() === 201) {
+    const entry = (res.getBody().otherAddresses || []).find(
+      (e) => e.label === "Bruno test",
+    );
+    bru.setVar("householdAddressEntryId", entry ? entry.id : null);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the address is in the book, newest first", function () {
+    const first = res.getBody().otherAddresses[0];
+    expect(first.label).to.equal("Bruno test");
+    expect(first.address.street).to.equal("1 Bruno Test Way");
+    expect(first.address.street2).to.equal("Unit 9");
+    expect(first.id).to.be.a("string");
+  });
+
+  test("the response is the whole household", function () {
+    const body = res.getBody();
+    expect(body).to.have.property("propertyAddress");
+    expect(body).to.have.property("contacts");
+    expect(body).to.have.property("policies");
+  });
+}
+
+docs {
+  # POST /households/:id/addresses
+
+  Add an address to the household's **address book** — or, with `makePrimary`,
+  move the household to it.
+
+  - **Module:** `clients` OR `crm_service`
+  - **Permission:** `clients:write` **OR** `crm_service:write` — wider than the
+    member writes on this controller on purpose: the Cancel button asks a CSR to
+    update the address next, so the CSR must be able to
+  - **Data scope:** `own` collapses to **branch**
+
+  ## The model
+  The household's **primary** address is still `propertyAddress`, and only that
+  — every reader (Clients list location and search, `addressKey`, quote prefill,
+  data export) keeps reading it. The book, `otherAddresses`, holds every *other*
+  address: a previous home, a second home. The mailing address is neither and is
+  not managed here.
+
+  ## Body
+  | Field | Type | Notes |
+  |---|---|---|
+  | `street`, `city`, `state`, `zip` | string | required (blank is a 400) |
+  | `street2` | string ≤ 200, nullable | apartment / unit |
+  | `label` | string ≤ 40, nullable | names a non-primary entry; ignored when `makePrimary` |
+  | `makePrimary` | boolean | required |
+
+  With **`makePrimary: true`** the new address becomes `propertyAddress` and the
+  one it replaces moves into the book labelled **"Previous address"** — nothing
+  is overwritten. `addressKey` follows the new primary.
+
+  ## Response
+  The whole **`HouseholdView`**; `otherAddresses` is newest first, each
+  `{ id, label, address: { street, street2?, city, state, zip }, addedAt }`.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | A required part blank, or a field too long |
+  | 401 | Missing/expired bearer token |
+  | 403 | Both modules disabled, or the caller holds neither write |
+  | 404 | Household outside the caller's scope |
+  | 409 | The address (street + unit + ZIP, ignoring case) is already the primary or already in the book; or the book already holds 20 |
+}

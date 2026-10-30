@@ -46,6 +46,8 @@
 
 import { ModuleKey } from '../enums/module-key.enum';
 import { modulePermission } from '../permissions/permission.constants';
+import type { PolicySummary } from '../clients/client-records';
+import type { PolicyCancellationReason } from './policy-cancellation';
 import type { PolicyOrigin } from './policy-origin';
 import type { PolicyType } from './policy-type';
 import type { ServiceTicketAssignee } from '../service/service-ticket';
@@ -235,6 +237,7 @@ export type RetiredReconciliationResolution =
 export const RECONCILIATION_OUTCOME_RESOLUTIONS = [
   'sold_recorded',
   'cancel_rewrite_recorded',
+  'chargeback_recorded',
   'service_intake_recorded',
   'other_recorded',
 ] as const;
@@ -264,6 +267,7 @@ export const RECONCILIATION_RESOLUTION_LABELS: Record<
   other: 'Other',
   sold_recorded: 'Sold recorded',
   cancel_rewrite_recorded: 'Cancel rewrite recorded',
+  chargeback_recorded: 'Chargeback recorded',
   service_intake_recorded: 'Service intake recorded',
   other_recorded: 'Other recorded',
 };
@@ -354,6 +358,10 @@ export const MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH = 1000;
  * - `cancel_rewrite` — it was sold and later rewritten: enter it as `sold`
  *   does, then write its replacement through the normal cancel-rewrite chain,
  *   so the trail and the chargeback exist.
+ * - `chargeback` — it was sold and the carrier later cancelled it (PAC-173
+ *   PR 6): enter it as `sold` does, then cancel it through the household
+ *   page's Cancel dialog with **Record a chargeback** ticked and the carrier's
+ *   cancellation date, which decides the one-month clawback window.
  * - `service_intake` — a 1-800 policy (PAC-173 PR 5): Allstate sold it, the
  *   agency services it. Its form creates the household (captured like a lead,
  *   but no lead), a `carrier_direct` policy with its NBA and no deal, and a
@@ -363,6 +371,7 @@ export const MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH = 1000;
 export const RECONCILIATION_OUTCOME_KINDS = [
   'sold',
   'cancel_rewrite',
+  'chargeback',
   'service_intake',
   'other',
 ] as const;
@@ -375,6 +384,7 @@ export const RECONCILIATION_OUTCOME_KIND_LABELS: Record<
 > = {
   sold: 'Sold',
   cancel_rewrite: 'Cancel rewrite',
+  chargeback: 'Chargeback',
   service_intake: 'Service intake',
   other: 'Other',
 };
@@ -386,6 +396,7 @@ export const RECONCILIATION_OUTCOME_RESOLUTION: Record<
 > = {
   sold: 'sold_recorded',
   cancel_rewrite: 'cancel_rewrite_recorded',
+  chargeback: 'chargeback_recorded',
   service_intake: 'service_intake_recorded',
   other: 'other_recorded',
 };
@@ -396,14 +407,16 @@ export type ReconciliationOutcomeStatus =
 
 /**
  * Where an unfinished outcome stands: `record_sale` until the sale is booked,
- * then — for a cancel rewrite — `write_replacement` until its replacement is.
- * A service intake is `start_onboarding` only between saving the household
- * and policy and opening the welcome call; it stays there when that failed,
- * and Continue opens it.
+ * then — for a cancel rewrite — `write_replacement` until its replacement is,
+ * or — for a chargeback — `cancel_policy` until the policy is cancelled with
+ * its chargeback. A service intake is `start_onboarding` only between saving
+ * the household and policy and opening the welcome call; it stays there when
+ * that failed, and Continue opens it.
  */
 export const RECONCILIATION_OUTCOME_STEPS = [
   'record_sale',
   'write_replacement',
+  'cancel_policy',
   'start_onboarding',
 ] as const;
 export type ReconciliationOutcomeStep =
@@ -415,19 +428,25 @@ export const RECONCILIATION_OUTCOME_STEP_LABELS: Record<
 > = {
   record_sale: 'Recording the sale',
   write_replacement: 'Writing the replacement',
+  cancel_policy: 'Cancelling the policy',
   start_onboarding: 'Opening the welcome call',
 };
 
-/** The kinds that book a sale, and so need the caller to be able to. */
+/**
+ * The kinds that book a sale, and so need the caller to be able to. A
+ * chargeback books one before it cancels it.
+ */
 export const RECONCILIATION_SALE_OUTCOME_KINDS = [
   'sold',
   'cancel_rewrite',
+  'chargeback',
 ] as const satisfies readonly ReconciliationOutcomeKind[];
 
 /**
  * The outcomes a row can take:
  *
- * - a Dash sale missing from the app: Sold, a Cancel rewrite or Other;
+ * - a Dash sale missing from the app: Sold, a Cancel rewrite, a Chargeback
+ *   (PAC-173 PR 6) or Other;
  * - a 1-800 policy the app does not have (`review_1800`, `dash_only`): Set up
  *   for service, or Other;
  * - anything else — a 1-800 policy the app already has included (on a deal or
@@ -438,7 +457,7 @@ export function reconciliationOutcomeKinds(row: {
   match: ReconciliationMatch | null;
 }): readonly ReconciliationOutcomeKind[] {
   if (row.tabs.includes('missing_from_app')) {
-    return ['sold', 'cancel_rewrite', 'other'];
+    return ['sold', 'cancel_rewrite', 'chargeback', 'other'];
   }
   if (row.tabs.includes('review_1800') && row.match === 'dash_only') {
     return ['service_intake', 'other'];
@@ -448,7 +467,8 @@ export function reconciliationOutcomeKinds(row: {
 
 /**
  * Whether someone holding these permissions can book a sale: a lead, then the
- * sale on it. Recording Sold or a Cancel rewrite takes both, and only people
+ * sale on it. Recording Sold, a Cancel rewrite or a Chargeback takes both (a
+ * chargeback's cancel step too, as part of the same outcome), and only people
  * who can are given a `missing_from_app` row (owner, 28 Oct 2026) — checked by
  * permission, not role, so a CSR an agency lets sell qualifies.
  */
@@ -504,6 +524,13 @@ export const RECONCILIATION_OUTCOME_NOT_ALLOWED =
 export const RECONCILIATION_OUTCOME_FORBIDDEN =
   'RECONCILIATION_OUTCOME_FORBIDDEN';
 export const RECONCILIATION_OUTCOME_LOCKED = 'RECONCILIATION_OUTCOME_LOCKED';
+/**
+ * A Chargeback's sale links no policy numbered as the Dash line (PAC-173 PR 6),
+ * so there is nothing it may cancel: the assignee corrects the number on the
+ * sale, then Continues.
+ */
+export const RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED =
+  'RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED';
 
 // ---------------------------------------------------------------------------
 // Views
@@ -713,8 +740,9 @@ export interface ReconciliationRowView {
 /**
  * An assignee's outcome. The ids link what it created: the lead and deal of
  * the sale, the policy that is the Dash line, and — for a cancel rewrite — the
- * replacement policy and the chargeback the rewrite wrote; for a service
- * intake, the household, the policy, and the onboarding with its welcome call.
+ * replacement policy and the chargeback the rewrite wrote; for a chargeback,
+ * the ledger row its cancellation wrote; for a service intake, the household,
+ * the policy, and the onboarding with its welcome call.
  */
 export interface ReconciliationOutcome {
   kind: ReconciliationOutcomeKind;
@@ -830,6 +858,22 @@ export interface ReconciliationAssignedRowDetail
   extends ReconciliationAssignedRow {
   /** `null` on a row with no Dash line. */
   prefill: ReconciliationPrefill | null;
+  /**
+   * A Chargeback waiting at `cancel_policy` (PAC-173 PR 6): the policy its
+   * cancel will cancel, as the app has it — so the dialog names what it acts
+   * on, not the Dash line's number. `null` for any other row, and while the
+   * sale links no policy numbered as the Dash line.
+   */
+  chargebackPolicy: ReconciliationChargebackPolicy | null;
+}
+
+/** The booked policy a Chargeback's cancel acts on. */
+export interface ReconciliationChargebackPolicy {
+  id: string;
+  policyNumber: string | null;
+  policyType: string | null;
+  carrier: string | null;
+  premium: number;
 }
 
 /** `PATCH carrier-reconciliation/assigned/:rowId/outcome`. */
@@ -837,6 +881,26 @@ export interface RecordReconciliationOutcomeInput {
   kind: ReconciliationOutcomeKind;
   /** Required for `other`. */
   note?: string | null;
+}
+
+/**
+ * `POST carrier-reconciliation/assigned/:rowId/cancel-policy` — a Chargeback
+ * outcome's second step (PAC-173 PR 6): cancel the policy the sale booked, with
+ * the chargeback. The reason is the Cancel button's (`note` required for
+ * `other`); `cancelledOn` is the carrier's cancellation date, `YYYY-MM-DD`,
+ * which decides the one-month clawback window.
+ */
+export interface ReconciliationCancelPolicyInput {
+  reason: PolicyCancellationReason;
+  note?: string | null;
+  cancelledOn: string;
+}
+
+export interface ReconciliationCancelPolicyResponse {
+  /** The row, finished — as `GET assigned/:rowId` answers it. */
+  row: ReconciliationAssignedRowDetail;
+  /** The cancelled policy as the household page lists it, chargeback linked. */
+  policy: PolicySummary;
 }
 
 /** The signed application a service intake attaches to its policy. */

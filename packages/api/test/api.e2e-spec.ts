@@ -3805,6 +3805,53 @@ describe('SFA API (e2e)', () => {
         },
       );
 
+      /*
+       * Plain `Cancelled` joined them when the Cancel button arrived: it is the
+       * button's to write, because only the button asks why.
+       */
+      it('refuses Cancelled, which the Cancel button writes', async () => {
+        const policyId = await makePolicy();
+        const res = await patch(ownerToken, seed.householdId, policyId)
+          .send({ status: 'Cancelled' })
+          .expect(400);
+        expect(String((res.body as { message?: unknown }).message)).toMatch(
+          /Cancel button/,
+        );
+        const stored = await policyModel.findById(policyId).lean();
+        expect(stored?.policyStatus).toBe('Active');
+        expect(stored?.active).toBe(true);
+      });
+
+      /*
+       * The Edit dialog sends the stored status back with every save, so a
+       * cancelled policy's carrier correction arrives carrying `Cancelled`. That
+       * is not a status change and must not be refused — thousands of migrated
+       * policies already hold it.
+       */
+      it('accepts a flow-only status the policy already holds', async () => {
+        const policyId = await makePolicy({
+          active: false,
+          policyStatus: 'Cancelled',
+        });
+        const saved = await patchOk(policyId, {
+          status: 'Cancelled',
+          carrier: 'Corrected Carrier',
+        });
+        expect(saved.policyStatus).toBe('Cancelled');
+        expect(saved.carrier).toBe('Corrected Carrier');
+      });
+
+      it('clears the cancellation reason on reinstatement', async () => {
+        const policyId = await makePolicy({
+          active: false,
+          policyStatus: 'Cancelled',
+          cancellation: { reason: 'sold', cancelledAt: new Date() },
+        });
+        const saved = await patchOk(policyId, { status: 'Active' });
+        expect(saved.active).toBe(true);
+        expect(saved.cancellation).toBeNull();
+      });
+
       it('heals a raw SmartSuite code into its label', async () => {
         const policyId = await makePolicy();
         const saved = await patchOk(policyId, { status: 'QsrnM' });
@@ -3848,6 +3895,7 @@ describe('SFA API (e2e)', () => {
         'effectiveDate',
         'expirationDate',
         'renewalDate',
+        'cancellation',
       ]) {
         expect(saved).toHaveProperty(key);
       }
@@ -3855,6 +3903,649 @@ describe('SFA API (e2e)', () => {
       for (const key of ['agencyId', 'branchId', 'isTestRecord']) {
         expect(raw[key]).toBeUndefined();
       }
+    });
+  });
+
+  /*
+   * The household page's Cancel button — a cancellation that says why.
+   *
+   * What the block pins: the reason vocabulary (and that `other` must say what
+   * it means), the bookkeeping a cancellation owes (`active`, the household's
+   * stored count, the edit log), and the same gate and household-in-the-path
+   * authorisation as the edit above — and, since PAC-173 PR 6, the optional
+   * chargeback: the carrier's date, the one-month window, the ledger row.
+   */
+  describe('Household policy cancel', () => {
+    let policyModel: Model<Policy>;
+    let householdModel: Model<Household>;
+    let activityModel: Model<Activity>;
+    let dealModel: Model<Deal>;
+    let chargebackModel: Model<Chargeback>;
+    let producerObjectId: Types.ObjectId;
+    const cleanup: Array<() => Promise<unknown>> = [];
+
+    /** A sale on the producer, sold on `soldDay` (agency calendar). */
+    const makeDeal = async (soldDay: string): Promise<Types.ObjectId> => {
+      const [created] = await dealModel.create([
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: producerObjectId,
+          soldDate: onDay(soldDay),
+          premium: 500,
+          itemCount: 1,
+        },
+      ]);
+      cleanup.push(() => dealModel.deleteOne({ _id: created._id }));
+      return created._id;
+    };
+    const ledgerFor = (policyId: string) =>
+      chargebackModel.find({ policyId: new Types.ObjectId(policyId) }).lean();
+    /** Days from today, as the date input submits it. */
+    const daysFromToday = (days: number) =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
+    /** A fresh household, so the stored count is this block's alone. */
+    const makeHousehold = async (): Promise<string> => {
+      const created = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: `Cancel Test ${Math.random().toString(36).slice(2, 8)}`,
+        status: 'Active',
+        totalActivePolicies: 0,
+      });
+      cleanup.push(() => householdModel.deleteOne({ _id: created._id }));
+      return created._id.toString();
+    };
+
+    const makePolicy = async (
+      householdId: string,
+      overrides: Record<string, unknown> = {},
+    ): Promise<string> => {
+      const created = await policyModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        householdId: new Types.ObjectId(householdId),
+        policyNumber: `CXL-${Math.random().toString(36).slice(2, 10)}`,
+        policyType: 'Auto',
+        carrier: 'Test Carrier',
+        active: true,
+        policyStatus: 'Active',
+        premium: 500,
+        items: 1,
+        ...overrides,
+      });
+      cleanup.push(() => policyModel.deleteOne({ _id: created._id }));
+      return created._id.toString();
+    };
+
+    const cancel = (token: string, householdId: string, policyId: string) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/households/${householdId}/policies/${policyId}/cancel`)
+        .set(authHeader(token));
+
+    beforeAll(async () => {
+      policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
+      householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+      activityModel = app.get<Model<Activity>>(getModelToken(Activity.name));
+      dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      chargebackModel = app.get<Model<Chargeback>>(
+        getModelToken(Chargeback.name),
+      );
+      const producer = await app
+        .get<Model<User>>(getModelToken(User.name))
+        .findOne({ email: seed.producerEmail })
+        .lean();
+      producerObjectId = producer!._id;
+    });
+
+    afterAll(async () => {
+      await chargebackModel.deleteMany({
+        policyNumber: { $regex: /^CXL-/ },
+      });
+      for (const undo of cleanup.reverse()) await undo();
+    });
+
+    it('cancels with a named reason and takes the policy off the books', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await makePolicy(householdId); // a second, still-active policy
+
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(201);
+      const saved = res.body as PolicySummary;
+
+      expect(saved.policyStatus).toBe('Cancelled');
+      expect(saved.active).toBe(false);
+      expect(saved.cancellation).toMatchObject({ reason: 'sold', note: null });
+      expect(typeof saved.cancellation?.cancelledAt).toBe('string');
+
+      // The stored roll-up the Clients list sorts on, recounted from the policies.
+      const household = await householdModel.findById(householdId).lean();
+      expect(household?.totalActivePolicies).toBe(1);
+
+      const owner = await app
+        .get<Model<User>>(getModelToken(User.name))
+        .findOne({ email: seed.ownerEmail })
+        .lean();
+      const stored = await policyModel.findById(policyId).lean();
+      expect(String(stored?.cancellation?.cancelledBy)).toBe(
+        String(owner?._id),
+      );
+    });
+
+    it('records the free text for Other', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'other', note: '  Moved out of state  ' })
+        .expect(201);
+      expect((res.body as PolicySummary).cancellation).toMatchObject({
+        reason: 'other',
+        note: 'Moved out of state',
+      });
+    });
+
+    it('400s an Other with no reason given', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'other', note: '   ' })
+        .expect(400);
+      const stored = await policyModel.findById(policyId).lean();
+      expect(stored?.active).toBe(true);
+    });
+
+    it('drops a note sent with a named reason', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'changed_carrier', note: 'ignored' })
+        .expect(201);
+      expect((res.body as PolicySummary).cancellation?.note).toBeNull();
+    });
+
+    it('400s an unknown reason', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'bored' })
+        .expect(400);
+    });
+
+    it('writes a "Policy cancelled" row to the edit log', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'changed_carrier' })
+        .expect(201);
+
+      const row = await activityModel
+        .findOne({ policyId: new Types.ObjectId(policyId) })
+        .lean();
+      expect(row?.summary).toBe('Policy cancelled');
+      const fields = (row?.changes ?? []).map(
+        (change: { field: string }) => change.field,
+      );
+      expect(fields).toEqual(
+        expect.arrayContaining(['policyStatus', 'cancellationReason']),
+      );
+    });
+
+    it.each([
+      ['Cancelled', false],
+      ['Lapsed', false],
+      ['Cancel Rewrite', false],
+    ])('409s a policy already %s', async (policyStatus, active) => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId, { policyStatus, active });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(409);
+    });
+
+    it('cancels a pending policy', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId, {
+        policyStatus: 'Pending',
+        active: false,
+      });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(201);
+    });
+
+    it('lets a CSR cancel from the household page', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await cancel(csrToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(201);
+    });
+
+    it('403s a read-only user', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await cancel(readOnlyToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(403);
+    });
+
+    it("404s for a policy that is not this household's", async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId);
+      await cancel(ownerToken, seed.secondHouseholdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(404);
+    });
+
+    it('records no chargeback and asks no date without the box', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId });
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: null })
+        .expect(201);
+
+      expect((res.body as PolicySummary).cancellation).toMatchObject({
+        cancelledOn: null,
+        chargebackId: null,
+      });
+      expect(await ledgerFor(policyId)).toEqual([]);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+    });
+
+    it('charges the premium back inside the month, reversing the credit — dated on the carrier’s day', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 940 });
+
+      const res = await cancel(csrToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+
+      const [row] = await ledgerFor(policyId);
+      expect(row).toMatchObject({
+        reason: 'cancellation',
+        source: 'app',
+        amount: 940,
+        soldAdjustment: -940,
+        withinClawbackWindow: true,
+        replacementPolicyId: null,
+      });
+      expect(String(row.dealId)).toBe(String(dealId));
+      // Charged to the producer credited on the deal, not the CSR recording it.
+      expect(String(row.producerId)).toBe(String(producerObjectId));
+      expect(row.occurredAt.toISOString()).toBe('2026-09-20T00:00:00.000Z');
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-940);
+      expect((res.body as PolicySummary).cancellation).toMatchObject({
+        reason: 'sold',
+        cancelledOn: '2026-09-20',
+        chargebackId: String(row._id),
+      });
+
+      const log = await activityModel
+        .findOne({ policyId: new Types.ObjectId(policyId) })
+        .lean();
+      expect(log?.summary).toBe('Policy cancelled, chargeback recorded');
+      expect(
+        (log?.changes ?? []).map((change: { field: string }) => change.field),
+      ).toEqual(expect.arrayContaining(['cancellationDate']));
+
+      // The policy's history names why it was charged back.
+      const history = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${policyId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(
+        (history.body as { entries: Record<string, unknown>[] }).entries[0],
+      ).toMatchObject({
+        chargebackAmount: 940,
+        withinClawbackWindow: true,
+        chargebackReason: 'cancellation',
+      });
+    });
+
+    it('charges the premium back after the month and leaves the credit alone', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 940 });
+
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-10-15' } })
+        .expect(201);
+
+      expect(await ledgerFor(policyId)).toEqual([
+        expect.objectContaining({
+          amount: 940,
+          soldAdjustment: 0,
+          withinClawbackWindow: false,
+        }) as unknown,
+      ]);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+    });
+
+    it('charges back a policy with no deal, with no window and no deal to reduce', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId, { premium: 300 });
+
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+
+      expect(await ledgerFor(policyId)).toEqual([
+        expect.objectContaining({
+          amount: 300,
+          soldAdjustment: 0,
+          withinClawbackWindow: false,
+          dealId: null,
+          producerId: null,
+        }) as unknown,
+      ]);
+    });
+
+    it.each([
+      ['in the future', () => daysFromToday(3), /cannot be in the future/],
+      ['before the sale', () => '2026-09-01', /cannot be before the sale/],
+      ['not a date', () => '20/09/2026', /Validation failed/],
+    ])(
+      '400s a carrier date %s and cancels nothing',
+      async (_label, cancelledOn, message) => {
+        const householdId = await makeHousehold();
+        const dealId = await makeDeal('2026-09-02');
+        const policyId = await makePolicy(householdId, { dealId });
+
+        const res = await cancel(ownerToken, householdId, policyId)
+          .send({ reason: 'sold', chargeback: { cancelledOn: cancelledOn() } })
+          .expect(400);
+
+        expect((res.body as { message: string }).message).toMatch(message);
+        expect((await policyModel.findById(policyId).lean())?.active).toBe(
+          true,
+        );
+        expect(await ledgerFor(policyId)).toEqual([]);
+      },
+    );
+
+    it('a policy reinstated and cancelled again is charged back again', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 100 });
+      // First with a mistyped carrier date, after the month...
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-10-15' } })
+        .expect(201);
+      await policyModel.updateOne(
+        { _id: new Types.ObjectId(policyId) },
+        {
+          $set: { policyStatus: 'Active', active: true },
+          $unset: { cancellation: 1 },
+        },
+      );
+
+      // ...then again with the right, EARLIER date, inside it.
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-25' } })
+        .expect(201);
+      const current = (res.body as PolicySummary).cancellation?.chargebackId;
+
+      expect(await ledgerFor(policyId)).toHaveLength(2);
+      // Only the second fell inside the month: one $inc, by its row.
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-100);
+
+      // The history reports the row written last — the policy's current
+      // cancellation — not the one with the later carrier date; it totals both.
+      const history = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${policyId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const chain = history.body as {
+        entries: Record<string, unknown>[];
+        totalChargeback: number;
+      };
+      const reported = await chargebackModel.findById(current).lean();
+      expect(reported?.withinClawbackWindow).toBe(true);
+      expect(chain.entries[0]).toMatchObject({
+        chargebackAmount: 100,
+        chargebackReason: 'cancellation',
+        withinClawbackWindow: true,
+      });
+      expect(chain.totalChargeback).toBe(200);
+    });
+
+    it('never puts an old cancellation chargeback on a later transfer', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 100 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-10' } })
+        .expect(201);
+      // Reinstated, then moved by Company Transfer — written as the transfer
+      // flow leaves the pair.
+      const successorId = await makePolicy(householdId, {
+        transferredFromPolicyId: new Types.ObjectId(policyId),
+      });
+      await policyModel.updateOne(
+        { _id: new Types.ObjectId(policyId) },
+        {
+          $set: {
+            policyStatus: 'Company Transfer',
+            active: false,
+            transferredToPolicyId: new Types.ObjectId(successorId),
+          },
+          $unset: { cancellation: 1 },
+        },
+      );
+
+      const history = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${successorId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const chain = history.body as {
+        entries: Record<string, unknown>[];
+        totalChargeback: number;
+      };
+      expect(chain.entries).toHaveLength(2);
+      expect(chain.entries[0]).toMatchObject({
+        reason: 'company_transfer',
+        chargebackAmount: null,
+        chargebackReason: null,
+      });
+      // Still money: the chain total counts it.
+      expect(chain.totalChargeback).toBe(100);
+    });
+  });
+
+  /*
+   * The household address book. The primary stays `propertyAddress`; the book
+   * holds the rest, and making an entry primary swaps it with the primary rather
+   * than overwriting either.
+   */
+  describe('Household address book', () => {
+    let householdModel: Model<Household>;
+    const cleanup: Array<() => Promise<unknown>> = [];
+
+    const HOME = {
+      street: '10 Old Rd',
+      city: 'Tulsa',
+      state: 'Oklahoma',
+      zip: '74101',
+    };
+    const NEW_HOME = {
+      street: '22 New Ave',
+      street2: 'Apt 4',
+      city: 'Broken Arrow',
+      state: 'Oklahoma',
+      zip: '74012',
+    };
+
+    const makeHousehold = async (
+      overrides: Record<string, unknown> = {},
+    ): Promise<string> => {
+      const created = await householdModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        name: `Address Test ${Math.random().toString(36).slice(2, 8)}`,
+        status: 'Active',
+        propertyAddress: HOME,
+        ...overrides,
+      });
+      cleanup.push(() => householdModel.deleteOne({ _id: created._id }));
+      return created._id.toString();
+    };
+
+    const post = (token: string, path: string) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/households/${path}`)
+        .set(authHeader(token));
+
+    /** `res.body` is `any`; this is the shape every write here returns. */
+    interface BookView {
+      propertyAddress: Record<string, string> | null;
+      otherAddresses: Array<{
+        id: string;
+        label: string | null;
+        address: Record<string, string>;
+      }>;
+    }
+
+    beforeAll(() => {
+      householdModel = app.get<Model<Household>>(getModelToken(Household.name));
+    });
+
+    afterAll(async () => {
+      for (const undo of cleanup.reverse()) await undo();
+    });
+
+    it('starts empty on a household that never had a second address', async () => {
+      const householdId = await makeHousehold();
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/households/${householdId}`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect((res.body as BookView).otherAddresses).toEqual([]);
+    });
+
+    it('moves the household to a new primary, keeping the old one as previous', async () => {
+      const householdId = await makeHousehold();
+      const res = await post(ownerToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: true })
+        .expect(201);
+      const view = res.body as BookView;
+
+      expect(view.propertyAddress).toMatchObject(NEW_HOME);
+      expect(view.otherAddresses).toHaveLength(1);
+      expect(view.otherAddresses[0]).toMatchObject({
+        label: 'Previous address',
+        address: HOME,
+      });
+
+      // The dedupe key follows the primary rather than the house they left.
+      const stored = await householdModel.findById(householdId).lean();
+      expect(stored?.addressKey).toBe('22 new ave|74012');
+    });
+
+    it('adds a labelled address without touching the primary', async () => {
+      const householdId = await makeHousehold();
+      const res = await post(ownerToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, label: 'Lake house', makePrimary: false })
+        .expect(201);
+      const view = res.body as BookView;
+      expect(view.propertyAddress).toMatchObject(HOME);
+      expect(view.otherAddresses[0]).toMatchObject({
+        label: 'Lake house',
+        address: NEW_HOME,
+      });
+    });
+
+    it('swaps an entry with the primary', async () => {
+      const householdId = await makeHousehold();
+      const added = await post(ownerToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: false })
+        .expect(201);
+      const entryId = (added.body as BookView).otherAddresses[0].id;
+
+      const res = await post(
+        ownerToken,
+        `${householdId}/addresses/${entryId}/primary`,
+      ).expect(201);
+      const view = res.body as BookView;
+
+      expect(view.propertyAddress).toMatchObject(NEW_HOME);
+      expect(view.otherAddresses).toHaveLength(1);
+      expect(view.otherAddresses[0]).toMatchObject({
+        label: 'Previous address',
+        address: HOME,
+      });
+    });
+
+    it('removes an entry, and 404s it the second time', async () => {
+      const householdId = await makeHousehold();
+      const added = await post(ownerToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: false })
+        .expect(201);
+      const entryId = (added.body as BookView).otherAddresses[0].id;
+
+      const remove = () =>
+        request(app.getHttpServer())
+          .delete(`/api/v1/households/${householdId}/addresses/${entryId}`)
+          .set(authHeader(ownerToken));
+
+      const res = await remove().expect(200);
+      expect((res.body as BookView).otherAddresses).toEqual([]);
+      expect((res.body as BookView).propertyAddress).toMatchObject(HOME);
+      await remove().expect(404);
+    });
+
+    it('409s the primary address added again', async () => {
+      const householdId = await makeHousehold();
+      await post(ownerToken, `${householdId}/addresses`)
+        .send({ ...HOME, street: ' 10 OLD RD ', makePrimary: true })
+        .expect(409);
+    });
+
+    it('makes the first address primary without inventing a previous one', async () => {
+      const householdId = await makeHousehold({ propertyAddress: undefined });
+      const res = await post(ownerToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: true })
+        .expect(201);
+      expect((res.body as BookView).otherAddresses).toEqual([]);
+    });
+
+    it('400s an incomplete address', async () => {
+      const householdId = await makeHousehold();
+      await post(ownerToken, `${householdId}/addresses`)
+        .send({ street: '1 Somewhere', makePrimary: true })
+        .expect(400);
+    });
+
+    it('lets a CSR update the address the Cancel button prompts for', async () => {
+      const householdId = await makeHousehold();
+      await post(csrToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: true })
+        .expect(201);
+    });
+
+    it('403s a read-only user', async () => {
+      const householdId = await makeHousehold();
+      await post(readOnlyToken, `${householdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: true })
+        .expect(403);
+    });
+
+    it("404s another agency's household", async () => {
+      await post(ownerToken, `${seed.otherAgencyHouseholdId}/addresses`)
+        .send({ ...NEW_HOME, makePrimary: true })
+        .expect(404);
     });
   });
 

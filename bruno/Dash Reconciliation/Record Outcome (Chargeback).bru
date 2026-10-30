@@ -1,0 +1,70 @@
+meta {
+  name: Record Outcome (Chargeback)
+  type: http
+  seq: 67
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}/outcome
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "kind": "chargeback",
+    "note": "The carrier cancelled it in October"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a chargeback under way, starting with the sale", function () {
+    const outcome = res.getBody().outcome;
+    expect(outcome.kind).to.equal("chargeback");
+    expect(outcome.status).to.equal("in_progress");
+    expect(outcome.step).to.equal("record_sale");
+    expect(outcome.dealId).to.equal(null);
+    expect(outcome.chargebackId).to.equal(null);
+    expect(outcome.startedBy.id).to.equal(bru.getVar("currentUserId"));
+  });
+
+  test("with the same prefill as Sold", function () {
+    expect(res.getBody().prefill.policy.policyNumber).to.equal("900299990");
+    expect(res.getBody().prefill.policy.soldDate).to.equal("2026-10-12");
+  });
+}
+
+docs {
+  # PATCH /carrier-reconciliation/assigned/:rowId/outcome — `kind: chargeback`
+
+  PAC-173 PR 6. The Dash line was the agency's sale, and **the carrier later
+  cancelled it**: the assignee enters it, cancels it, and the chargeback is
+  recorded. Two steps:
+
+  1. `record_sale` — exactly as **Sold**: `Create Lead (Chargeback Row)`, then
+     `Create Sold Deal (Chargeback Row)`, both carrying `reconciliationRowId`.
+     The sale moves the outcome to `cancel_policy`, linking the lead, the deal,
+     its household and the deal's policy that is the Dash line.
+  2. `cancel_policy` — `Cancel Row Policy`: the household page's Cancel dialog,
+     **Record a chargeback** ticked and locked, with the carrier's cancellation
+     date. That cancels the policy, writes the chargeback and finishes the row
+     (`chargeback_recorded`) in one transaction.
+
+  Offered on **Missing from app** rows only, and a sale kind: it needs
+  `leads:write` + `deal_audits:write` (403 `RECONCILIATION_OUTCOME_FORBIDDEN`),
+  checked on every call. Switching to or from it is allowed only while nothing
+  is booked. Sending it again resumes it (the page's **Continue**): at
+  `cancel_policy` it answers the row as it is, unless the policy was meanwhile
+  cancelled **with** a cancellation chargeback from the household page — then
+  that chargeback finishes it.
+
+  See `Record Outcome (Sold)` for the endpoint, body, response and errors.
+}

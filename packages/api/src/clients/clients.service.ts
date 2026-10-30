@@ -7,6 +7,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   AccessContext,
   ContactSummary,
+  HOUSEHOLD_ADDRESS_BOOK_MAX,
+  HouseholdAddressEntry,
   HouseholdListResponse,
   HouseholdListRow,
   HouseholdMatch,
@@ -15,6 +17,8 @@ import {
   PolicySearchResult,
   PolicySummary,
   PolicyView,
+  PREVIOUS_ADDRESS_LABEL,
+  StoredAddress,
   formatHouseholdRef,
   householdStatusQueryValues,
   nextRenewalDate,
@@ -27,6 +31,7 @@ import {
   searchTokens,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { householdAddressKey } from '../common/address/address-key';
 import { resolveHouseholdAddress } from '../common/address/household-address';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import {
@@ -50,6 +55,7 @@ import { pickPrimaryContact } from '../households/primary-contact';
 import { PrimaryContactService } from '../households/primary-contact.service';
 import {
   Household,
+  HouseholdAddressBookEntry,
   HouseholdDocument,
 } from '../households/schemas/household.schema';
 import {
@@ -57,6 +63,7 @@ import {
   parseDateOfBirth,
   toDateKey,
 } from '../leads/intake/intake.normalize';
+import { CancelPolicyDto } from '../policies/dto/cancel-policy.dto';
 import { UpdatePolicyDto } from '../policies/dto/update-policy.dto';
 import { PoliciesService } from '../policies/policies.service';
 import { toPolicySummary } from '../policies/policy-view';
@@ -67,6 +74,7 @@ import {
   type ClientScopeFilter,
 } from './client-scope';
 import { AddHouseholdMemberDto } from './dto/add-household-member.dto';
+import { AddHouseholdAddressDto } from './dto/household-address.dto';
 import { ListHouseholdsDto } from './dto/list-households.dto';
 import { SetPrimaryContactDto } from './dto/set-primary-contact.dto';
 import { routeSearchTerm } from './search-routing';
@@ -1056,6 +1064,7 @@ export class ClientsService {
       ),
       propertyAddress: household.propertyAddress ?? null,
       mailingAddress: household.mailingAddress ?? null,
+      otherAddresses: toAddressBookEntries(household.otherAddresses),
       primaryEmail: primary?.email ?? null,
       primaryPhone: primary?.phone ?? null,
       assignedCrmId: household.assignedCrmId
@@ -1335,6 +1344,181 @@ export class ClientsService {
     policyId: string,
     dto: UpdatePolicyDto,
   ): Promise<PolicySummary> {
+    const policy = await this.loadHouseholdPolicyForWrite(
+      access,
+      householdId,
+      policyId,
+    );
+    await this.policies.applyUpdate(access, policy, dto);
+    return toPolicySummary(policy);
+  }
+
+  /**
+   * Cancel one of the household's policies, saying why — the policy card's
+   * Cancel button.
+   *
+   * Found exactly as {@link updateHouseholdPolicy} finds its policy, for the
+   * same reasons: the household in the path is the authorisation, and the
+   * service team reaching it holds `crm_service:write` rather than anything on
+   * the Sold side. The write is `PoliciesService.cancel`.
+   *
+   * Returns the saved `PolicySummary`, `cancellation` included, so the card
+   * swaps the row in place.
+   */
+  async cancelHouseholdPolicy(
+    access: AccessContext,
+    householdId: string,
+    policyId: string,
+    dto: CancelPolicyDto,
+  ): Promise<PolicySummary> {
+    const policy = await this.loadHouseholdPolicyForWrite(
+      access,
+      householdId,
+      policyId,
+    );
+    const { policy: cancelled } = await this.policies.cancel(
+      access,
+      policy,
+      dto,
+    );
+    return toPolicySummary(cancelled);
+  }
+
+  /**
+   * Add an address to the household's book — or move the household to it.
+   *
+   * With `makePrimary`, the new address becomes `propertyAddress` and the one it
+   * replaces moves into the book as a previous address. That is the case this
+   * exists for: a client who sold their home, recorded on the Cancel button
+   * that follows it. Nothing is overwritten, because the old address is still
+   * the one on the policies they held there.
+   *
+   * 409 when the address is already the primary or already in the book — a
+   * second copy of one address is the kind of duplicate nobody can tell apart in
+   * a dropdown — and when the book is full.
+   */
+  async addHouseholdAddress(
+    access: AccessContext,
+    householdId: string,
+    dto: AddHouseholdAddressDto,
+  ): Promise<HouseholdView> {
+    const household = await this.loadHouseholdForWrite(access, householdId);
+    const address = compactAddress(dto);
+
+    if (sameAddress(household.propertyAddress, address)) {
+      throw new ConflictException(
+        "That is already the household's primary address.",
+      );
+    }
+    if ((household.otherAddresses ?? []).some((e) => sameAddress(e, address))) {
+      throw new ConflictException(
+        "That address is already in the household's address book.",
+      );
+    }
+
+    const entries = [...(household.otherAddresses ?? [])];
+    if (dto.makePrimary) {
+      const demoted = demotedPrimary(household.propertyAddress);
+      if (demoted) entries.unshift(demoted);
+      assignPrimaryAddress(household, address);
+    } else {
+      entries.unshift({
+        _id: new Types.ObjectId(),
+        ...address,
+        label: dto.label ?? undefined,
+        addedAt: new Date(),
+      });
+    }
+
+    if (entries.length > HOUSEHOLD_ADDRESS_BOOK_MAX) {
+      throw new ConflictException(
+        `A household holds at most ${HOUSEHOLD_ADDRESS_BOOK_MAX} other addresses. Remove one first.`,
+      );
+    }
+
+    household.otherAddresses = entries;
+    await household.save();
+    return this.getHousehold(access, householdId);
+  }
+
+  /**
+   * Make an address from the book the household's primary — a swap, not a
+   * copy: the entry leaves the book, and the primary it replaces joins it as a
+   * previous address. Each address lives in one place.
+   */
+  async setPrimaryHouseholdAddress(
+    access: AccessContext,
+    householdId: string,
+    addressId: string,
+  ): Promise<HouseholdView> {
+    const household = await this.loadHouseholdForWrite(access, householdId);
+    const entries = [...(household.otherAddresses ?? [])];
+    const index = entries.findIndex((entry) => String(entry._id) === addressId);
+    if (index < 0) throw new NotFoundException('Address not found');
+
+    const [entry] = entries.splice(index, 1);
+    const demoted = demotedPrimary(household.propertyAddress);
+    if (demoted) entries.unshift(demoted);
+    assignPrimaryAddress(household, compactAddress(entry));
+
+    household.otherAddresses = entries;
+    await household.save();
+    return this.getHousehold(access, householdId);
+  }
+
+  /**
+   * Remove an address from the book. The primary cannot be removed this way —
+   * it is not in the book — so a household never loses the address it lives at
+   * by accident; replace it with another one instead.
+   */
+  async removeHouseholdAddress(
+    access: AccessContext,
+    householdId: string,
+    addressId: string,
+  ): Promise<HouseholdView> {
+    const household = await this.loadHouseholdForWrite(access, householdId);
+    const entries = household.otherAddresses ?? [];
+    const remaining = entries.filter(
+      (entry) => String(entry._id) !== addressId,
+    );
+    if (remaining.length === entries.length) {
+      throw new NotFoundException('Address not found');
+    }
+
+    household.otherAddresses = remaining;
+    await household.save();
+    return this.getHousehold(access, householdId);
+  }
+
+  /**
+   * The household, as a document the caller will mutate and save, inside the
+   * caller's scope. 404 for a malformed id and for one outside scope alike.
+   */
+  private async loadHouseholdForWrite(
+    access: AccessContext,
+    householdId: string,
+  ): Promise<HouseholdDocument> {
+    if (!Types.ObjectId.isValid(householdId)) {
+      throw new NotFoundException('Household not found');
+    }
+    const household = await this.householdModel.findOne({
+      ...this.scopeFilter(access),
+      _id: new Types.ObjectId(householdId),
+    });
+    if (!household) throw new NotFoundException('Household not found');
+    return household;
+  }
+
+  /**
+   * One of the household's policies, as a document the caller will mutate and
+   * save. The household in the path is part of the filter, so a policy that is
+   * not this household's 404s rather than being written through it.
+   */
+  private async loadHouseholdPolicyForWrite(
+    access: AccessContext,
+    householdId: string,
+    policyId: string,
+  ): Promise<PolicyDocument> {
     const scope = this.scopeFilter(access);
     if (
       !Types.ObjectId.isValid(householdId) ||
@@ -1343,7 +1527,7 @@ export class ClientsService {
       throw new NotFoundException('Policy not found');
     }
 
-    // A Mongoose document, not `.lean()`: `applyUpdate` mutates and saves it.
+    // A Mongoose document, not `.lean()`: the policy service mutates and saves it.
     const policy = await this.policyModel.findOne({
       ...scope,
       _id: new Types.ObjectId(policyId),
@@ -1353,10 +1537,89 @@ export class ClientsService {
     if (!policy) {
       throw new NotFoundException('Policy not found');
     }
-
-    await this.policies.applyUpdate(access, policy, dto);
-    return toPolicySummary(policy);
+    return policy;
   }
+}
+
+/** The parts of an address that are present, trimmed — absent parts omitted. */
+function compactAddress(
+  source: Partial<Record<keyof StoredAddress, string | null>>,
+): StoredAddress {
+  const out: StoredAddress = {};
+  for (const key of ['street', 'street2', 'city', 'state', 'zip'] as const) {
+    const value = source[key]?.trim();
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Do two stored addresses name the same place? Street, unit and ZIP, ignoring
+ * case — the same legs `addressKey` uses, plus the unit, because two flats in
+ * one building are two addresses.
+ */
+function sameAddress(
+  a: StoredAddress | null | undefined,
+  b: StoredAddress | null | undefined,
+): boolean {
+  const key = (address: StoredAddress | null | undefined) =>
+    ['street', 'street2', 'zip']
+      .map((part) =>
+        (address?.[part as keyof StoredAddress] ?? '').trim().toLowerCase(),
+      )
+      .join('|');
+  const left = key(a);
+  return left !== '||' && left === key(b);
+}
+
+/**
+ * The current primary, as the book entry it becomes when replaced — or null
+ * when the household has no primary address to keep.
+ */
+function demotedPrimary(
+  primary: StoredAddress | null | undefined,
+): HouseholdAddressBookEntry | null {
+  const address = compactAddress(primary ?? {});
+  if (!address.street && !address.city && !address.zip) return null;
+  return {
+    _id: new Types.ObjectId(),
+    ...address,
+    label: PREVIOUS_ADDRESS_LABEL,
+    addedAt: new Date(),
+  };
+}
+
+/**
+ * Make `address` the household's primary.
+ *
+ * `addressKey` is set here as well as by the save hook, because the hook only
+ * ever *adds* a key: an address with no street or ZIP would otherwise leave the
+ * previous address's key behind, pointing the dedupe signal at a house the
+ * household no longer lives in.
+ */
+function assignPrimaryAddress(
+  household: HouseholdDocument,
+  address: StoredAddress,
+): void {
+  household.propertyAddress = address;
+  household.addressKey = householdAddressKey(address) ?? undefined;
+}
+
+/** The book, newest first, in its wire shape. */
+function toAddressBookEntries(
+  entries: HouseholdAddressBookEntry[] | undefined,
+): HouseholdAddressEntry[] {
+  return [...(entries ?? [])]
+    .sort(
+      (a, b) =>
+        new Date(b.addedAt ?? 0).getTime() - new Date(a.addedAt ?? 0).getTime(),
+    )
+    .map((entry) => ({
+      id: String(entry._id),
+      label: entry.label ?? null,
+      address: compactAddress(entry),
+      addedAt: entry.addedAt ? new Date(entry.addedAt).toISOString() : null,
+    }));
 }
 
 /**

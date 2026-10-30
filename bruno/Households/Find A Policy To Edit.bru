@@ -43,6 +43,17 @@ script:post-response {
     bru.setVar("policyEditPolicyId", linked ? linked.id : null);
     bru.setVar("policyEditHouseholdId", linked ? linked.householdId : null);
     bru.setVar("policyEditPremium", linked ? linked.premium : 0);
+
+    /*
+     * Set-up for `Cancel Household Policy`: a household policy that is live
+     * *and* reads Active, so `Reinstate Cancelled Policy` can put it back
+     * exactly as it was found — Active, active, no cancellation.
+     */
+    const live = (res.getBody() || []).find(
+      (p) => p.householdId && p.active && p.policyStatus === "Active",
+    );
+    bru.setVar("policyCancelPolicyId", live ? live.id : null);
+    bru.setVar("policyCancelHouseholdId", live ? live.householdId : null);
   }
 }
 
@@ -67,5 +78,7 @@ docs {
   has a household, because the household `Get Household` captures is whichever
   one sorts first and the demo seed leaves that one without policies.
 
-  Captures `policyEditPolicyId`, `policyEditHouseholdId` and `policyEditPremium`.
+  Captures `policyEditPolicyId`, `policyEditHouseholdId` and `policyEditPremium`,
+  and — for **Cancel Household Policy** — `policyCancelPolicyId` /
+  `policyCancelHouseholdId`, a linked policy that is live and reads Active.
 }
