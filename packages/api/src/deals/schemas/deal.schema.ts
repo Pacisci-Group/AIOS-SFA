@@ -106,8 +106,10 @@ export class Deal extends TenantRecord {
   /**
    * Clawed-back premium on this deal — **negative or zero**, accumulated.
    *
-   * Written only by the Cancel Rewrite flow, and only when the cancellation
-   * falls inside the one-month window (`rewriteFinancialOutcome`). The
+   * Written only by the two flows that charge money back — Cancel Rewrite, and
+   * a cancellation recorded with a chargeback (PAC-173 PR 6) — and only when
+   * the cancellation falls inside the one-month window
+   * (`rewriteFinancialOutcome`, through `writeChargeback`). The
    * producer's sold figure is `premium + chargebackAdjustment`; see
    * `PerformanceService.aggregate`.
    *

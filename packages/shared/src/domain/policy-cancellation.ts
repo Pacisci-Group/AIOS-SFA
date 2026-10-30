@@ -13,6 +13,16 @@
  * flow-only status (`FLOW_ONLY_POLICY_STATUSES`): the only way in is
  * `POST /households/:id/policies/:policyId/cancel`, and every cancellation it
  * writes carries a reason.
+ *
+ * ## With a chargeback (PAC-173 PR 6)
+ *
+ * Ticking **Record a chargeback** adds one thing: a `cancellation` row in the
+ * chargeback ledger (`chargeback.ts`), dated on **the carrier's cancellation
+ * date**, which the person enters — it decides whether the cancellation falls
+ * inside the one-month clawback window (`rewriteFinancialOutcome`). Without the
+ * box nothing changes: no date is asked for, `cancelledAt` is when it was
+ * recorded, and nothing is charged back. A Dash row's Chargeback outcome cancels
+ * through the same dialog with the box ticked and locked.
  */
 export const POLICY_CANCELLATION_REASONS = [
   'sold',
@@ -45,6 +55,12 @@ export const POLICY_CANCELLATION_NOTE_MAX = 500;
 export interface CancelPolicyInput {
   reason: PolicyCancellationReason;
   note?: string | null;
+  /**
+   * Record a chargeback with the cancellation: `cancelledOn` is the carrier's
+   * cancellation date, `YYYY-MM-DD` — not in the future, not before the sale.
+   * Omitted or `null` for a plain cancel.
+   */
+  chargeback?: { cancelledOn: string } | null;
 }
 
 /** How a cancelled policy says why, on the wire. */
@@ -54,6 +70,13 @@ export interface PolicyCancellationView {
   note: string | null;
   /** ISO instant the cancellation was recorded. */
   cancelledAt: string;
+  /**
+   * The carrier's cancellation date, `YYYY-MM-DD` — set only when a chargeback
+   * was recorded with it, since that is the only time it is asked for.
+   */
+  cancelledOn: string | null;
+  /** The chargeback ledger row it raised, or `null` for a plain cancel. */
+  chargebackId: string | null;
 }
 
 /**

@@ -23,13 +23,15 @@ export interface RowAssignment {
 
 /**
  * What the assignee recorded on a row (PAC-173 PR 4): Sold, Cancel rewrite,
- * Service intake (PR 5) or Other. Its own field beside `assignment`, for the same reason — saving a
- * decision replaces `review` whole and must not drop it.
+ * Chargeback (PR 6), Service intake (PR 5) or Other. Its own field beside
+ * `assignment`, for the same reason — saving a decision replaces `review` whole
+ * and must not drop it.
  *
  * Ids are strings, like every id in these snapshots: it is read back whole,
  * and the links (`leadId`, `dealId`, …) are followed one at a time, never
  * joined on. A sale kind starts `in_progress` at `record_sale`; a cancel
- * rewrite then waits at `write_replacement` for its replacement; a service
+ * rewrite then waits at `write_replacement` for its replacement, and a
+ * chargeback at `cancel_policy` for its policy to be cancelled; a service
  * intake waits at `start_onboarding` only until its welcome call opens;
  * `other` is done at once. Done comes with the row resolved
  * (`RECONCILIATION_OUTCOME_RESOLUTION`), so an open row holds no outcome or
@@ -126,7 +128,9 @@ export function carriedAssignment(
  * Booking the Dash policy makes the row match next upload, so a sale recorded
  * between two uploads changes the row and nothing carries — by design: the row
  * no longer asks the question. An unfinished cancel rewrite across such a
- * re-upload therefore starts over on the new row, and its sale hook no-ops. A
+ * re-upload therefore starts over on the new row, and its sale hook no-ops —
+ * and so does an unfinished chargeback (PAC-173 PR 6), whose policy can still
+ * be cancelled with its chargeback from the household page. A
  * finished service intake is the exception ({@link CarriedRow}, `servicedSince`).
  */
 export function carriedOutcome(

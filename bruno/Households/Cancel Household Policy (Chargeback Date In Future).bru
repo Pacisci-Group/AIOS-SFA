@@ -1,0 +1,39 @@
+meta {
+  name: Cancel Household Policy (Chargeback Date In Future)
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{baseUrl}}/households/{{policyCancelHouseholdId}}/policies/{{policyCancelPolicyId}}/cancel
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "reason": "sold",
+    "chargeback": { "cancelledOn": "2099-01-01" }
+  }
+}
+
+tests {
+  test("returns 400 — the carrier cannot have cancelled it yet", function () {
+    expect(res.getStatus()).to.equal(400);
+    expect(res.getBody().message).to.contain("cannot be in the future");
+  });
+}
+
+docs {
+  # POST /households/:id/policies/:policyId/cancel — a chargeback dated in the future
+
+  `Reinstate Cancelled Policy` just put the policy back. A chargeback's
+  `cancelledOn` is the carrier's cancellation date, which decides the
+  one-month window, so one after the agency's today is refused (**400**) and
+  nothing is cancelled. See `Cancel Household Policy`.
+}

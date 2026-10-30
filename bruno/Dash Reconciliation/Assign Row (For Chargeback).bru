@@ -1,0 +1,47 @@
+meta {
+  name: Assign Row (For Chargeback)
+  type: http
+  seq: 66
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{currentUserId}}",
+    "note": "Sold, then the carrier cancelled it"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row is with the producer again", function () {
+    const assignment = res.getBody().assignment;
+    expect(assignment.user.id).to.equal(bru.getVar("currentUserId"));
+    expect(assignment.note).to.equal("Sold, then the carrier cancelled it");
+  });
+}
+
+docs {
+  # PATCH /carrier-reconciliation/runs/:id/rows/:rowId/assignment — for the Chargeback chain
+
+  `Unassign Row` took the row back earlier in the folder; the owner hands it to
+  Auth/Login's producer again. A Missing-from-app row goes only to someone who
+  can book a sale — a Chargeback books one first. See `Assign Row` for the
+  endpoint.
+}

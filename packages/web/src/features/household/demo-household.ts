@@ -142,6 +142,8 @@ const POLICIES: HouseholdView["policies"] = [
       reason: "sold",
       note: null,
       cancelledAt: "2024-05-30T15:00:00.000Z",
+      cancelledOn: null,
+      chargebackId: null,
     },
   },
 ];

@@ -16,12 +16,15 @@ import {
   canRecordReconciliationSale,
   canSetUpReconciliationService,
   modulePermission,
+  normalizeCarrier,
+  normalizePolicyType,
   primaryReconciliationTab,
   reconciliationOutcomeKinds,
   type AccessContext,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRow,
   type ReconciliationAssignedRowDetail,
+  type ReconciliationChargebackPolicy,
   type ReconciliationOptionsResponse,
   type ReconciliationRowView,
 } from '@sfa/shared';
@@ -54,6 +57,7 @@ import {
   type AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
+import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   AssignedQueryDto,
@@ -100,8 +104,9 @@ const READ = modulePermission(ModuleKey.CarrierReconciliation, 'read');
  * - A row **missing from the app** goes only to someone who can book a sale
  *   (`canRecordReconciliationSale`: `leads:write` + `deal_audits:write`), by
  *   their effective permissions rather than their role — a CSR an agency lets
- *   sell qualifies, a standard one does not (owner, 28 Oct 2026). The picker
- *   marks who can.
+ *   sell qualifies, a standard one does not (owner, 28 Oct 2026). Every
+ *   outcome such a row offers but Other books a sale first, a Chargeback
+ *   (PR 6) included. The picker marks who can.
  * - Handing the row to someone else, or taking it back, **clears an outcome
  *   still in progress**: the new person starts over, because the first one's
  *   lead stays in their own pipeline. A note change for the same person keeps
@@ -126,6 +131,9 @@ export class ReconciliationAssignmentsService {
     private readonly carrierModel: Model<CarrierDocument>,
     @InjectModel(Agency.name)
     private readonly agencyModel: Model<AgencyDocument>,
+    /** The policy a Chargeback's cancel acts on, named in its detail (PR 6). */
+    @InjectModel(Policy.name)
+    private readonly policyModel: Model<PolicyDocument>,
     private readonly inngest: InngestService,
     /**
      * Effective permissions, for who may be given a row: a `missing_from_app`
@@ -380,11 +388,13 @@ export class ReconciliationAssignmentsService {
   ): Promise<ReconciliationAssignedRowDetail> {
     const offersServiceIntake =
       reconciliationOutcomeKinds(row).includes('service_intake');
-    const [[view], carrierName, crmServiceOn] = await Promise.all([
-      this.assignedViews(agencyId, [row]),
-      this.runCarrierName(agencyId, row.runId),
-      offersServiceIntake ? this.crmServiceOn(agencyId) : false,
-    ]);
+    const [[view], carrierName, crmServiceOn, chargebackPolicy] =
+      await Promise.all([
+        this.assignedViews(agencyId, [row]),
+        this.runCarrierName(agencyId, row.runId),
+        offersServiceIntake ? this.crmServiceOn(agencyId) : false,
+        this.chargebackPolicy(agencyId, row),
+      ]);
     if (!view) throw new NotFoundException('That row is not assigned to you.');
     return {
       ...view,
@@ -393,6 +403,45 @@ export class ReconciliationAssignmentsService {
       prefill: reconciliationPrefill(row.dash, carrierName, {
         offersServiceIntake: offersServiceIntake && crmServiceOn,
       }),
+      chargebackPolicy,
+    };
+  }
+
+  /**
+   * The policy a Chargeback waiting at `cancel_policy` will cancel (PAC-173
+   * PR 6), as the app has it — the dialog names it rather than the Dash line's
+   * number, which is what the assignee checks it against.
+   */
+  private async chargebackPolicy(
+    agencyId: string,
+    row: LeanRow,
+  ): Promise<ReconciliationChargebackPolicy | null> {
+    const outcome = row.outcome;
+    if (
+      outcome?.kind !== 'chargeback' ||
+      outcome.status !== 'in_progress' ||
+      outcome.step !== 'cancel_policy' ||
+      !outcome.policyId
+    ) {
+      return null;
+    }
+    const policy = await this.policyModel
+      .findOne({ _id: new Types.ObjectId(outcome.policyId), agencyId })
+      .select('policyNumber policyType carrier premium')
+      .lean<{
+        _id: Types.ObjectId;
+        policyNumber?: string;
+        policyType?: string;
+        carrier?: string;
+        premium?: number;
+      }>();
+    if (!policy) return null;
+    return {
+      id: String(policy._id),
+      policyNumber: policy.policyNumber ?? null,
+      policyType: normalizePolicyType(policy.policyType) || null,
+      carrier: normalizeCarrier(policy.carrier) || null,
+      premium: policy.premium ?? 0,
     };
   }
 

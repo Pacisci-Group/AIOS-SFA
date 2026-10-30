@@ -98,6 +98,11 @@ describe('outcomeLabel', () => {
       },
       'Cancel rewrite — writing the replacement',
     ],
+    [
+      { kind: 'chargeback', status: 'in_progress', step: 'cancel_policy' },
+      'Chargeback — cancelling the policy',
+    ],
+    [{ kind: 'chargeback', status: 'done', step: null }, 'Chargeback — done'],
     [{ kind: 'other', status: 'done', step: null }, 'Other — done'],
   ] as const)('%p → %p', (value, expected) => {
     expect(outcomeLabel(value)).toBe(expected);

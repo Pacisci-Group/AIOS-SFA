@@ -5,12 +5,14 @@ import { parse } from 'csv-parse';
 import {
   ModuleKey,
   RECONCILIATION_ASSIGNEE_CANNOT_SELL,
+  RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED,
   RECONCILIATION_OUTCOME_FORBIDDEN,
   RECONCILIATION_OUTCOME_LOCKED,
   RECONCILIATION_OUTCOME_NOT_ALLOWED,
   RECONCILIATION_OUTCOME_RESOLUTIONS,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRowDetail,
+  type ReconciliationCancelPolicyResponse,
   type ReconciliationOptionsResponse,
   type ReconciliationPrefill,
   type ReconciliationRowListResponse,
@@ -30,6 +32,7 @@ import {
   type DashRow,
 } from '../src/common/carrier-reconciliation/dash-file-reader';
 import { Deal } from '../src/deals/schemas/deal.schema';
+import { Household } from '../src/households/schemas/household.schema';
 import { InngestService } from '../src/inngest/inngest.service';
 import { Lead } from '../src/leads/schemas/lead.schema';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
@@ -54,7 +57,8 @@ import {
 
 /**
  * PAC-173 PR 4 — the assignee records what became of a Dash row: **Sold**,
- * **Cancel rewrite** or **Other**.
+ * **Cancel rewrite** or **Other** — and, since PR 6, **Chargeback**: the sale,
+ * then the policy cancelled with its chargeback, dated on the carrier's day.
  *
  * Runs and rows are written straight to the models, as in the PR 3 suite: a
  * real run needs an uploaded xlsx, and nothing here is about reading one. The
@@ -80,6 +84,11 @@ const WRITTEN = '2026-09-02';
 const ISSUED = '2026-09-03';
 /** When a cancel rewrite's replacement is booked. */
 const REWRITE_DAY = '2026-09-20';
+/** The carrier's cancellation dates: inside a month of the sale, and after it. */
+const CANCELLED_INSIDE = '2026-09-20';
+const CANCELLED_OUTSIDE = '2026-10-15';
+/** The Dash line's written premium — what a chargeback takes back. */
+const PREMIUM = 2210.5;
 
 /** The smallest thing storage would call a PDF; only its type and size are read. */
 const PDF = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n');
@@ -118,6 +127,7 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
   let policies: Model<Policy>;
   let leads: Model<Lead>;
   let chargebacks: Model<Chargeback>;
+  let households: Model<Household>;
   let roleAssignments: RoleAssignmentsService;
 
   let seq = 0;
@@ -145,12 +155,23 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
   /** Start a sale kind and hand back the prefill the forms are seeded from. */
   const start = async (
     row: SeededRow,
-    kind: 'sold' | 'cancel_rewrite',
+    kind: 'sold' | 'cancel_rewrite' | 'chargeback',
     note?: string,
   ) => {
     const res = await record(row, { kind, note }).expect(200);
     return (res.body as ReconciliationAssignedRowDetail).prefill!;
   };
+
+  /** A Chargeback's second step: cancel the policy its sale booked (PR 6). */
+  const cancelPolicy = (
+    row: SeededRow,
+    body: Record<string, unknown>,
+    token = producerToken,
+  ) =>
+    api()
+      .post(`${base}/assigned/${row.rowId}/cancel-policy`)
+      .set(authHeader(token))
+      .send(body);
 
   // ── The owner's side ───────────────────────────────────────────────────
 
@@ -459,6 +480,7 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
     policies = model(Policy.name);
     leads = model(Lead.name);
     chargebacks = model(Chargeback.name);
+    households = model(Household.name);
     roleAssignments = app.get(RoleAssignmentsService);
 
     // Drop BEFORE seeding — suites share one database and jest reorders them.
@@ -682,7 +704,7 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
   });
 
   describe('which outcomes a row can take, and who records them', () => {
-    it.each(['sold', 'cancel_rewrite'])(
+    it.each(['sold', 'cancel_rewrite', 'chargeback'])(
       'refuses %s on a row that is not missing from the app',
       async (kind) => {
         const row = await seedRow(undefined, {
@@ -718,7 +740,7 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
         ['deal_audits:write'],
       );
       try {
-        for (const kind of ['sold', 'cancel_rewrite']) {
+        for (const kind of ['sold', 'cancel_rewrite', 'chargeback']) {
           const res = await record(row, { kind }).expect(403);
           expect((res.body as { code: string }).code).toBe(
             RECONCILIATION_OUTCOME_FORBIDDEN,
@@ -788,7 +810,7 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
     it('refuses a kind it does not know', async () => {
       const row = await seedRow();
 
-      await record(row, { kind: 'chargeback' }).expect(400);
+      await record(row, { kind: 'refund' }).expect(400);
       await record(row, { kind: 'other', note: 'x'.repeat(2001) }).expect(400);
     });
   });
@@ -1342,6 +1364,469 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
     });
   });
 
+  describe('Chargeback, end to end', () => {
+    /** Start a Chargeback and book its sale, as the New Lead and Sold forms do. */
+    async function bookChargebackSale(row: SeededRow, note?: string) {
+      const prefill = await start(row, 'chargeback', note);
+      const leadId = await createLead(leadBody(row, prefill));
+      const sale = await sell(await saleBody(row, leadId, prefill)).expect(201);
+      const dealId = (sale.body as { id: string }).id;
+      const dashPolicy = await policies.findOne({ dealId: oid(dealId) }).lean();
+      return {
+        prefill,
+        leadId,
+        dealId,
+        policyId: String(dashPolicy!._id),
+        householdId: String(dashPolicy!.householdId),
+      };
+    }
+
+    /** Days from today, as the date input submits it. */
+    const daysFromToday = (days: number) =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
+    it('books the sale, then cancels it with the carrier’s date — inside the month, the credit comes back too', async () => {
+      const row = await seedRow();
+      const { leadId, dealId, policyId, householdId } =
+        await bookChargebackSale(row, 'Carrier cancelled in Sept');
+
+      const waiting = await detail(row.rowId);
+      expect(waiting.outcome).toMatchObject({
+        kind: 'chargeback',
+        status: 'in_progress',
+        step: 'cancel_policy',
+        leadId,
+        dealId,
+        policyId,
+        householdId,
+        chargebackId: null,
+      });
+      expect(waiting.review.status).toBe('open');
+      expect(await runDetail(row.runId)).toMatchObject({ inProgress: 1 });
+      expect((await exported(row)).line).toMatchObject({
+        outcome: 'Chargeback — cancelling the policy',
+      });
+      // Booked: what it is recorded as is settled.
+      const locked = await record(row, { kind: 'sold' }).expect(409);
+      expect((locked.body as { code: string }).code).toBe(
+        RECONCILIATION_OUTCOME_LOCKED,
+      );
+      // Continue with nothing cancelled yet: the row as it is.
+      expect(
+        (
+          (await record(row, { kind: 'chargeback' }).expect(200))
+            .body as ReconciliationAssignedRowDetail
+        ).outcome,
+      ).toEqual(waiting.outcome);
+
+      const res = await cancelPolicy(row, {
+        reason: 'other',
+        note: '  Non-payment  ',
+        cancelledOn: CANCELLED_INSIDE,
+      }).expect(201);
+      const answer = res.body as ReconciliationCancelPolicyResponse;
+
+      const chargeback = await chargebacks
+        .findOne({ policyId: oid(policyId), reason: 'cancellation' })
+        .lean();
+      expect(chargeback).toMatchObject({
+        amount: PREMIUM,
+        soldAdjustment: -PREMIUM,
+        withinClawbackWindow: true,
+        replacementPolicyId: null,
+        source: 'app',
+      });
+      expect(String(chargeback!.dealId)).toBe(dealId);
+      // Charged to the producer credited on the deal — here, the assignee.
+      expect(String(chargeback!.producerId)).toBe(producerId);
+      expect(chargeback!.producerName).toBeTruthy();
+      expect(chargeback!.occurredAt.toISOString()).toBe(
+        `${CANCELLED_INSIDE}T00:00:00.000Z`,
+      );
+
+      expect(answer.policy).toMatchObject({
+        id: policyId,
+        active: false,
+        policyStatus: 'Cancelled',
+        cancellation: {
+          reason: 'other',
+          note: 'Non-payment',
+          cancelledOn: CANCELLED_INSIDE,
+          chargebackId: String(chargeback!._id),
+        },
+      });
+      expect(answer.row.outcome).toMatchObject({
+        kind: 'chargeback',
+        status: 'done',
+        step: null,
+        policyId,
+        chargebackId: String(chargeback!._id),
+        completedBy: { id: producerId },
+      });
+      expect(answer.row.review).toMatchObject({
+        status: 'resolved',
+        resolution: 'chargeback_recorded',
+        note: 'Carrier cancelled in Sept',
+        reviewedBy: { id: producerId },
+      });
+
+      const deal = await deals.findById(dealId).lean();
+      expect(deal?.chargebackAdjustment).toBe(-PREMIUM);
+      const household = await households.findById(householdId).lean();
+      expect(household?.totalActivePolicies).toBe(0);
+      expect((await exported(row)).line).toMatchObject({
+        outcome: 'Chargeback — done',
+      });
+      expect(await runDetail(row.runId)).toMatchObject({ inProgress: 0 });
+      // Off the assignee's list.
+      expect(
+        (await assignedList(producerToken)).items.map((item) => item.id),
+      ).not.toContain(row.rowId);
+
+      // Asking again — a double click — is the answer, unchanged.
+      const again = (
+        await cancelPolicy(row, {
+          reason: 'sold',
+          cancelledOn: CANCELLED_INSIDE,
+        }).expect(201)
+      ).body as ReconciliationCancelPolicyResponse;
+      expect(again.row.outcome).toEqual(answer.row.outcome);
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(1);
+
+      // The policy's history names it.
+      const history = await api()
+        .get(`/api/v1/policies/${policyId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(
+        (history.body as { entries: Record<string, unknown>[] }).entries,
+      ).toEqual([
+        expect.objectContaining({
+          policyId,
+          chargebackAmount: PREMIUM,
+          withinClawbackWindow: true,
+          chargebackReason: 'cancellation',
+        }) as unknown,
+      ]);
+    });
+
+    it('charges the premium back after the month without touching the credit — and the owner reopening leaves the cancel standing', async () => {
+      const row = await seedRow();
+      const { dealId, policyId } = await bookChargebackSale(row);
+
+      await cancelPolicy(row, {
+        reason: 'changed_carrier',
+        cancelledOn: CANCELLED_OUTSIDE,
+      }).expect(201);
+
+      expect(
+        await chargebacks
+          .findOne({ policyId: oid(policyId), reason: 'cancellation' })
+          .lean(),
+      ).toMatchObject({
+        amount: PREMIUM,
+        soldAdjustment: 0,
+        withinClawbackWindow: false,
+      });
+      expect((await deals.findById(dealId).lean())?.chargebackAdjustment).toBe(
+        0,
+      );
+
+      // The owner takes the decision back: the outcome goes, the cancel and
+      // its chargeback stay — the ledger is append-only.
+      const reopened = await review(row, { status: 'open' }).expect(200);
+      expect((reopened.body as ReconciliationRowView).outcome).toBeNull();
+      expect((await policies.findById(policyId).lean())?.policyStatus).toBe(
+        'Cancelled',
+      );
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(1);
+    });
+
+    it('cancels nothing until the sale is booked, on another kind, or for anyone but the assignee', async () => {
+      const notStarted = await seedRow();
+      const notBooked = await seedRow();
+      const sold = await seedRow();
+      const body = { reason: 'sold', cancelledOn: CANCELLED_INSIDE };
+
+      let res = await cancelPolicy(notStarted, body).expect(400);
+      expect((res.body as { code: string }).code).toBe(
+        RECONCILIATION_OUTCOME_NOT_ALLOWED,
+      );
+      await start(sold, 'sold');
+      res = await cancelPolicy(sold, body).expect(400);
+      expect((res.body as { code: string }).code).toBe(
+        RECONCILIATION_OUTCOME_NOT_ALLOWED,
+      );
+      await start(notBooked, 'chargeback');
+      await cancelPolicy(notBooked, body).expect(409);
+
+      const row = await seedRow();
+      const { policyId } = await bookChargebackSale(row);
+      await cancelPolicy(row, body, secondToken).expect(404);
+      // The owner reads every row, and records on none.
+      await cancelPolicy(row, body, ownerToken).expect(404);
+      await cancelPolicy(row, body, csrToken).expect(404);
+
+      expect((await stored(row.rowId))?.outcome).toMatchObject({
+        step: 'cancel_policy',
+      });
+      expect((await policies.findById(policyId).lean())?.active).toBe(true);
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(0);
+    });
+
+    it('refuses a carrier date in the future or before the sale, and a body it cannot read', async () => {
+      const row = await seedRow();
+      const { policyId } = await bookChargebackSale(row);
+
+      for (const bad of [
+        { reason: 'sold' },
+        { reason: 'other', cancelledOn: CANCELLED_INSIDE },
+        { reason: 'gone', cancelledOn: CANCELLED_INSIDE },
+        { reason: 'sold', cancelledOn: '20/09/2026' },
+      ]) {
+        await cancelPolicy(row, bad).expect(400);
+      }
+      const future = await cancelPolicy(row, {
+        reason: 'sold',
+        cancelledOn: daysFromToday(3),
+      }).expect(400);
+      expect((future.body as { message: string }).message).toMatch(
+        /cannot be in the future/,
+      );
+      const early = await cancelPolicy(row, {
+        reason: 'sold',
+        cancelledOn: '2026-09-01',
+      }).expect(400);
+      expect((early.body as { message: string }).message).toMatch(
+        /cannot be before the sale/,
+      );
+
+      expect((await policies.findById(policyId).lean())?.active).toBe(true);
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(0);
+      expect((await stored(row.rowId))?.outcome?.status).toBe('in_progress');
+    });
+
+    it('needs the permission to book a sale for the cancel too', async () => {
+      const row = await seedRow();
+      const { policyId } = await bookChargebackSale(row);
+      await roleAssignments.setUserOverrides(
+        ctx.agencyId,
+        producerId,
+        [],
+        ['deal_audits:write'],
+      );
+      try {
+        const res = await cancelPolicy(row, {
+          reason: 'sold',
+          cancelledOn: CANCELLED_INSIDE,
+        }).expect(403);
+        expect((res.body as { code: string }).code).toBe(
+          RECONCILIATION_OUTCOME_FORBIDDEN,
+        );
+      } finally {
+        await roleAssignments.setUserOverrides(
+          ctx.agencyId,
+          producerId,
+          [],
+          [],
+        );
+      }
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(0);
+    });
+
+    it('writes one chargeback when two cancels race', async () => {
+      const row = await seedRow();
+      const { policyId } = await bookChargebackSale(row);
+      const body = { reason: 'sold', cancelledOn: CANCELLED_INSIDE };
+
+      const statuses = (
+        await Promise.all([cancelPolicy(row, body), cancelPolicy(row, body)])
+      ).map((res) => res.status);
+
+      expect(statuses).toContain(201);
+      for (const status of statuses) expect([201, 409]).toContain(status);
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(1);
+      expect((await stored(row.rowId))?.outcome?.status).toBe('done');
+    });
+
+    it('finishes with a chargeback recorded from the household page — on Continue, or from the row', async () => {
+      const onContinue = await seedRow();
+      const fromRow = await seedRow();
+      for (const row of [onContinue, fromRow]) {
+        const { policyId, householdId } = await bookChargebackSale(row);
+        await api()
+          .post(`/api/v1/households/${householdId}/policies/${policyId}/cancel`)
+          .set(authHeader(producerToken))
+          .send({
+            reason: 'sold',
+            chargeback: { cancelledOn: CANCELLED_INSIDE },
+          })
+          .expect(201);
+        const chargeback = await chargebacks
+          .findOne({ policyId: oid(policyId), reason: 'cancellation' })
+          .lean();
+
+        const finished =
+          row === onContinue
+            ? ((await record(row, { kind: 'chargeback' }).expect(200))
+                .body as ReconciliationAssignedRowDetail)
+            : (
+                (
+                  await cancelPolicy(row, {
+                    reason: 'sold',
+                    cancelledOn: CANCELLED_INSIDE,
+                  }).expect(201)
+                ).body as ReconciliationCancelPolicyResponse
+              ).row;
+        expect(finished.outcome).toMatchObject({
+          status: 'done',
+          chargebackId: String(chargeback!._id),
+        });
+        expect(finished.review.resolution).toBe('chargeback_recorded');
+        expect(
+          await chargebacks.countDocuments({ policyId: oid(policyId) }),
+        ).toBe(1);
+      }
+    });
+
+    it('cancels only a policy numbered as the Dash line, and links it once the number is corrected', async () => {
+      const row = await seedRow();
+      const prefill = await start(row, 'chargeback');
+      const leadId = await createLead(leadBody(row, prefill));
+      // Two lines on the sale, neither numbered as Dash's: a guess would cancel
+      // the wrong one.
+      const sale = await sell({
+        leadId,
+        soldDate: prefill.policy.soldDate,
+        submissionToken: `dash-sale-${++seq}-${leadId}`,
+        reconciliationRowId: row.rowId,
+        policies: [
+          await policyRow(leadId, prefill, {
+            policyNumber: `${row.policyNumber}1`,
+            premium: 900,
+          }),
+          await policyRow(leadId, prefill, {
+            policyNumber: `${row.policyNumber}2`,
+          }),
+        ],
+      }).expect(201);
+      const dealId = (sale.body as { id: string }).id;
+
+      const waiting = await detail(row.rowId);
+      expect(waiting.outcome).toMatchObject({
+        step: 'cancel_policy',
+        dealId,
+        policyId: null,
+      });
+      expect(waiting.chargebackPolicy).toBeNull();
+      const refused = await cancelPolicy(row, {
+        reason: 'sold',
+        cancelledOn: CANCELLED_INSIDE,
+      }).expect(409);
+      expect((refused.body as { code: string }).code).toBe(
+        RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED,
+      );
+      // Continue cannot link it either, yet.
+      expect(
+        (
+          (await record(row, { kind: 'chargeback' }).expect(200))
+            .body as ReconciliationAssignedRowDetail
+        ).outcome?.policyId,
+      ).toBeNull();
+
+      // The assignee corrects the second line's number to Dash's.
+      const corrected = await policies.findOneAndUpdate(
+        { dealId: oid(dealId), policyNumber: `${row.policyNumber}2` },
+        { $set: { policyNumber: row.policyNumber } },
+        { new: true },
+      );
+      const continued = (await record(row, { kind: 'chargeback' }).expect(200))
+        .body as ReconciliationAssignedRowDetail;
+      expect(continued.outcome?.policyId).toBe(String(corrected!._id));
+      expect(continued.chargebackPolicy).toMatchObject({
+        id: String(corrected!._id),
+        policyNumber: row.policyNumber,
+        premium: PREMIUM,
+      });
+
+      await cancelPolicy(row, {
+        reason: 'sold',
+        cancelledOn: CANCELLED_INSIDE,
+      }).expect(201);
+      expect((await policies.findById(corrected!._id).lean())?.active).toBe(
+        false,
+      );
+      const other = await policies
+        .findOne({ dealId: oid(dealId), policyNumber: `${row.policyNumber}1` })
+        .lean();
+      expect(other?.active).toBe(true);
+      expect(await chargebacks.countDocuments({ policyId: other!._id })).toBe(
+        0,
+      );
+    });
+
+    it('links the only policy on the sale even when its number differs from Dash', async () => {
+      const row = await seedRow();
+      const prefill = await start(row, 'chargeback');
+      const leadId = await createLead(leadBody(row, prefill));
+      const sale = await sell({
+        leadId,
+        soldDate: prefill.policy.soldDate,
+        submissionToken: `dash-sale-${++seq}-${leadId}`,
+        reconciliationRowId: row.rowId,
+        policies: [
+          await policyRow(leadId, prefill, {
+            policyNumber: `${row.policyNumber}9`,
+          }),
+        ],
+      }).expect(201);
+      const only = await policies
+        .findOne({ dealId: oid((sale.body as { id: string }).id) })
+        .lean();
+
+      expect((await detail(row.rowId)).outcome).toMatchObject({
+        step: 'cancel_policy',
+        policyId: String(only!._id),
+      });
+    });
+
+    it('leaves the row waiting when the policy was cancelled without a chargeback', async () => {
+      const row = await seedRow();
+      const { policyId, householdId } = await bookChargebackSale(row);
+      await api()
+        .post(`/api/v1/households/${householdId}/policies/${policyId}/cancel`)
+        .set(authHeader(producerToken))
+        .send({ reason: 'sold' })
+        .expect(201);
+
+      await cancelPolicy(row, {
+        reason: 'sold',
+        cancelledOn: CANCELLED_INSIDE,
+      }).expect(409);
+      expect(
+        (
+          (await record(row, { kind: 'chargeback' }).expect(200))
+            .body as ReconciliationAssignedRowDetail
+        ).outcome,
+      ).toMatchObject({ status: 'in_progress', step: 'cancel_policy' });
+      expect(
+        await chargebacks.countDocuments({ policyId: oid(policyId) }),
+      ).toBe(0);
+    });
+  });
+
   describe('switching kind', () => {
     it('is allowed while nothing is booked, and keeps the lead', async () => {
       const row = await seedRow();
@@ -1357,6 +1842,14 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
         step: 'record_sale',
         leadId,
       });
+
+      // To a Chargeback too: nothing is booked yet.
+      expect(
+        (
+          (await record(row, { kind: 'chargeback' }).expect(200))
+            .body as ReconciliationAssignedRowDetail
+        ).outcome,
+      ).toMatchObject({ kind: 'chargeback', step: 'record_sale', leadId });
 
       const other = (
         await record(row, { kind: 'other', note: 'Not ours after all' }).expect(

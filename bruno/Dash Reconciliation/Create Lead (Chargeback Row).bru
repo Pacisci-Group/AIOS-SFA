@@ -1,0 +1,56 @@
+meta {
+  name: Create Lead (Chargeback Row)
+  type: http
+  seq: 69
+}
+
+post {
+  url: {{baseUrl}}/leads
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "createdDate": "2026-10-12",
+    "primaryContact": {
+      "firstName": "Avery",
+      "lastName": "Quinn",
+      "dateOfBirth": "1984-03-09",
+      "phone": "(555) 299-9900",
+      "email": "avery.quinn@example.com"
+    },
+    "address": {
+      "street": "12 Quinn Court",
+      "city": "Tulsa",
+      "state": "OK",
+      "zip": "74101"
+    },
+    "members": [],
+    "leadSourceId": "{{reconLeadSourceId}}",
+    "reconciliationRowId": "{{reconAssignRowId}}",
+    "submissionToken": "{{$guid}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) bru.setVar("reconChargebackLeadId", res.getBody().id);
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /leads with reconciliationRowId — step 1 of a Chargeback's sale
+
+  The same request as `Create Lead (Dash Row)`, for the Chargeback outcome:
+  the row id skips the address dedupe, so the assignee gets a lead of their
+  own, and stamps it on the outcome. See `Create Lead (Dash Row)`.
+}

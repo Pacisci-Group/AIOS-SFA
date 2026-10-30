@@ -1,0 +1,71 @@
+meta {
+  name: Create Sold Deal (Chargeback Row)
+  type: http
+  seq: 72
+}
+
+post {
+  url: {{baseUrl}}/sold-deals
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "leadId": "{{reconChargebackLeadId}}",
+    "soldDate": "2026-10-12",
+    "submissionToken": "{{reconChargebackSoldToken}}",
+    "reconciliationRowId": "{{reconAssignRowId}}",
+    "policies": [
+      {
+        "policyType": "Home",
+        "effectiveDate": "2026-10-12",
+        "carrier": "Allstate",
+        "policyNumber": "900299990",
+        "premium": 2210.50,
+        "itemCount": 1,
+        "newBusinessApplication": {
+          "key": "{{reconChargebackNbaKey}}",
+          "filename": "avery-quinn-application.pdf",
+          "contentType": "application/pdf",
+          "size": 2048
+        },
+        "priorInsurance": { "none": true },
+        "cancellation": { "cancelled": false }
+      }
+    ]
+  }
+}
+
+script:pre-request {
+  // One submission per run, as in `Create Sold Deal (Dash Row)`.
+  bru.setVar("reconChargebackSoldToken", "bruno-dash-chargeback-" + Date.now());
+}
+
+script:post-response {
+  if (res.getStatus() === 201) bru.setVar("reconChargebackDealId", res.getBody().id);
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("an ordinary sale on the Chargeback's lead", function () {
+    expect(res.getBody().leadId).to.equal(bru.getVar("reconChargebackLeadId"));
+    expect(res.getBody().premium).to.equal(2210.5);
+  });
+}
+
+docs {
+  # POST /sold-deals with reconciliationRowId — the Chargeback's sale
+
+  As `Create Sold Deal (Dash Row)`. On a Chargeback the sale does not finish
+  the row: it moves the outcome to `cancel_policy`, linking the deal's policy
+  that is the Dash line (`900299990` — the app may already hold other copies
+  of that number from earlier runs; the outcome links this deal's own).
+}

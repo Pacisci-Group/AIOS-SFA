@@ -1780,7 +1780,11 @@ book" blocks), Bruno `Auth/Login` + `Households` 21/21 against a live local API,
 ### Still open
 - ⚠ **Not checked in a browser** (light + dark, the Dialog → AlertDialog → Dialog hand-off, narrow
   widths).
-- A plain cancel raises **no chargeback** and leaves the producer's sold figure alone. Rewrites use
-  the clawback window; whether a cancel inside the first month should too is a question for David.
-- No cancellation *date* is asked for; `cancelledAt` is when it was recorded.
+- ~~A plain cancel raises no chargeback~~ — **answered by PAC-173 PR 6 (30 Oct 2026):** the Cancel
+  dialog now offers **Record a chargeback** (unticked by default). Ticked, it asks for the carrier's
+  cancellation date and writes a `cancellation` chargeback with the rewrite's one-month window. A
+  plain cancel is unchanged. See the as-built box in
+  `docs/plans/pac-173-dash-reconciliation-implementation-plan.md`.
+- No cancellation *date* is asked for on a plain cancel; `cancelledAt` is when it was recorded. With a
+  chargeback, `cancellation.cancelledOn` holds the carrier's date (PAC-173 PR 6).
 - Address-book changes are not written to an activity log. The contact sheet is read-only.

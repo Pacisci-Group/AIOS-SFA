@@ -9,6 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import {
   ModuleKey,
+  RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED,
   RECONCILIATION_OUTCOME_FORBIDDEN,
   RECONCILIATION_OUTCOME_KIND_LABELS,
   RECONCILIATION_OUTCOME_LOCKED,
@@ -22,6 +23,7 @@ import {
   reconciliationOutcomeKinds,
   type AccessContext,
   type ReconciliationAssignedRowDetail,
+  type ReconciliationCancelPolicyResponse,
   type ReconciliationOutcomeKind,
   type ReconciliationPresignResponse,
   type ReconciliationServiceIntakeOptions,
@@ -34,6 +36,7 @@ import {
 } from '../chargebacks/schemas/chargeback.schema';
 import { ServicedPolicyIntakeService } from '../clients/serviced-policy-intake.service';
 import { clientAgencyId } from '../common/access/client-scope';
+import { TransactionRunner } from '../common/mongo/transaction.runner';
 import {
   isPendingServiceIntake,
   type RowOutcome,
@@ -44,11 +47,14 @@ import { reconciliationDocumentPurpose } from '../common/carrier-reconciliation/
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import type { ContactFieldConflict } from '../leads/intake/intake.types';
+import { PoliciesService } from '../policies/policies.service';
 import { normalizePolicyNumber } from '../policies/policy-number';
+import { toPolicySummary } from '../policies/policy-view';
 import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
 import { SoldSubmissionValidator } from '../sold-deals/intake/sold-submission.validator';
 import { StorageService } from '../storage/storage.service';
 import type {
+  CancelRowPolicyDto,
   PresignRowDocumentDto,
   RecordOutcomeDto,
   ServiceIntakeDto,
@@ -87,7 +93,7 @@ export interface ReconciliationSale {
 
 /**
  * What the assignee records on a Dash row (PAC-173 PR 4): **Sold**, **Cancel
- * rewrite**, **Service intake** (PR 5) or **Other**.
+ * rewrite**, **Chargeback** (PR 6), **Service intake** (PR 5) or **Other**.
  *
  * - **Other** is a note, and finishes the row at once.
  * - **Sold** starts at `record_sale`: the assignee enters the Dash line as an
@@ -97,6 +103,11 @@ export interface ReconciliationSale {
  * - **Cancel rewrite** starts the same way; booking the sale moves it to
  *   `write_replacement`, and the replacement, written through the normal
  *   cancel-rewrite chain (which writes the chargeback), finishes it.
+ * - **Chargeback** starts the same way too; booking the sale moves it to
+ *   `cancel_policy`, and {@link cancelPolicy} — the household page's Cancel
+ *   dialog, with **Record a chargeback** ticked and the carrier's cancellation
+ *   date — cancels that policy, writes the chargeback and finishes the row, all
+ *   in one transaction.
  * - **Service intake** — a 1-800 policy the app does not have — is one form
  *   ({@link serviceIntake}): the household, a `carrier_direct` policy with no
  *   deal, and the outcome at `start_onboarding` commit together; the CSR's
@@ -151,6 +162,9 @@ export class ReconciliationOutcomesService {
     private readonly intake: ServicedPolicyIntakeService,
     private readonly validator: SoldSubmissionValidator,
     private readonly storage: StorageService,
+    /** A Chargeback's cancel (PAC-173 PR 6) — the household page's own. */
+    private readonly policies: PoliciesService,
+    private readonly transactions: TransactionRunner,
   ) {}
 
   /**
@@ -288,6 +302,215 @@ export class ReconciliationOutcomesService {
     );
     if (!updated) throw new ConflictException(CHANGED);
     return this.assignments.assignedDetail(agencyId, updated);
+  }
+
+  // -------------------------------------------------------------------------
+  // Chargeback — cancel the policy the sale booked (PAC-173 PR 6)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `POST carrier-reconciliation/assigned/:rowId/cancel-policy` — a Chargeback
+   * outcome's second step. Its sale is booked (`cancel_policy`, with the
+   * Dash policy linked); this cancels that policy as the household page's
+   * Cancel button does, with the chargeback, dated on **the carrier's**
+   * cancellation date, which decides the one-month clawback window
+   * (`PoliciesService.applyCancellation`). The cancel, the ledger row and the
+   * outcome finished — the row resolved `chargeback_recorded` — commit in
+   * **one transaction**: a policy cancelled with the row still waiting would
+   * be one nobody can cancel again, and a row resolved over a policy still on
+   * the books would say a chargeback exists that does not.
+   *
+   * The assignee's, on a row of a current run still waiting on a decision, and
+   * held to the sale kinds' permission (`canRecordReconciliationSale`) like
+   * the sale before it. A row already finished as a chargeback answers
+   * unchanged — a double click. A policy already cancelled **with** a
+   * cancellation chargeback (from the household page, box ticked) finishes the
+   * row with that one; already off the books **without** one is a 409, since
+   * a second cancel cannot add it — the owner decides the row by hand.
+   *
+   * It cancels only a policy numbered as the Dash line. A sale whose policies
+   * carry another number linked none (`dashLinePolicy`): a 409
+   * `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` until the number is corrected
+   * on the sale, when this — or Continue — links it.
+   */
+  async cancelPolicy(
+    access: AccessContext,
+    rowId: string,
+    dto: CancelRowPolicyDto,
+  ): Promise<ReconciliationCancelPolicyResponse> {
+    const { agencyId, row } = await this.workableRow(access, rowId);
+    const current = row.outcome ?? null;
+    if (current?.kind === 'chargeback' && current.status === 'done') {
+      return this.cancelResponse(agencyId, row);
+    }
+    if (!row.needsReview || row.review.status !== 'open') {
+      throw new ConflictException('This row has already been decided.');
+    }
+    if (current?.kind !== 'chargeback') {
+      throw new BadRequestException({
+        code: RECONCILIATION_OUTCOME_NOT_ALLOWED,
+        message: current
+          ? `This row is being recorded as ${RECONCILIATION_OUTCOME_KIND_LABELS[current.kind]}, not a chargeback.`
+          : 'Record this row as a Chargeback first: its sale is booked, then cancelled here.',
+      });
+    }
+    if (current.step !== 'cancel_policy') {
+      throw new ConflictException(
+        'Book the sale first — the policy this cancels is the one the sale records.',
+      );
+    }
+    if (!canRecordReconciliationSale(access.permissions)) {
+      throw new ForbiddenException({
+        code: RECONCILIATION_OUTCOME_FORBIDDEN,
+        message:
+          'Recording a chargeback needs permission to create leads and record sales.',
+      });
+    }
+
+    // The sale linked no policy numbered as the Dash line: the number was
+    // corrected since, or it never will be — never cancel a guess.
+    const linkedRow = await this.linkChargebackPolicy(row);
+    const linked = linkedRow.outcome!;
+    if (!linked.policyId) throw unmatchedChargebackPolicy(linkedRow);
+
+    const already = await this.cancelledSince(linkedRow);
+    if (already) {
+      const updated = await this.writeOutcome(
+        linkedRow,
+        finished(
+          { ...linked, chargebackId: already },
+          access.userId,
+          new Date(),
+        ),
+      );
+      if (!updated) throw new ConflictException(CHANGED);
+      return this.cancelResponse(agencyId, updated);
+    }
+
+    const policyId = linked.policyId;
+    const now = new Date();
+    const { applied, updated } = await this.transactions.run(
+      async (session) => {
+        const cancelled = await this.policies.applyCancellation(
+          access,
+          { agencyId, policyId },
+          {
+            reason: dto.reason,
+            note: dto.note,
+            chargeback: { cancelledOn: dto.cancelledOn },
+          },
+          session,
+        );
+        const written = await this.writeOutcome(
+          linkedRow,
+          finished(
+            { ...linked, chargebackId: String(cancelled.chargeback!._id) },
+            access.userId,
+            now,
+          ),
+          session,
+        );
+        // Moved first — decided, reassigned, taken back: nothing is cancelled.
+        if (!written) throw new ConflictException(CHANGED);
+        return { applied: cancelled, updated: written };
+      },
+    );
+    await this.policies.finishCancellation(access, applied);
+    return {
+      row: await this.assignments.assignedDetail(agencyId, updated),
+      policy: toPolicySummary(applied.policy),
+    };
+  }
+
+  /** {@link cancelPolicy}'s answer for a row whose policy is already cancelled. */
+  private async cancelResponse(
+    agencyId: string,
+    row: LeanRow,
+  ): Promise<ReconciliationCancelPolicyResponse> {
+    const policyId = row.outcome?.policyId;
+    const policy = policyId
+      ? await this.policyModel
+          .findOne({ _id: new Types.ObjectId(policyId), agencyId })
+          .lean<Policy & { _id: Types.ObjectId }>()
+      : null;
+    if (!policy) {
+      throw new NotFoundException('The policy this row booked is gone.');
+    }
+    return {
+      row: await this.assignments.assignedDetail(agencyId, row),
+      policy: toPolicySummary(policy),
+    };
+  }
+
+  /**
+   * The cancellation chargeback already on a Chargeback outcome's policy,
+   * waiting at `cancel_policy` — cancelled from the household page with the
+   * box ticked rather than from the row — so the outcome finishes with it.
+   * Only a `cancellation` row counts: a rewrite's chargeback is another story.
+   */
+  private async cancelledSince(row: LeanRow): Promise<string | null> {
+    const outcome = row.outcome;
+    if (
+      outcome?.kind !== 'chargeback' ||
+      outcome.status !== 'in_progress' ||
+      outcome.step !== 'cancel_policy' ||
+      !outcome.policyId
+    ) {
+      return null;
+    }
+    const policy = await this.policyModel
+      .findOne({
+        _id: new Types.ObjectId(outcome.policyId),
+        agencyId: row.agencyId,
+      })
+      .select('cancellation.chargebackId')
+      .lean<{ cancellation?: { chargebackId?: Types.ObjectId } }>();
+    const chargebackId = policy?.cancellation?.chargebackId;
+    if (!chargebackId) return null;
+    const chargeback = await this.chargebackModel
+      .findOne({
+        _id: chargebackId,
+        agencyId: row.agencyId,
+        reason: 'cancellation',
+      })
+      .select('_id')
+      .lean<{ _id: Types.ObjectId }>();
+    return chargeback ? String(chargeback._id) : null;
+  }
+
+  /**
+   * A Chargeback at `cancel_policy` whose sale linked no policy — none of the
+   * deal's policies was numbered as the Dash line (`dashLinePolicy`): link the
+   * one that is now, after the assignee corrected the number on the sale.
+   * Answers the row as it stands, linked or not.
+   */
+  private async linkChargebackPolicy(row: LeanRow): Promise<LeanRow> {
+    const outcome = row.outcome;
+    if (
+      outcome?.kind !== 'chargeback' ||
+      outcome.status !== 'in_progress' ||
+      outcome.step !== 'cancel_policy' ||
+      outcome.policyId ||
+      !outcome.dealId
+    ) {
+      return row;
+    }
+    const policies = await this.policyModel
+      .find({
+        agencyId: row.agencyId,
+        dealId: new Types.ObjectId(outcome.dealId),
+      })
+      .select('policyNumber')
+      .sort({ _id: 1 })
+      .lean<{ _id: Types.ObjectId; policyNumber?: string }[]>();
+    const policy = dashLinePolicy(row, outcome.kind, policies);
+    if (!policy) return row;
+    const updated = await this.writeOutcome(row, {
+      ...outcome,
+      policyId: String(policy._id),
+    });
+    if (!updated) throw new ConflictException(CHANGED);
+    return updated;
   }
 
   // -------------------------------------------------------------------------
@@ -813,7 +1036,9 @@ export class ReconciliationOutcomesService {
    *   `write_replacement`;
    * - `cancel_rewrite` at `write_replacement`, for a deal with a policy that
    *   replaced the Dash policy (`transferredFromPolicyId`) → done, linking the
-   *   replacement and the chargeback the rewrite wrote.
+   *   replacement and the chargeback the rewrite wrote;
+   * - `chargeback` at `record_sale` → the same links, then `cancel_policy`,
+   *   which no sale moves on: {@link cancelPolicy} does.
    *
    * Validates rather than trusts: the agency has the module on, the row (or
    * its current copy, when a re-upload replaced the page's) is assigned to
@@ -916,6 +1141,24 @@ export class ReconciliationOutcomesService {
       if (!updated) throw new ConflictException(CHANGED);
       resumed = updated;
     }
+    // A chargeback whose sale linked no policy numbered as the Dash line:
+    // link the one that is now.
+    resumed = await this.linkChargebackPolicy(resumed);
+    // A chargeback whose policy was cancelled, with its chargeback, from the
+    // household page rather than from the row: that finishes it too.
+    const chargebackId = await this.cancelledSince(resumed);
+    if (chargebackId) {
+      const updated = await this.writeOutcome(
+        resumed,
+        finished(
+          { ...resumed.outcome!, chargebackId },
+          access.userId,
+          new Date(),
+        ),
+      );
+      if (!updated) throw new ConflictException(CHANGED);
+      resumed = updated;
+    }
     return resumed;
   }
 
@@ -939,7 +1182,9 @@ export class ReconciliationOutcomesService {
         .lean<{ _id: Types.ObjectId }>();
       return deal?._id ?? null;
     }
-    if (!outcome.policyId) return null;
+    // Only a replacement moves a step on after the sale; a chargeback's
+    // `cancel_policy` waits on a cancellation (`cancelledSince`).
+    if (outcome.step !== 'write_replacement' || !outcome.policyId) return null;
     const original = await this.policyModel
       .findOne({
         _id: new Types.ObjectId(outcome.policyId),
@@ -959,9 +1204,10 @@ export class ReconciliationOutcomesService {
    * What a booked deal makes of the row's outcome — the next outcome, or why
    * it makes nothing of it.
    *
-   * The policy that is the Dash line is the deal's policy whose number keys
-   * the same as Dash's (`reconciliationPolicyKey`), else its first: a deal
-   * entered for a Dash row may carry other lines sold on the same visit.
+   * The policy that is the Dash line is `dashLinePolicy`'s: the deal's policy
+   * whose number keys the same as Dash's — a deal entered for a Dash row may
+   * carry other lines sold on the same visit — else, except for a Chargeback,
+   * its first.
    */
   private async afterSale(
     row: LeanRow,
@@ -994,15 +1240,7 @@ export class ReconciliationOutcomesService {
     const now = new Date();
 
     if (outcome.step === 'record_sale') {
-      const dashKey =
-        row.dash?.policyKey || reconciliationPolicyKey(row.dash?.policyNumber);
-      const dashPolicy =
-        (dashKey &&
-          policies.find(
-            (policy) =>
-              reconciliationPolicyKey(policy.policyNumber) === dashKey,
-          )) ||
-        policies[0];
+      const dashPolicy = dashLinePolicy(row, outcome.kind, policies);
       const linked: RowOutcome = {
         ...outcome,
         leadId: deal.leadId ? String(deal.leadId) : outcome.leadId,
@@ -1010,9 +1248,18 @@ export class ReconciliationOutcomesService {
         policyId: dashPolicy ? String(dashPolicy._id) : null,
         householdId: deal.householdId ? String(deal.householdId) : null,
       };
-      return outcome.kind === 'cancel_rewrite'
-        ? { ...linked, step: 'write_replacement' }
-        : finished(linked, by, now);
+      if (outcome.kind === 'cancel_rewrite') {
+        return { ...linked, step: 'write_replacement' };
+      }
+      // A chargeback cancels what it just booked, from the row
+      // (`cancelPolicy`).
+      if (outcome.kind === 'chargeback') {
+        return { ...linked, step: 'cancel_policy' };
+      }
+      return finished(linked, by, now);
+    }
+    if (outcome.step !== 'write_replacement') {
+      return 'the outcome waits on its policy being cancelled, not on a sale';
     }
 
     // `write_replacement`: only the rewrite of the Dash policy finishes it.
@@ -1181,6 +1428,46 @@ function openingNoteFor(
 
 function conflictLine(conflict: ContactFieldConflict): string {
   return `The ${conflict.field} on file is ${conflict.stored}; the form gave ${conflict.submitted}. The one on file was kept.`;
+}
+
+/**
+ * The deal's policy that is the Dash line: the one whose number keys as
+ * Dash's (`reconciliationPolicyKey`). A deal entered for a Dash row may carry
+ * other lines sold on the same visit.
+ *
+ * Sold and Cancel rewrite fall back to the deal's first policy — for them the
+ * link names what was booked. A **Chargeback** cancels the policy it links and
+ * charges its premium back (PAC-173 PR 6), so it never guesses: with no
+ * policy numbered as Dash's it links one only when the deal has exactly one,
+ * and otherwise none, until the number is corrected.
+ */
+function dashLinePolicy<
+  T extends { _id: Types.ObjectId; policyNumber?: string },
+>(
+  row: LeanRow,
+  kind: ReconciliationOutcomeKind,
+  policies: readonly T[],
+): T | null {
+  const dashKey =
+    row.dash?.policyKey || reconciliationPolicyKey(row.dash?.policyNumber);
+  const keyed = dashKey
+    ? policies.find(
+        (policy) => reconciliationPolicyKey(policy.policyNumber) === dashKey,
+      )
+    : undefined;
+  if (keyed) return keyed;
+  if (kind === 'chargeback') return policies.length === 1 ? policies[0] : null;
+  return policies[0] ?? null;
+}
+
+/** 409: a Chargeback whose sale has no policy numbered as the Dash line. */
+function unmatchedChargebackPolicy(row: LeanRow): ConflictException {
+  const number =
+    row.dash?.policyNumber ?? row.dash?.policyKey ?? 'the Dash line';
+  return new ConflictException({
+    code: RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED,
+    message: `None of the policies on the sale is numbered ${number}, as the Dash line is, so there is nothing safe to cancel. Correct the policy number on the sale, then try again.`,
+  });
 }
 
 function isSaleKind(kind: ReconciliationOutcomeKind): boolean {

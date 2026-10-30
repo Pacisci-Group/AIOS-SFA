@@ -1,3 +1,4 @@
+import { CHARGEBACK_REASONS, CHARGEBACK_REASON_LABELS } from './chargeback';
 import {
   POLICY_CANCELLATION_REASONS,
   POLICY_CANCELLATION_REASON_LABELS,
@@ -30,5 +31,15 @@ describe('policyCancellationSummary', () => {
     for (const reason of POLICY_CANCELLATION_REASONS) {
       expect(POLICY_CANCELLATION_REASON_LABELS[reason]).toBeTruthy();
     }
+  });
+});
+
+describe('chargeback reasons', () => {
+  it('records a cancellation with a chargeback beside a rewrite, and labels both', () => {
+    expect([...CHARGEBACK_REASONS]).toEqual(['cancel_rewrite', 'cancellation']);
+    for (const reason of CHARGEBACK_REASONS) {
+      expect(CHARGEBACK_REASON_LABELS[reason]).toBeTruthy();
+    }
+    expect(CHARGEBACK_REASON_LABELS.cancellation).toBe('Cancelled policy');
   });
 });

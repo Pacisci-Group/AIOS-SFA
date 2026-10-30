@@ -1,0 +1,32 @@
+meta {
+  name: Upload NBA (Chargeback Row)
+  type: http
+  seq: 71
+}
+
+put {
+  url: {{reconChargebackNbaUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the application", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <presigned URL> — the browser's upload of the Chargeback sale's NBA
+}

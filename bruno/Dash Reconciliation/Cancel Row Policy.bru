@@ -1,0 +1,122 @@
+meta {
+  name: Cancel Row Policy
+  type: http
+  seq: 74
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}/cancel-policy
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "reason": "other",
+    "note": "Non-payment",
+    "cancelledOn": "2026-10-20"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the outcome is done, linking the chargeback", function () {
+    const outcome = res.getBody().row.outcome;
+    expect(outcome.kind).to.equal("chargeback");
+    expect(outcome.status).to.equal("done");
+    expect(outcome.step).to.equal(null);
+    expect(outcome.policyId).to.equal(bru.getVar("reconChargebackPolicyId"));
+    expect(outcome.chargebackId).to.be.a("string");
+    expect(outcome.completedBy.id).to.equal(bru.getVar("currentUserId"));
+  });
+
+  test("and the row is decided as a chargeback, by the assignee", function () {
+    const review = res.getBody().row.review;
+    expect(review.status).to.equal("resolved");
+    expect(review.resolution).to.equal("chargeback_recorded");
+    expect(review.note).to.equal("The carrier cancelled it in October");
+  });
+
+  test("the policy is off the books, on the carrier's date", function () {
+    const body = res.getBody();
+    expect(body.policy.id).to.equal(bru.getVar("reconChargebackPolicyId"));
+    expect(body.policy.active).to.equal(false);
+    expect(body.policy.policyStatus).to.equal("Cancelled");
+    expect(body.policy.cancellation.reason).to.equal("other");
+    expect(body.policy.cancellation.note).to.equal("Non-payment");
+    expect(body.policy.cancellation.cancelledOn).to.equal("2026-10-20");
+    expect(body.policy.cancellation.chargebackId).to.equal(body.row.outcome.chargebackId);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/assigned/:rowId/cancel-policy
+
+  A **Chargeback** outcome's second step (PAC-173 PR 6): cancel the policy its
+  sale booked, **with the chargeback**, dated on the carrier's cancellation
+  date — and finish the row. The household page's Cancel dialog, ticked and
+  locked, posts here.
+
+  - **Module:** `carrier_reconciliation` (enabled for the agency)
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read` (the
+    assignee's class gate), and — as for the sale before it —
+    `leads:write` **and** `deal_audits:write`, checked in the service
+  - **Data scope:** the row's assignee only; the owner records on no row
+
+  Why a row endpoint and not `Cancel Household Policy` carrying the row id
+  (as the Sold form does): the policies and clients modules sit under the
+  reconciliation module, so they cannot call back into it. Here the cancel,
+  the ledger row and the outcome commit **in one transaction**.
+
+  ## Body
+  | Field | Type | Notes |
+  |---|---|---|
+  | `reason` | `"sold" \| "changed_carrier" \| "other"` | required, the Cancel button's vocabulary |
+  | `note` | string ≤ 500, nullable | **required for `other`**; dropped for the named reasons |
+  | `cancelledOn` | `YYYY-MM-DD` | **required** — the carrier's cancellation date. Not in the future, not before the sale (agency calendar) |
+
+  ## What it does
+  - Cancels the policy as `Cancel Household Policy` does (status, `active`,
+    household recount, edit log "Policy cancelled, chargeback recorded").
+  - Writes a `chargebacks` row: `reason: "cancellation"`, `amount` = the
+    policy's premium, charged to the producer credited on the deal, dated
+    `cancelledOn`. **Inside a calendar month of the sale** the deal's
+    `chargebackAdjustment` moves by `-premium` (the producer's sold credit is
+    reversed); after it, only the chargeback stands.
+  - Finishes the outcome (`chargebackId` linked) and resolves the row
+    `chargeback_recorded`, by the assignee.
+
+  **It cancels only a policy numbered as the Dash line.** The sale links the
+  deal's policy whose number keys as Dash's; with none, it links the deal's
+  only policy, and with several it links none — never a guess, since this
+  charges money back. Correcting the number on the sale and retrying (or
+  Continue) links it.
+
+  A row already finished as a chargeback answers `201` unchanged. A policy
+  already cancelled **with** a cancellation chargeback (from the household
+  page) finishes the row with that one.
+
+  ## Response `201`
+  ```json
+  { "row": { …the row as GET assigned/:rowId answers it, outcome done… },
+    "policy": { "id": "…", "policyStatus": "Cancelled", "active": false, …,
+      "cancellation": { "reason": "other", "note": "Non-payment",
+        "cancelledAt": "2026-10-30T15:04:05.000Z", "cancelledOn": "2026-10-20",
+        "chargebackId": "…" } } }
+  ```
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 400 | Validation; a `cancelledOn` in the future or before the sale; `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the row is not being recorded as a chargeback |
+  | 403 | `RECONCILIATION_OUTCOME_FORBIDDEN` — without `leads:write` + `deal_audits:write` |
+  | 404 | No such row in the agency, or not the caller's |
+  | 409 | The sale is not booked yet; `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` — none of the sale's policies is numbered as the Dash line (correct the number on the sale, then retry or Continue); the policy is already off the books without a chargeback (the owner decides the row by hand); the row was decided; its run was replaced or did not finish; a concurrent change |
+}

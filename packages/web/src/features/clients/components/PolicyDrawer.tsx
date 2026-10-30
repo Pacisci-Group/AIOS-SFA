@@ -82,7 +82,9 @@ export function PolicyDrawer({
                 {policy.cancellation && (
                   <DrawerRow
                     label="Cancelled"
-                    value={`${policyCancellationSummary(policy.cancellation)} · ${shortDate(policy.cancellation.cancelledAt)}`}
+                    value={`${policyCancellationSummary(policy.cancellation)} · ${shortDate(policy.cancellation.cancelledAt)}${
+                      policy.cancellation.chargebackId ? ' · chargeback recorded' : ''
+                    }`}
                   />
                 )}
                 <DrawerRow

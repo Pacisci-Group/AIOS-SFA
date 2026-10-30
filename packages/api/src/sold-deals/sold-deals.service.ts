@@ -507,7 +507,8 @@ export class SoldDealsService {
     /*
      * The Dash row this sale was entered for, if any (PAC-173 PR 4): the
      * assignee's Sold outcome is done, a Cancel rewrite moves on to its
-     * replacement — or, booked through the replacement's own lead, is done.
+     * replacement — or, booked through the replacement's own lead, is done —
+     * and a Chargeback moves on to cancelling the policy (PAC-173 PR 6).
      *
      * Post-commit and best-effort like the hand-off above: `recordSale` never
      * throws, and validates the row rather than trusting the id. Deliberately

@@ -1376,8 +1376,12 @@ export class ClientsService {
       householdId,
       policyId,
     );
-    await this.policies.cancel(access, policy, dto);
-    return toPolicySummary(policy);
+    const { policy: cancelled } = await this.policies.cancel(
+      access,
+      policy,
+      dto,
+    );
+    return toPolicySummary(cancelled);
   }
 
   /**

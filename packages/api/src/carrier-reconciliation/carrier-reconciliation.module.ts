@@ -18,6 +18,7 @@ import {
   UserRole,
   UserRoleSchema,
 } from '../permissions/schemas/user-role.schema';
+import { PoliciesModule } from '../policies/policies.module';
 import { Policy, PolicySchema } from '../policies/schemas/policy.schema';
 import {
   AgencyRole,
@@ -44,7 +45,7 @@ import {
  * chargebacks and who holds which role, and wants none of their services.
  * `StorageService` and `InngestService` are global.
  *
- * Two feature imports:
+ * Three feature imports:
  *
  * - `PermissionsModule`: who may be given a row is decided by effective
  *   permission (`PermissionsService.resolveForUser`), which is not to be
@@ -53,6 +54,17 @@ import {
  *   service creates a household, a policy and a CSR's welcome call. It reaches
  *   CRM, clients and the Sold validator, none of which import Leads, SoldDeals
  *   or this module.
+ * - `PoliciesModule` (PAC-173 PR 6): a Chargeback outcome cancels the policy
+ *   its sale booked, with the chargeback, through
+ *   `PoliciesService.applyCancellation` — in one transaction with the row.
+ *   Already inside the tree above (CRM → Clients → Policies); it reaches only
+ *   Carriers, the Sold intake steps and audit generation.
+ *
+ * That is also why the chargeback step posts to the row
+ * (`assigned/:rowId/cancel-policy`) rather than the household's cancel
+ * endpoint carrying the row id, as the Sold form does: `PoliciesModule` and
+ * `ClientsModule` are under this module, so they cannot call back into it
+ * without `forwardRef`.
  *
  * Exports `ReconciliationOutcomesService` for the two forms an assignee
  * records a sale through (PAC-173 PR 4): `LeadsModule` links the lead,
@@ -80,6 +92,7 @@ import {
     ]),
     PermissionsModule,
     ServicedPolicyIntakeModule,
+    PoliciesModule,
   ],
   controllers: [
     CarrierReconciliationController,

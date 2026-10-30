@@ -1,0 +1,45 @@
+meta {
+  name: Presign NBA (Chargeback Row)
+  type: http
+  seq: 70
+}
+
+post {
+  url: {{baseUrl}}/sold-deals/documents/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "leadId": "{{reconChargebackLeadId}}",
+    "kind": "new_business_application",
+    "filename": "avery-quinn-application.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("reconChargebackNbaKey", res.getBody().key);
+    bru.setVar("reconChargebackNbaUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /sold-deals/documents/presign — the Chargeback sale's NBA
+
+  As `Presign NBA (Dash Row)`: the NBA PDF stays required for every policy
+  entered.
+}

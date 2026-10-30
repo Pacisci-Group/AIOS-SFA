@@ -1,0 +1,48 @@
+meta {
+  name: Review Row (Reopen For Chargeback)
+  type: http
+  seq: 65
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "open"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row waits on a decision again, with nothing recorded on it", function () {
+    // `Create Sold Deal (Dash Row)` left it Sold — done. Reopening clears the
+    // outcome; the deal it booked stays booked.
+    expect(res.getBody().review.status).to.equal("open");
+    expect(res.getBody().outcome).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH /carrier-reconciliation/runs/:id/rows/:rowId/review — reopen, for the Chargeback chain
+
+  The owner reopens the fixture's one Missing-from-app line (`900299990`) so
+  the same row can be worked again, this time as a **Chargeback** (PAC-173
+  PR 6). Same request as `Review Row (Reopen Missing)`; see `Review Row` for
+  the endpoint. Reopening clears a finished outcome — the deal the Sold chain
+  booked stays in the app.
+}

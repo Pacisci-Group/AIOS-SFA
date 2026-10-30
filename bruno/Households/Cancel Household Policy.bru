@@ -74,8 +74,11 @@ docs {
   |---|---|---|
   | `reason` | `"sold" \| "changed_carrier" \| "other"` | required |
   | `note` | string ≤ 500, nullable | **required for `other`** (blank after trimming is a 400); **dropped** for the named reasons |
+  | `chargeback` | `{ cancelledOn: "YYYY-MM-DD" }`, nullable | **Record a chargeback** (PAC-173 PR 6). `cancelledOn` is **the carrier's** cancellation date: not in the future, not before the sale (agency calendar). Omitted or `null` for a plain cancel |
 
-  No date — the cancellation is stamped with server time.
+  No date for a plain cancel — it is stamped with server time. The carrier's
+  date is asked for only with a chargeback, because it decides the one-month
+  clawback window.
 
   ## What it does
   - `policyStatus` → `Cancelled`, `active` → `false` (so it stops counting
@@ -86,22 +89,38 @@ docs {
   - writes a **"Policy cancelled"** edit-log row (status and cancellation
     reason), readable with `agency:changelogs:read`
 
-  Nothing touches the Sold pipeline, a lead or a chargeback — use **Cancel &
-  rewrite** / **Company transfer** for a replacement.
+  **With `chargeback`**, in the same transaction:
+  - a `chargebacks` row — `reason: "cancellation"`, `amount` = the policy's
+    premium, charged to the producer credited on the policy's deal (never the
+    caller), dated `cancelledOn`;
+  - **inside a calendar month of the sale** the deal's `chargebackAdjustment`
+    moves by `-premium` (the producer's sold credit is reversed); after it the
+    chargeback stands alone. A policy with no deal is still charged back, with
+    no window and nothing to reduce;
+  - `cancellation.cancelledOn` and `cancellation.chargebackId`, and the edit
+    log reads **"Policy cancelled, chargeback recorded"** with the date.
+
+  A Dash Reconciliation row's **Chargeback** outcome cancels through
+  `Dash Reconciliation/Cancel Row Policy` instead, which finishes the row too.
+
+  Nothing touches the Sold pipeline or a lead — use **Cancel & rewrite** /
+  **Company transfer** for a replacement.
 
   Reinstating (**Update Household Policy** with `status: "Active"`) clears the
-  stored reason.
+  stored reason. A chargeback it raised stays in the ledger (append-only), and
+  cancelling again with a chargeback records a second one.
 
   ## Response
   The saved **`PolicySummary`**, with `cancellation: { reason, note,
-  cancelledAt }` (`cancelledBy` stays server-side). `cancellation` is `null` on
+  cancelledAt, cancelledOn, chargebackId }` (`cancelledBy` stays server-side;
+  `cancelledOn` and `chargebackId` are `null` without a chargeback). `cancellation` is `null` on
   every policy not cancelled through this endpoint, including migrated ones that
   read `Cancelled`.
 
   ## Errors
   | Status | When |
   |---|---|
-  | 400 | Unknown `reason`; `other` without a `note`; `note` over 500 characters |
+  | 400 | Unknown `reason`; `other` without a `note`; `note` over 500 characters; `chargeback.cancelledOn` malformed, in the future, or before the sale |
   | 401 | Missing/expired bearer token |
   | 403 | Both `clients` and `crm_service` disabled, or the caller holds neither write |
   | 404 | Policy or household outside the caller's scope, or the policy is not this household's |

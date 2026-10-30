@@ -61,8 +61,9 @@ docs {
   - **Permission:** `carrier_reconciliation:read` **or** `leads:read` — the
     assignee's class gate, and **no** `:write`: there is no module whose
     write means "work a row given to me", and the service clamps every write
-    to the row's assignee. **Sold** and **Cancel rewrite** book a sale, so
-    they also need `leads:write` **and** `deal_audits:write`, checked on
+    to the row's assignee. **Sold**, **Cancel rewrite** and **Chargeback**
+    book a sale, so they also need `leads:write` **and** `deal_audits:write`,
+    checked on
     every call (permissions can change after the row was handed over).
   - **Data scope:** the row's assignee only — the owner reads every row and
     records on none (decision 2, owner 28 Oct 2026).
@@ -73,6 +74,7 @@ docs {
   |---|---|---|
   | `sold` | Missing from app | `in_progress` at `record_sale`. The assignee enters it as an ordinary sale — `Create Lead (Dash Row)`, then `Create Sold Deal (Dash Row)`, both prefilled and both carrying `reconciliationRowId` — and the sale finishes it: `done`, the row decided `sold_recorded`. |
   | `cancel_rewrite` | Missing from app | The same start; the sale moves it to `write_replacement`, and its replacement, written through the normal cancel-rewrite chain (`POST /leads` with `replacementIntent` + `reconciliationRowId`, then the sale), finishes it — linking the replacement policy and the chargeback the rewrite wrote; the row decided `cancel_rewrite_recorded`. |
+  | `chargeback` | Missing from app | The same start; the sale moves it to `cancel_policy`, and `Cancel Row Policy` — the household page's Cancel dialog with **Record a chargeback** ticked and the carrier's cancellation date — cancels the policy, writes the chargeback and finishes it in one transaction; the row decided `chargeback_recorded` (PAC-173 PR 6). See `Record Outcome (Chargeback)`. |
   | `service_intake` | 1-800 review, `dash_only` | **Started only by its form** — `Service Intake (as CSR)`, which creates the household, the `carrier_direct` policy and the CSR's welcome call, and finishes it: the row decided `service_intake_recorded`. Sent here with nothing under way it is a `400` `RECONCILIATION_OUTCOME_NOT_ALLOWED`; at `start_onboarding` (saved, but the welcome call did not open) it is the **Continue** that opens it. Needs `leads:write`. |
   | `other` | any row | `done` at once, the row decided `other_recorded` with the note. See `Record Outcome (Other)`. |
 
@@ -93,7 +95,7 @@ docs {
     follow a replaced row to its current copy.
 
   ## Body
-  - `kind` — `sold` | `cancel_rewrite` | `service_intake` | `other`
+  - `kind` — `sold` | `cancel_rewrite` | `chargeback` | `service_intake` | `other`
   - `note` — ≤ 2000 characters, trimmed; **required** for `other`, optional
     otherwise (shown to the owner, and becomes the decision's note)
 
@@ -116,14 +118,15 @@ docs {
   created: the lead and deal of the sale, its household, the deal's policy
   that **is** the Dash line (matched by policy-number key, else the deal's
   first), and — for a cancel rewrite — the replacement policy and the
-  chargeback; for a service intake, the household, the policy, and the
+  chargeback; for a chargeback, the ledger row its cancellation wrote; for a
+  service intake, the household, the policy, and the
   onboarding with its welcome-call ticket (`onboardingId`, `ticketId`).
 
   ## Errors
   - `400` — validation (`Validation failed`, e.g. Other without a note);
     `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the kind is not offered on the
     row's tab
-  - `403` `RECONCILIATION_OUTCOME_FORBIDDEN` — Sold or Cancel rewrite without
+  - `403` `RECONCILIATION_OUTCOME_FORBIDDEN` — Sold, Cancel rewrite or Chargeback without
     `leads:write` + `deal_audits:write`; a service intake without
     `leads:write`
   - `404` — no such row in the agency, or it is not assigned to the caller

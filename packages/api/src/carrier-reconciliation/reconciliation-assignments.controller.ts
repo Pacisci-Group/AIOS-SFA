@@ -13,6 +13,7 @@ import {
   type AccessContext,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRowDetail,
+  type ReconciliationCancelPolicyResponse,
   type ReconciliationPresignResponse,
   type ReconciliationServiceIntakeOptions,
   type ReconciliationServiceIntakeResponse,
@@ -25,11 +26,13 @@ import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   assignedQuerySchema,
+  cancelRowPolicySchema,
   presignRowDocumentSchema,
   reconciliationIdSchema,
   recordOutcomeSchema,
   serviceIntakeSchema,
   type AssignedQueryDto,
+  type CancelRowPolicyDto,
   type PresignRowDocumentDto,
   type RecordOutcomeDto,
   type ServiceIntakeDto,
@@ -52,13 +55,16 @@ import { ReconciliationOutcomesService } from './reconciliation-outcomes.service
  * The assignee records what became of a row here too (PAC-173 PR 4), under
  * the same class gate and **no** `@RequireWrite`: there is no module whose
  * `:write` means "work a row given to me", and the service clamps every
- * write to the row's assignee. Sold and Cancel rewrite book a sale, so those
- * two also need `leads:write` + `deal_audits:write`, checked in the service
- * where the kind is known.
+ * write to the row's assignee. Sold, Cancel rewrite and Chargeback book a
+ * sale, so those three also need `leads:write` + `deal_audits:write`, checked
+ * in the service where the kind is known.
  *
  * A 1-800 row is set up for service here too (PAC-173 PR 5): its signed
  * application's presign, the CSRs its welcome call can go to, and the intake
  * itself — `leads:write` for those, checked in the service the same way.
+ *
+ * And a Chargeback's second step (PAC-173 PR 6): cancelling the policy its
+ * sale booked, with the chargeback — held to the sale kinds' permissions.
  */
 @Controller('carrier-reconciliation/assigned')
 @RequireModule(ModuleKey.CarrierReconciliation)
@@ -162,5 +168,30 @@ export class ReconciliationAssignmentsController {
     @Body(new ZodValidationPipe(serviceIntakeSchema)) body: ServiceIntakeDto,
   ): Promise<ReconciliationServiceIntakeResponse> {
     return this.outcomes.serviceIntake(access, branchId, rowId, body);
+  }
+
+  /**
+   * Cancel the policy my Chargeback outcome's sale booked, with the
+   * chargeback, dated on the carrier's cancellation date — and finish the row
+   * (`chargeback_recorded`), in one transaction. 400 for a body that fails
+   * validation, a cancellation date in the future or before the sale, or
+   * `RECONCILIATION_OUTCOME_NOT_ALLOWED` (the row is not being recorded as a
+   * chargeback); 403 `RECONCILIATION_OUTCOME_FORBIDDEN` without `leads:write`
+   * + `deal_audits:write`; 404 unless the row is mine; 409 before the sale is
+   * booked, `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` when no policy on the
+   * sale is numbered as the Dash line, for a decided row, a replaced or
+   * unfinished run, a policy already off the books without a chargeback, or a
+   * concurrent change. A row already finished as a chargeback answers
+   * unchanged.
+   */
+  @Post(':rowId/cancel-policy')
+  cancelPolicy(
+    @Access() access: AccessContext,
+    @Param('rowId', new ZodValidationPipe(reconciliationIdSchema))
+    rowId: string,
+    @Body(new ZodValidationPipe(cancelRowPolicySchema))
+    body: CancelRowPolicyDto,
+  ): Promise<ReconciliationCancelPolicyResponse> {
+    return this.outcomes.cancelPolicy(access, rowId, body);
   }
 }

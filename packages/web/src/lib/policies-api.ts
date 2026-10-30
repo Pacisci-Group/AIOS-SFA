@@ -92,7 +92,9 @@ export function updateHouseholdPolicy(
  *
  * `clients:write` **or** `crm_service:write`, like the edit above. The reason is
  * required, and `note` only counts with `'other'` — the server drops it for the
- * named reasons. 409 when the policy is already off the books.
+ * named reasons. `chargeback: { cancelledOn }` records a chargeback with it,
+ * dated on the carrier's cancellation date (PAC-173 PR 6); 400 for one in the
+ * future or before the sale. 409 when the policy is already off the books.
  *
  * Returns the saved `PolicySummary`, `cancellation` included.
  */

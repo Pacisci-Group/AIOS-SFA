@@ -98,6 +98,12 @@ function toCancellationView(
     reason: known ? (cancellation.reason as PolicyCancellationReason) : 'other',
     note: known ? (cancellation.note ?? null) : cancellation.reason,
     cancelledAt: new Date(cancellation.cancelledAt).toISOString(),
+    // The carrier's day and the ledger row, only with a chargeback (PAC-173
+    // PR 6). A calendar date, so `YYYY-MM-DD` like the other policy dates.
+    cancelledOn: policyDate(cancellation.cancelledOn),
+    chargebackId: cancellation.chargebackId
+      ? String(cancellation.chargebackId)
+      : null,
   };
 }
 

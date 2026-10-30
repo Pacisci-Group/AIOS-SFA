@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
@@ -15,6 +16,7 @@ import {
   ModuleKey,
   RECONCILIATION_SALE_OUTCOME_KINDS,
   reconciliationOutcomeKinds,
+  type CancelPolicyInput,
   type ReconciliationOutcomeKind,
 } from "@sfa/shared";
 import { SectionLabel } from "@/components/common/DetailCard";
@@ -30,10 +32,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/auth-context";
+import { CancelPolicyDialog } from "@/features/household/components/CancelPolicyDialog";
 import { useStartReplacement } from "@/features/policy/useStartReplacement";
 import { useAppForm } from "@/hooks/form";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
+  cancelReconciliationPolicy,
+  getAssignedReconciliationRow,
   reconciliationAssignedRowKey,
   reconciliationKey,
   recordReconciliationOutcome,
@@ -58,6 +63,7 @@ const isSaleKind = (kind: ReconciliationOutcomeKind) =>
 const START_LABELS: Record<ReconciliationOutcomeKind, string> = {
   sold: "Record as sold",
   cancel_rewrite: "Cancel rewrite",
+  chargeback: "Chargeback",
   service_intake: "Set up for service",
   other: "Other…",
 };
@@ -74,6 +80,9 @@ const START_LABELS: Record<ReconciliationOutcomeKind, string> = {
  * - **Cancel rewrite** — entered the same way, then its replacement is
  *   written through the ordinary Cancel & rewrite chain, so the trail and the
  *   chargeback exist.
+ * - **Chargeback** — entered the same way, then cancelled through the
+ *   household page's Cancel dialog with **Record a chargeback** ticked and
+ *   locked, dated on the carrier's cancellation date (PR 6).
  * - **Set up for service** — a 1-800 policy the app does not have (PR 5): its
  *   own form records the client and the policy, never a sale, and opens a
  *   CSR's welcome call.
@@ -88,7 +97,7 @@ const START_LABELS: Record<ReconciliationOutcomeKind, string> = {
  * each of those stops an outcome under way (their forms say so).
  *
  * What is offered follows the row (`reconciliationOutcomeKinds`) and, for the
- * two sale kinds, whether the viewer can book a sale
+ * three sale kinds, whether the viewer can book a sale
  * (`canRecordReconciliationSale`); for a service intake, whether they can
  * create leads (`canSetUpReconciliationService`) — by permission, never role.
  * The API checks both again, and the outcome's own state.
@@ -262,6 +271,9 @@ function doneMessage(outcome: ReconciliationOutcome): string {
   if (outcome.kind === "service_intake") {
     return "Set up for service — the welcome call is open, and the row is resolved.";
   }
+  if (outcome.kind === "chargeback") {
+    return "The policy is cancelled and its chargeback recorded — the row is resolved.";
+  }
   return outcome.kind === "cancel_rewrite"
     ? "The replacement was already written — the row is resolved."
     : "The sale was already booked — the row is resolved.";
@@ -280,6 +292,10 @@ function doneMessage(outcome: ReconciliationOutcome): string {
  *   New Lead form. Both carry the row.
  * - `write_replacement` → the ordinary Cancel & rewrite chain on the policy
  *   the sale booked (`useStartReplacement`), carrying the row.
+ * - `cancel_policy` → the household page's Cancel dialog on the policy the
+ *   sale booked, box ticked and locked, posted to the row
+ *   (`cancelReconciliationPolicy`), which cancels it, records the chargeback
+ *   and finishes the outcome in one go.
  * - `start_onboarding` → the welcome call is opened again; the client and the
  *   policy are already saved.
  * - done → said so, and the drawer shows it.
@@ -346,6 +362,18 @@ function OutcomeActions({
         navigate(`${form}?${params.toString()}`);
         return;
       }
+      if (next.step === "cancel_policy") {
+        if (next.policyId) {
+          toast.info(
+            "The sale is booked. Cancel the policy next, with the carrier's cancellation date.",
+          );
+        } else {
+          toast.error(
+            "None of the sale's policies is numbered as the Dash line yet. Correct the number on the sale, then Continue.",
+          );
+        }
+        return;
+      }
       // The hook is bound to the policy this render knew. A sale the request
       // itself just picked up names a policy the drawer has not shown yet:
       // say what is next, and the re-rendered button carries it.
@@ -358,8 +386,48 @@ function OutcomeActions({
     onError: (error) => reportRefusal(queryClient, error),
   });
 
+  /**
+   * The Cancel dialog's submit for a Chargeback (PAC-173 PR 6): to the row,
+   * which finishes the outcome with the cancel. The dialog writes the policy
+   * into the household caches from what this returns; the row goes where the
+   * drawer reads it. A 404 or 409 means the drawer is out of date.
+   */
+  const cancelFromRow = async (input: CancelPolicyInput) => {
+    try {
+      const answer = await cancelReconciliationPolicy(row.id, {
+        reason: input.reason,
+        note: input.note ?? null,
+        cancelledOn: input.chargeback?.cancelledOn ?? "",
+      });
+      applyRecorded(queryClient, answer.row, onRowChanged);
+      return answer.policy;
+    } catch (error) {
+      const status = apiErrorStatus(error);
+      if (status === 404 || status === 409) {
+        void queryClient.invalidateQueries({ queryKey: reconciliationKey });
+      }
+      throw error;
+    }
+  };
+
   const busy = record.isPending || replacement.isStarting;
   const underWay = outcome?.status === "in_progress" ? outcome : null;
+  /*
+   * At `cancel_policy`, the policy the cancel will act on, as the app has it
+   * (PAC-173 PR 6) — named in the dialog, so the assignee checks it against
+   * the Dash line rather than being shown the Dash number back. The row's own
+   * query, which recording an outcome already fills.
+   */
+  const cancelling =
+    underWay?.step === "cancel_policy" && !!underWay.policyId;
+  const detail = useQuery({
+    queryKey: reconciliationAssignedRowKey(row.id),
+    queryFn: () => getAssignedReconciliationRow(row.id),
+    enabled: cancelling,
+  });
+  const chargebackPolicy = cancelling
+    ? (detail.data?.chargebackPolicy ?? null)
+    : null;
   // Another kind is the API's to refuse once anything is booked.
   const switchable = underWay?.step === "record_sale" && !underWay.dealId;
   const alternatives = kinds.filter((kind) => kind !== underWay?.kind);
@@ -394,7 +462,7 @@ function OutcomeActions({
         <>
           <p className="text-sm text-muted-foreground">
             {kinds.some(isSaleKind)
-              ? "What became of this line? Sold enters it on the New Lead and Sold forms, filled in from Dash. Cancel rewrite enters it the same way, then writes the policy that replaced it. Other is anything else, in a note. Finishing one resolves the row."
+              ? "What became of this line? Sold enters it on the New Lead and Sold forms, filled in from Dash. Cancel rewrite enters it the same way, then writes the policy that replaced it. Chargeback enters it the same way, then cancels it with the carrier's cancellation date, which records the chargeback. Other is anything else, in a note. Finishing one resolves the row."
               : kinds.includes("service_intake")
                 ? "Allstate sold this policy directly. Set up for service records the client and the policy — never a sale — and opens a CSR's welcome call. Other is anything else, in a note. Either one resolves the row."
                 : "What became of this line? Record it in a note for the owner — that resolves the row."}
@@ -409,7 +477,9 @@ function OutcomeActions({
         <p className="text-sm text-muted-foreground">
           {underWay.kind === "service_intake"
             ? "Opening the welcome call takes permission to add leads, which you don't have. Ask the owner to reassign the row."
-            : `Finishing this sale takes permission to add leads and book sales, which you don't have. Ask the owner to reassign the row or reopen it${switchable ? ", or record it as something else below" : ""}.`}
+            : underWay.step === "cancel_policy"
+              ? "Recording the chargeback takes permission to add leads and book sales, which you don't have. Ask the owner to reassign the row or decide it."
+              : `Finishing this sale takes permission to add leads and book sales, which you don't have. Ask the owner to reassign the row or reopen it${switchable ? ", or record it as something else below" : ""}.`}
         </p>
       ) : underWay.step === "start_onboarding" ? (
         <>
@@ -426,6 +496,66 @@ function OutcomeActions({
             Open the welcome call
           </Button>
         </>
+      ) : underWay.step === "cancel_policy" ? (
+        underWay.policyId ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              The sale is booked. Cancel{" "}
+              {chargebackPolicy?.policyNumber
+                ? `policy ${chargebackPolicy.policyNumber}`
+                : "the policy"}{" "}
+              with the carrier&apos;s cancellation date — that records the
+              chargeback and finishes the row.
+            </p>
+            <CancelPolicyDialog
+              // Only the household caches the dialog refreshes; the cancel
+              // itself posts to the row.
+              householdId={underWay.householdId ?? ""}
+              policy={{
+                id: underWay.policyId,
+                policyNumber:
+                  chargebackPolicy?.policyNumber ??
+                  row.dash?.policyNumber ??
+                  null,
+                policyType: chargebackPolicy?.policyType ?? null,
+                carrier: chargebackPolicy?.carrier ?? null,
+              }}
+              chargeback="required"
+              submit={cancelFromRow}
+              trigger={
+                <Button size="sm" disabled={busy || detail.isFetching}>
+                  Cancel the policy
+                </Button>
+              }
+            />
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {underWay.dealId
+                ? `The sale is booked, but none of its policies is numbered ${row.dash?.policyNumber ?? "as the Dash line is"} — and only that one can be cancelled. Correct the policy number on the sale, then Continue.`
+                : "The sale is booked. Continue picks it up, then the policy can be cancelled."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {underWay.dealId && (
+                <Link
+                  to={`/sold/${underWay.dealId}/edit`}
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  Open the sale
+                </Link>
+              )}
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => record.mutate(underWay.kind)}
+              >
+                {busy && <Loader2 aria-hidden className="animate-spin" />}
+                Continue
+              </Button>
+            </div>
+          </>
+        )
       ) : underWay.step === "write_replacement" ? (
         <>
           <p className="text-sm text-muted-foreground">

@@ -165,7 +165,7 @@ docs {
   | `primaryEmail`, `primaryPhone` | The primary contact's, **resolved** from `primaryContactId` — scalars, and no longer stored on the household (PAC-91 §1, §4) |
   | `assignedCrmId` | The assigned CRM user, or null |
   | `contacts` | `ContactSummary[]`, primary first then by `lastName`. The roster comes from `householdMembers` (PAC-91 §5); each row's `roleInHousehold` is the role on **that** membership and `isPrimary` is resolved against the household's own `primaryContactId` |
-  | `policies` | `PolicySummary[]`, active first then by `renewalDate`. Each carries `origin` — `"carrier_direct"` for a policy Allstate sold directly (1-800) and the agency services: no deal, never a sale (PAC-173), shown as "Allstate direct (1-800)" — else `null`; and `cancellation` — `{ reason, note, cancelledAt }` when it was cancelled through **Cancel Household Policy**, otherwise null |
+  | `policies` | `PolicySummary[]`, active first then by `renewalDate`. Each carries `origin` — `"carrier_direct"` for a policy Allstate sold directly (1-800) and the agency services: no deal, never a sale (PAC-173), shown as "Allstate direct (1-800)" — else `null`; and `cancellation` — `{ reason, note, cancelledAt, cancelledOn, chargebackId }` when it was cancelled through **Cancel Household Policy**, otherwise null |
 
   ## Why the primary contact's details and `address` are resolved here
 

@@ -1,0 +1,62 @@
+meta {
+  name: Get Assigned Row (Cancel Policy Step)
+  type: http
+  seq: 73
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}
+  body: none
+  auth: inherit
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().outcome) {
+    bru.setVar("reconChargebackPolicyId", res.getBody().outcome.policyId);
+    bru.setVar("reconChargebackHouseholdId", res.getBody().outcome.householdId);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the sale is linked, and the policy is next", function () {
+    const outcome = res.getBody().outcome;
+    expect(outcome.kind).to.equal("chargeback");
+    expect(outcome.status).to.equal("in_progress");
+    expect(outcome.step).to.equal("cancel_policy");
+    expect(outcome.leadId).to.equal(bru.getVar("reconChargebackLeadId"));
+    expect(outcome.dealId).to.equal(bru.getVar("reconChargebackDealId"));
+    expect(outcome.policyId).to.be.a("string");
+    expect(outcome.householdId).to.be.a("string");
+    expect(outcome.chargebackId).to.equal(null);
+  });
+
+  test("the row still waits on a decision", function () {
+    expect(res.getBody().review.status).to.equal("open");
+  });
+
+  test("naming the policy the cancel will act on, as the app has it", function () {
+    const policy = res.getBody().chargebackPolicy;
+    expect(policy.id).to.equal(res.getBody().outcome.policyId);
+    expect(policy.policyNumber).to.equal("900299990");
+    expect(policy.premium).to.equal(2210.5);
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId — a Chargeback at `cancel_policy`
+
+  After its sale: the outcome links the lead, the deal, the household and the
+  Dash policy, and waits for `Cancel Row Policy`. The assigned page shows
+  "Cancel the policy", which opens the household page's Cancel dialog with
+  **Record a chargeback** ticked and locked.
+
+  `chargebackPolicy` — `{ id, policyNumber, policyType, carrier, premium }` —
+  is the booked policy the cancel acts on, as the app has it, so the dialog
+  names it rather than echoing the Dash number. `null` on any other row, and
+  while the sale links no policy numbered as the Dash line (`policyId: null`
+  at `cancel_policy`: correct the number on the sale, then Continue).
+}

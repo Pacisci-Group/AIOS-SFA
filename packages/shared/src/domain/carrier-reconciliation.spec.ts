@@ -1,12 +1,16 @@
 import {
+  RECONCILIATION_OUTCOME_KIND_LABELS,
   RECONCILIATION_OUTCOME_KINDS,
   RECONCILIATION_OUTCOME_RESOLUTION,
   RECONCILIATION_OUTCOME_RESOLUTIONS,
+  RECONCILIATION_OUTCOME_STEP_LABELS,
+  RECONCILIATION_OUTCOME_STEPS,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_RESOLUTION_LABELS,
   RECONCILIATION_RESOLUTIONS,
   RECONCILIATION_RESOLUTIONS_BY_TAB,
   RECONCILIATION_TABS,
+  RECONCILIATION_SALE_OUTCOME_KINDS,
   RETIRED_RECONCILIATION_RESOLUTIONS,
   canRecordReconciliationSale,
   canSetUpReconciliationService,
@@ -115,13 +119,36 @@ describe('primaryReconciliationTab', () => {
 });
 
 describe('outcomes', () => {
-  it('lets a missing Dash sale be Sold, a Cancel rewrite or Other', () => {
+  it('lets a missing Dash sale be Sold, a Cancel rewrite, a Chargeback or Other', () => {
     expect(
       reconciliationOutcomeKinds({
         tabs: ['missing_from_app'],
         match: 'dash_only',
       }),
-    ).toEqual(['sold', 'cancel_rewrite', 'other']);
+    ).toEqual(['sold', 'cancel_rewrite', 'chargeback', 'other']);
+  });
+
+  it('books a sale first for Sold, a Cancel rewrite and a Chargeback — never for the rest', () => {
+    expect([...RECONCILIATION_SALE_OUTCOME_KINDS]).toEqual([
+      'sold',
+      'cancel_rewrite',
+      'chargeback',
+    ]);
+  });
+
+  it('labels every kind, step and outcome resolution', () => {
+    for (const kind of RECONCILIATION_OUTCOME_KINDS) {
+      expect(RECONCILIATION_OUTCOME_KIND_LABELS[kind]).toBeTruthy();
+    }
+    for (const step of RECONCILIATION_OUTCOME_STEPS) {
+      expect(RECONCILIATION_OUTCOME_STEP_LABELS[step]).toBeTruthy();
+    }
+    expect(RECONCILIATION_OUTCOME_RESOLUTION.chargeback).toBe(
+      'chargeback_recorded',
+    );
+    expect(RECONCILIATION_RESOLUTION_LABELS.chargeback_recorded).toBe(
+      'Chargeback recorded',
+    );
   });
 
   it('lets a 1-800 policy the app does not have be set up for service, or Other', () => {
