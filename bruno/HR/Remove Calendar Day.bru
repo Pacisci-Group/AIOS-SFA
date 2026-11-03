@@ -1,0 +1,42 @@
+meta {
+  name: Remove Calendar Day
+  type: http
+  seq: 9
+}
+
+delete {
+  url: {{baseUrl}}/hr/calendar/days/{{hrCalendarDayId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "reason": "Dried out; open on the day after all."
+  }
+}
+
+tests {
+  test("returns 200 OK with the removed row", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().id).to.equal(bru.getVar("hrCalendarDayId"));
+  });
+}
+
+docs {
+  # DELETE /hr/calendar/days/:id — soft remove (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - Body: `{ "reason": "…" }` — required.
+
+  Never a hard delete (PAC-155): the row stays with `removedAt`,
+  `removedBy` and `removeReason`, drops out of every read, and its date is
+  free for a new row. A second call on the same row is a `404`.
+
+  ## Errors
+  - `400` — no reason. `404` — unknown or already removed. `403` — not an HR admin.
+}

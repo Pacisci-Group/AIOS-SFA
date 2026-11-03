@@ -87,6 +87,11 @@ export const MODULE_CATALOG: Record<ModuleKey, ModuleDescriptor> = {
     description:
       "Sales and service analytics — breakdowns by producer, lead source, line, carrier, branch and ZIP, trends over time and goal pacing.",
   },
+  [ModuleKey.Hr]: {
+    label: "HR",
+    description:
+      "The agency holiday calendar and closures, and — as the HR stories land — time-off policies, People, requests and the team calendar.",
+  },
 };
 
 /** The catalog in a stable display order, grouped the way the nav groups pages. */
@@ -119,5 +124,9 @@ export const MODULE_GROUPS: { title: string; modules: ModuleKey[] }[] = [
   {
     title: "Data",
     modules: [ModuleKey.DataExport],
+  },
+  {
+    title: "People",
+    modules: [ModuleKey.Hr],
   },
 ];

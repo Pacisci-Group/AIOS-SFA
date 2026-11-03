@@ -177,6 +177,30 @@ export const AgencyPermission = {
    */
   SettingsRead: 'agency:settings:read',
   SettingsWrite: 'agency:settings:write',
+  /**
+   * HR administration (PAC-161): leave policies, the agency calendar and its
+   * holiday imports, and — in later sub-stories — employee onboardings,
+   * balance adjustments and point corrections. Gates `/settings/hr`.
+   *
+   * The ticket sketched four actions on the module (`hr:read / review / admin
+   * / export`). The page model tolerates only `read` / `write` as a module's
+   * second segment — the three reasons on {@link ChangeLogsRead} — so the
+   * reviewer capability is `hr:write` and the two administrative ones live
+   * here. Role-only like every `agency:*` string: "custom roles add it by
+   * hand" is the product rule.
+   *
+   * ⚠ Existing Branch Manager and Agency Owner roles received both from the
+   * `hr_module` migration, not from `DEFAULT_ROLE_TEMPLATES` — the template
+   * only reaches an agency when it is created (the PAC-133 lock-out).
+   */
+  HrAdmin: 'agency:hr:admin',
+  /**
+   * Download HR datasets through the Data Export engine (PAC-169), under the
+   * same field restrictions as the screens. Separate from `HrAdmin`: an
+   * office manager who configures policies is not necessarily the person who
+   * may take a spreadsheet of everyone's attendance off the premises.
+   */
+  HrExport: 'agency:hr:export',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

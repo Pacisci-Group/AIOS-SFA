@@ -59,6 +59,8 @@ export class AgencySetupService {
       completedAt: new Date(),
       completedByUserId: new Types.ObjectId(userId),
       brandingSkipped: dto.skipped ?? false,
+      calendarSkipped: dto.calendarSkipped ?? false,
+      hrPolicySkipped: dto.hrPolicySkipped ?? false,
     };
     await this.agencyModel.updateOne({ _id: agencyId }, { $set: { setup } });
     return toView(setup);
@@ -74,10 +76,14 @@ function toView(setup?: {
   status?: string;
   completedAt?: Date | null;
   brandingSkipped?: boolean;
+  calendarSkipped?: boolean;
+  hrPolicySkipped?: boolean;
 }): AgencySetupView {
   return {
     status: setup?.status === 'pending' ? 'pending' : 'complete',
     completedAt: setup?.completedAt?.toISOString() ?? null,
     brandingSkipped: setup?.brandingSkipped ?? false,
+    calendarSkipped: setup?.calendarSkipped ?? false,
+    hrPolicySkipped: setup?.hrPolicySkipped ?? false,
   };
 }

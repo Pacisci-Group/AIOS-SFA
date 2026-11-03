@@ -57,6 +57,19 @@ export const NOTIFICATION_TYPES = {
     category: 'platform',
     defaultChannels: { email: true, push: true },
   },
+  /**
+   * The Q4 job proposed next year's holidays for the agency (PAC-161).
+   * Recipients: every `agency:hr:admin` holder in the agency.
+   * `data`: `{ agencyId, year, count, countryName, regionName }`.
+   *
+   * Email on: it fires once a year and asks for a decision; an admin who is
+   * not in the app that week would otherwise find it in January. No push —
+   * nothing about it is urgent.
+   */
+  'hr.holidays_proposed': {
+    category: 'attendance',
+    defaultChannels: { email: true, push: false },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

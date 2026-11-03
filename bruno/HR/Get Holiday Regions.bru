@@ -1,0 +1,48 @@
+meta {
+  name: Get Holiday Regions
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar/holiday-regions?country=US
+  body: none
+  auth: bearer
+}
+
+params:query {
+  country: US
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists countries and the US states", function () {
+    const body = res.getBody();
+    expect(body.countries.map((c) => c.code)).to.include("US");
+    const ok = body.regions.find((r) => r.code === "OK");
+    expect(ok.name).to.equal("Oklahoma");
+  });
+}
+
+docs {
+  # GET /hr/calendar/holiday-regions — the pickers' options (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+  - `country` optional: with it, `regions` holds that country's states or
+    provinces; without it, `regions` is empty. `countries` is always the full
+    `date-holidays` list (~200), sorted by name.
+
+  ## Response `200`
+  ```json
+  { "countries": [{ "code": "CA", "name": "Canada" }, …], "regions": [{ "code": "OK", "name": "Oklahoma" }, …] }
+  ```
+  ## Errors
+  - `400` — unknown `country`.
+}

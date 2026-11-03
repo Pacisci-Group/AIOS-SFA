@@ -13,6 +13,7 @@ export * from './domain/contact';
 export * from './domain/deal-audit';
 export * from './domain/google-address';
 export * from './domain/hot-lead';
+export * from './domain/hr-calendar';
 export * from './domain/household-membership';
 export * from './domain/household-role';
 export * from './domain/choice-vocabulary';

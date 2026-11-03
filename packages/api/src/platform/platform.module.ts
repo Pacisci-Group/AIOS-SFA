@@ -4,6 +4,10 @@ import {
   AuditTemplate,
   AuditTemplateSchema,
 } from '../audit-templates/schemas/audit-template.schema';
+import {
+  AgencyCalendar,
+  AgencyCalendarSchema,
+} from '../hr/schemas/agency-calendar.schema';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
 import { AgencyCarrierAppointmentsModule } from '../agency-carrier-appointments/agency-carrier-appointments.module';
 import { PermissionsModule } from '../permissions/permissions.module';
@@ -58,6 +62,8 @@ import { PlatformUsersService } from './platform-users.service';
       // Seeded into each new tenant by `AgencyProvisioningService` (PAC-69);
       // without them a sold deal generates no service hand-off at all.
       { name: AuditTemplate.name, schema: AuditTemplateSchema },
+      // The HR calendar every new tenant starts with (PAC-161).
+      { name: AgencyCalendar.name, schema: AgencyCalendarSchema },
     ]),
   ],
   controllers: [PlatformController, PlatformUsersController],

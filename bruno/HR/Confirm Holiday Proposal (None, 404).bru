@@ -1,0 +1,55 @@
+meta {
+  name: Confirm Holiday Proposal (None, 404)
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/hr/calendar/proposals/2099/confirm
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "dates": []
+  }
+}
+
+tests {
+  test("a year with no proposal is a 404", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # POST /hr/calendar/proposals/:year/confirm · …/dismiss (PAC-161)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  The Q4 worker job (`propose-next-year-holidays`, daily) writes a
+  **proposal** of next year's holidays onto the calendar once it is October on
+  the agency's clock — one per agency per year, never auto-inserted — and
+  notifies the `agency:hr:admin` holders (`hr.holidays_proposed`). The
+  settings page shows it as a banner; `GET /hr/calendar` carries it as
+  `pendingProposal`.
+
+  - **confirm** — body `{ "dates": ["YYYY-MM-DD", …] }`, a subset of the
+    proposal's items (may be empty). Writes the chosen dates as `holiday`
+    rows with `source: "proposal"`, skipping any date already on the calendar,
+    and marks the proposal `confirmed`. A date not in the proposal is a `400`.
+  - **dismiss** — no body; marks it `dismissed`.
+
+  Both are idempotent on a decided proposal (`200`, no change). This request
+  exercises the `404` for a year nobody proposed; a live proposal only exists
+  after the job has run.
+
+  ## Response `200`
+  ```json
+  { "year": 2027, "status": "confirmed", "proposedAt": "…", "items": [{ "date": "2027-01-01", "name": "New Year's Day", "type": "public", "substitute": false }] }
+  ```
+}

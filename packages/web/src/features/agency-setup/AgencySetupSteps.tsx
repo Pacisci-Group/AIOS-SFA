@@ -1,5 +1,6 @@
 import { CheckCircle2 } from "lucide-react";
 import { BrandStep } from "./BrandStep";
+import { CalendarStep } from "./CalendarStep";
 import { CarrierAppointmentsStep } from "./CarrierAppointmentsStep";
 import { EmailIdentityStep } from "./EmailIdentityStep";
 
@@ -17,7 +18,25 @@ import { EmailIdentityStep } from "./EmailIdentityStep";
  * indefinitely.
  */
 
-export type AgencySetupStepId = "brand" | "email" | "carriers" | "finish";
+export type AgencySetupStepId =
+  | "brand"
+  | "email"
+  | "carriers"
+  | "calendar"
+  | "finish";
+
+/**
+ * Which `AgencySetupView` flag a skipped step records (PAC-69, PAC-161).
+ * Steps not listed are skippable without a flag — nothing later keys off them.
+ * `hrPolicySkipped` is stored on the agency already; PAC-174 adds the step
+ * that records it.
+ */
+export const SKIP_FLAG_BY_STEP: Partial<
+  Record<AgencySetupStepId, "skipped" | "calendarSkipped" | "hrPolicySkipped">
+> = {
+  brand: "skipped",
+  calendar: "calendarSkipped",
+};
 
 export interface AgencySetupStep {
   id: AgencySetupStepId;
@@ -49,6 +68,15 @@ export const AGENCY_SETUP_STEPS: readonly AgencySetupStep[] = [
     skippable: true,
   },
   {
+    // PAC-161. Real saves, like the branding step: the workweek, where the
+    // agency is, and the holidays the owner ticks.
+    id: "calendar",
+    title: "Your calendar",
+    description:
+      "The days your office is open and closed, so time off and attendance are counted on real working days.",
+    skippable: true,
+  },
+  {
     id: "finish",
     title: "All set",
     description: "That is everything we need.",
@@ -66,6 +94,7 @@ export function AgencySetupStepContent({
   if (id === "brand") return <BrandStep />;
   if (id === "email") return <EmailIdentityStep />;
   if (id === "carriers") return <CarrierAppointmentsStep />;
+  if (id === "calendar") return <CalendarStep />;
   // ⚠ `finish` must stay last: both wizards branch on it to call `complete`.
   return <FinishStep agencyName={agencyName} />;
 }

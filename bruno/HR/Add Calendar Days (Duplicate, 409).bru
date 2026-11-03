@@ -1,0 +1,38 @@
+meta {
+  name: Add Calendar Days (Duplicate, 409)
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/hr/calendar/days
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "source": "import",
+    "days": [
+      { "date": "2026-11-03", "kind": "holiday", "label": "Same date again" }
+    ]
+  }
+}
+
+tests {
+  test("a date already on the calendar is a 409 that names it", function () {
+    expect(res.getStatus()).to.equal(409);
+    expect(res.getBody().message).to.include("2026-11-03");
+  });
+}
+
+docs {
+  # POST /hr/calendar/days with a taken date — 409
+
+  Relies on **Add Calendar Days** having written 2026-11-03 in this run. The
+  whole batch is refused; remove the existing day first (Remove Calendar Day).
+}

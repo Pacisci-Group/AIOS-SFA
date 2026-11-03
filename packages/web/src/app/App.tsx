@@ -88,6 +88,9 @@ const EmailSenderPage = lazy(
 const CarrierAppointmentsPage = lazy(
   () => import('@/features/settings/CarrierAppointmentsPage'),
 );
+const HrSettingsPage = lazy(
+  () => import('@/features/hr/settings/HrSettingsPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -665,6 +668,22 @@ export function App() {
                   element={
                     <LazyPage>
                       <BrandingPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              {/* HR (PAC-161): the agency calendar, leave policies and the HR
+                  Policy slots. `agency:hr:admin` — an admin capability the
+                  Branch Manager and the owner hold; `hr:read` alone sees
+                  none of this. */}
+              <Route
+                element={<RequirePermission permission="agency:hr:admin" />}
+              >
+                <Route
+                  path="/settings/hr"
+                  element={
+                    <LazyPage>
+                      <HrSettingsPage />
                     </LazyPage>
                   }
                 />

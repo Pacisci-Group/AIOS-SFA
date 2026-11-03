@@ -1,0 +1,55 @@
+meta {
+  name: Update Calendar
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/hr/calendar
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "workweek": [1, 2, 3, 4, 5],
+    "country": "US",
+    "region": "IL"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("stores the codes upper-cased", function () {
+    const body = res.getBody();
+    expect(body.country).to.equal("US");
+    expect(body.region).to.equal("IL");
+    expect(body.workweek).to.eql([1, 2, 3, 4, 5]);
+  });
+}
+
+docs {
+  # PATCH /hr/calendar — workweek, country, region (PAC-161)
+
+  - **Module:** `hr`
+  - **Permission:** `agency:hr:admin` (Branch Manager and Agency Owner by default)
+
+  ## Body
+  Any of `workweek` (1–7 distinct weekdays, Sunday = 0), `country` (two-letter
+  code `date-holidays` knows, or `null`), `region` (a state/province code of
+  that country, or `null`). At least one. Changing the country clears the
+  region unless the body names a new one.
+
+  ## Response `200` — the calendar view for the current year (see Get Calendar).
+
+  ## Errors
+  - `400` — empty body, unknown country, unknown region, region with no country.
+  - `403` — caller lacks `agency:hr:admin`.
+}

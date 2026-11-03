@@ -157,6 +157,18 @@ export class AgencySetup {
    */
   @Prop({ default: false })
   brandingSkipped: boolean;
+
+  /**
+   * The two HR phases (PAC-161), recorded the same way. Skipping HR Policy
+   * leaves the agency with no leave policy — a working state in which HR is
+   * a calendar and nothing more (Asad, 2026-10-22). `.lean()` applies no
+   * default, so a pre-PAC-161 document reads `undefined`: treat as `false`.
+   */
+  @Prop({ default: false })
+  calendarSkipped: boolean;
+
+  @Prop({ default: false })
+  hrPolicySkipped: boolean;
 }
 export const AgencySetupSchema = SchemaFactory.createForClass(AgencySetup);
 

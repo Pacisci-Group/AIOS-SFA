@@ -1,0 +1,63 @@
+meta {
+  name: Get Calendar
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar?year=2026
+  body: none
+  auth: inherit
+}
+
+params:query {
+  year: 2026
+}
+
+tests {
+  test("returns 200 OK for an employee", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("describes the year", function () {
+    const body = res.getBody();
+    expect(body.year).to.equal(2026);
+    expect(body.workweek).to.be.an("array").that.is.not.empty;
+    expect(body.days).to.be.an("array");
+    expect(Object.keys(body.workingDaysByMonth)).to.have.lengthOf(12);
+    expect(body).to.have.property("pendingProposal");
+  });
+}
+
+docs {
+  # GET /hr/calendar — the agency calendar for one year (PAC-161)
+
+  - **Module:** `hr`
+  - **Permission:** `hr:read` — every employee (every template holds it).
+    The employee calendar page (PAC-169) and the time-off form (PAC-165)
+    both read this.
+  - **Data scope:** none — one calendar per agency, nothing per branch.
+
+  ## Query
+  - `year` — optional; the agency's current year on `Agency.timezone` when omitted.
+
+  ## Response `200`
+  ```json
+  {
+    "workweek": [1, 2, 3, 4, 5],
+    "country": "US", "region": "OK", "timeZone": "America/Chicago",
+    "year": 2026,
+    "days": [{ "id": "…", "date": "2026-11-26", "kind": "holiday", "label": "Thanksgiving Day",
+               "source": "import", "reason": null, "createdAt": "…", "createdBy": { "id": "…", "name": "Mia Manager" } }],
+    "workingDaysByMonth": { "2026-01": 21, "…": 0 },
+    "pendingProposal": null
+  }
+  ```
+  `workweek` is Sunday = 0. `days` are the **active** rows of the year, sorted;
+  a removed row is not listed. `kind` is `holiday` | `closure` |
+  `special_working_day`. A date is a calendar fact (`YYYY-MM-DD`), not an
+  instant — it does not move when the agency changes zone.
+
+  ## Errors
+  - `403` — module off, or caller lacks `hr:read`.
+}
