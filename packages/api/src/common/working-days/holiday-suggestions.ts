@@ -180,6 +180,11 @@ function asType(value: unknown): HolidaySuggestionType {
     : 'observance';
 }
 
+function isWeekend(date: string): boolean {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
+
 function dayOf(row: PackageHolidayRow): string {
   return row.date instanceof Date
     ? row.date.toISOString().slice(0, 10)
@@ -194,11 +199,13 @@ type Grouped = Omit<RawHolidaySuggestion, 'preChecked'> & { rule: string };
  * {@link suggestHolidays}.
  *
  * Pre-check: every `federal` row, except the **weekend original of a
- * substitute pair** — a non-substitute row whose rule also produced a
- * `substitute` row in the same year (the package stamps both with the same
- * rule text). Both rows stay in the list: an agency that closes on the
- * Saturday too can tick it. A substitute whose original falls in another year
- * (2027-12-31 for New Year's Day 2028) has no partner and is ticked alone.
+ * substitute pair** — a non-substitute row that falls on a Saturday or Sunday
+ * and whose rule also produced a `substitute` row in the same year (the
+ * package stamps both with the same rule text). Both rows stay in the list:
+ * an agency that closes on the Saturday too can tick it. The weekend test is
+ * load-bearing: 2027 holds both New Year's Day (Fri 01-01) and the substitute
+ * for New Year's Day *2028* (Fri 12-31) under one rule, and the Friday
+ * original must stay ticked.
  */
 export function groupHolidaySuggestions(
   national: readonly PackageHolidayRow[],
@@ -246,7 +253,11 @@ export function groupHolidaySuggestions(
       ...row,
       preChecked:
         row.group === 'federal' &&
-        !(!row.substitute && substituteRules.has(rule)),
+        !(
+          !row.substitute &&
+          isWeekend(row.date) &&
+          substituteRules.has(rule)
+        ),
     }));
 }
 

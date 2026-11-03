@@ -79,7 +79,7 @@ describe('holiday suggestions (date-holidays, PAC-161)', () => {
       });
     });
 
-    it('ticks a substitute whose original is in another year', () => {
+    it('ticks a substitute whose original is in another year, and the weekday original it shares a rule with', () => {
       const rows = byDate(
         suggestHolidays({ country: 'US', region: null, year: 2027 }),
       );
@@ -88,6 +88,15 @@ describe('holiday suggestions (date-holidays, PAC-161)', () => {
         substitute: true,
         preChecked: true,
       });
+      // …and New Year's Day 2027 is itself a Friday under the same rule.
+      expect(rows.get('2027-01-01')).toMatchObject({
+        name: "New Year's Day",
+        substitute: false,
+        preChecked: true,
+      });
+      expect(
+        [...rows.values()].filter((row) => row.preChecked),
+      ).toHaveLength(12);
       expect(rows.get('2027-12-24')).toMatchObject({
         name: 'Christmas Day (substitute day)',
         preChecked: true,
