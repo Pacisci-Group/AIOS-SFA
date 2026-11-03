@@ -8156,40 +8156,45 @@ describe('SFA API (e2e)', () => {
         },
       ]);
 
-      await activityModel.create([
-        {
-          ...base,
-          type: 'lead_created',
-          subjectType: 'lead',
-          leadId: lead._id,
-          userId: producer!._id,
-          occurredAt: onDay('2026-07-01'),
-          summary: 'Lead created',
-          source: 'internal',
-        },
-        {
-          ...base,
-          type: 'quoted',
-          subjectType: 'quoteRecap',
-          leadId: lead._id,
-          quoteRecapId: newer._id,
-          userId: producer!._id,
-          occurredAt: onDay('2026-07-24'),
-          summary: 'Quote recap created',
-          source: 'internal',
-        },
-        {
-          ...base,
-          type: 'sold',
-          subjectType: 'deal',
-          leadId: lead._id,
-          dealId: deal._id,
-          userId: producer!._id,
-          occurredAt: onDay('2026-07-30'),
-          summary: 'Deal marked as sold',
-          source: 'internal',
-        },
-      ]);
+      await activityModel.create(
+        [
+          {
+            ...base,
+            type: 'lead_created',
+            subjectType: 'lead',
+            leadId: lead._id,
+            userId: producer!._id,
+            occurredAt: onDay('2026-07-01'),
+            summary: 'Lead created',
+            source: 'internal',
+          },
+          {
+            ...base,
+            type: 'quoted',
+            subjectType: 'quoteRecap',
+            leadId: lead._id,
+            quoteRecapId: newer._id,
+            userId: producer!._id,
+            occurredAt: onDay('2026-07-24'),
+            summary: 'Quote recap created',
+            source: 'internal',
+          },
+          {
+            ...base,
+            type: 'sold',
+            subjectType: 'deal',
+            leadId: lead._id,
+            dealId: deal._id,
+            userId: producer!._id,
+            occurredAt: onDay('2026-07-30'),
+            summary: 'Deal marked as sold',
+            source: 'internal',
+          },
+          // Sequential, not the parallel default: the timeline is ordered by
+          // when each row was recorded, so `createdAt` must follow this order.
+        ],
+        { ordered: true },
+      );
     });
 
     it('returns the lead with normalized labels, never raw select codes', async () => {
@@ -8378,6 +8383,47 @@ describe('SFA API (e2e)', () => {
         'lead_created',
       ]);
       expect(body.activities[0].userName).toBeTruthy();
+    });
+
+    it('stamps each row with when it was recorded, not its business date', async () => {
+      const body = await getAs(producerToken, leadId);
+      const sold = body.activities.find((a) => a.type === 'sold')!;
+
+      // `occurredAt` stays the sold date from the form; `recordedAt` is when
+      // the row was entered, which is what the timeline shows.
+      expect(sold.occurredAt).toBe(onDay('2026-07-30').toISOString());
+      expect(new Date(sold.recordedAt!).getTime()).toBeGreaterThan(
+        new Date(sold.occurredAt!).getTime(),
+      );
+    });
+
+    it('keeps the business date on a migrated row, whose createdAt is the import run', async () => {
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      const migrated = await activityModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        type: 'note',
+        subjectType: 'lead',
+        leadId: new Types.ObjectId(leadId),
+        occurredAt: onDay('2026-06-15'),
+        summary: 'Imported from SmartSuite',
+        source: 'migration',
+      });
+
+      try {
+        const body = await getAs(producerToken, leadId);
+        const row = body.activities.find(
+          (a) => a.id === migrated._id.toString(),
+        )!;
+
+        expect(row.recordedAt).toBe(onDay('2026-06-15').toISOString());
+        // Created last, but ordered by its business date: oldest on the lead.
+        expect(body.activities.at(-1)!.id).toBe(row.id);
+      } finally {
+        await activityModel.deleteOne({ _id: migrated._id });
+      }
     });
 
     it('finds a migrated recap linked only by legacyLeadId, then self-heals the ref', async () => {

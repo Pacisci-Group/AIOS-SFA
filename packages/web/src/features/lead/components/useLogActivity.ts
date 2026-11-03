@@ -32,12 +32,14 @@ export function useLogActivity(leadId: string) {
       const previous = queryClient.getQueryData<LeadDetail>(key);
 
       if (previous) {
+        const now = new Date().toISOString();
         const optimistic: LeadDetailActivity = {
           // Distinguishable from a real ObjectId, and replaced on success.
           id: `optimistic-${input.type}`,
           type: input.type,
           summary: input.summary ?? null,
-          occurredAt: new Date().toISOString(),
+          occurredAt: now,
+          recordedAt: now,
           userName: null,
           // This hook only ever logs against the lead itself, and the server
           // agrees — `ActivitiesService` returns a constant `lead` origin.

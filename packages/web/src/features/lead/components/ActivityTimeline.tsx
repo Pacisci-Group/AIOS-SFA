@@ -153,7 +153,7 @@ export function ActivityTimeline({
                           activityLabel[activity.type]}
                     </p>
                     <span className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">
-                      {formatWhen(activity.occurredAt)}
+                      {formatWhen(activity.recordedAt ?? activity.occurredAt)}
                     </span>
                   </div>
 
