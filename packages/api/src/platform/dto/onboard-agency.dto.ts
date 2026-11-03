@@ -6,7 +6,6 @@ import {
   ModuleKey,
 } from '@sfa/shared';
 import { z } from 'zod';
-import { timeZoneSchema } from '../../common/dates/time-zone.schema';
 
 /**
  * `POST /platform/agencies` — onboard a whole tenant (PAC-69).
@@ -114,12 +113,9 @@ export const onboardAgencySchema = z.object({
     ticker,
     carrierAppointments,
     npn,
-    /**
-     * IANA zone (PAC-141). Optional: omitted, the schema default (US Central)
-     * applies, which is what the wizard pre-selects. Checked against the
-     * runtime here and against MongoDB in the service pre-flight.
-     */
-    timezone: timeZoneSchema.optional(),
+    // No `timezone` (PAC-161): the agency is created on the schema default
+    // and the owner picks the zone in their own wizard. `z.object` strips a
+    // key an older client still sends, so it is ignored rather than refused.
   }),
   branch: z.object({
     name: z

@@ -146,42 +146,31 @@ describe('toBranchSlug', () => {
   });
 });
 
-describe('onboardAgencySchema — timezone (PAC-141)', () => {
+describe('onboardAgencySchema — timezone (PAC-161)', () => {
   const valid = {
     agency: { name: 'Acme Insurance', slug: 'acme-insurance' },
     branch: { name: 'Main', address: {} },
     modules: ['leads'],
     owner: { firstName: 'Ada', lastName: 'Owner', email: 'ada@acme.test' },
   };
-  const withZone = (timezone: unknown) =>
-    onboardAgencySchema.safeParse({
-      ...valid,
-      agency: { ...valid.agency, timezone },
-    });
-
-  it('is optional — omitted, the schema default applies', () => {
-    const parsed = onboardAgencySchema.parse(valid);
-    expect(parsed.agency.timezone).toBeUndefined();
-  });
 
   it.each([
-    'America/Chicago',
-    'Asia/Kolkata',
-    'UTC',
-    'America/Argentina/Buenos_Aires',
-  ])('accepts %s', (timezone) => {
-    const result = withZone(timezone);
-    expect(result.success).toBe(true);
-  });
-
-  it.each([
+    ['a real zone', 'Asia/Kolkata'],
     ['a made-up zone', 'Mars/Olympus'],
-    ['a raw offset', '+05:30'],
-    ['an empty string', ''],
     ['a number', 5],
-  ])('rejects %s', (_label, timezone) => {
-    expect(withZone(timezone).success).toBe(false);
-  });
+  ])(
+    'ignores a sent timezone (%s): the owner picks it in their own wizard',
+    (_label, timezone) => {
+      const result = onboardAgencySchema.safeParse({
+        ...valid,
+        agency: { ...valid.agency, timezone },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect('timezone' in result.data.agency).toBe(false);
+      }
+    },
+  );
 });
 
 describe('agencyAvailabilitySchema — carrier appointment (PAC-93)', () => {
