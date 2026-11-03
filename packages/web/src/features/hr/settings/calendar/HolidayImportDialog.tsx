@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { HolidaySuggestion } from "@sfa/shared";
+import type { Weekday } from "@sfa/shared";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -12,11 +11,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { addCalendarDays, getHolidaySuggestions, hrKeys } from "@/lib/hr-api";
+import { addCalendarDays, getHolidaySuggestions } from "@/lib/hr-api";
 import { hrErrorMessage } from "../hr-error";
-import { formatIsoDate } from "./calendar-display";
+import {
+  defaultHolidayPickerValue,
+  HolidayPicker,
+  holidayPickerDays,
+  type HolidayPickerValue,
+} from "./HolidayPicker";
 
 interface HolidayImportDialogProps {
   open: boolean;
@@ -24,14 +27,14 @@ interface HolidayImportDialogProps {
   country: string | null;
   region: string | null;
   year: number;
-  /** `onboarding` in the wizard, `import` in settings — both carry no reason. */
-  source: "import" | "onboarding";
+  workweek: readonly Weekday[];
 }
 
 /**
  * "Import holidays for YEAR" (PAC-161): what `date-holidays` suggests for the
- * agency's country and region, public holidays ticked, the rest not. Nothing
- * is written until Import — the whole point of suggestions is that a person
+ * agency's country and region in the shared `HolidayPicker` — federal ticked,
+ * other unticked, custom ranges — written as `import` rows. Nothing is
+ * written until Import: the whole point of suggestions is that a person
  * decides.
  */
 export function HolidayImportDialog({
@@ -40,7 +43,7 @@ export function HolidayImportDialog({
   country,
   region,
   year,
-  source,
+  workweek,
 }: HolidayImportDialogProps) {
   const queryClient = useQueryClient();
   const query = useQuery({
@@ -49,36 +52,20 @@ export function HolidayImportDialog({
     enabled: open && country !== null,
   });
 
-  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [value, setValue] = useState<HolidayPickerValue>({ ticked: [], custom: [] });
   useEffect(() => {
-    if (!query.data) return;
-    setTicked(
-      new Set(
-        query.data.suggestions
-          .filter((s) => s.preChecked && !s.alreadyInCalendar)
-          .map((s) => s.date),
-      ),
-    );
+    if (query.data) setValue(defaultHolidayPickerValue(query.data.suggestions));
   }, [query.data]);
 
-  const groups = useMemo(() => {
-    const list = query.data?.suggestions ?? [];
-    return {
-      publicHolidays: list.filter((s) => s.type === "public"),
-      others: list.filter((s) => s.type !== "public"),
-    };
-  }, [query.data]);
+  const days = query.data
+    ? holidayPickerDays(value, query.data.suggestions, workweek)
+    : [];
 
   const importDays = useMutation({
-    mutationFn: () =>
-      addCalendarDays({
-        source,
-        days: (query.data?.suggestions ?? [])
-          .filter((s) => ticked.has(s.date))
-          .map((s) => ({ date: s.date, kind: "holiday" as const, label: s.name })),
-      }),
+    mutationFn: () => addCalendarDays({ source: "import", days }),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: hrKeys.calendar(year) });
+      // Every year: a custom range may run into the next one.
+      void queryClient.invalidateQueries({ queryKey: ["hr", "calendar"] });
       toast.success(
         `${result.days.length} holiday${result.days.length === 1 ? "" : "s"} added for ${year}.`,
       );
@@ -87,42 +74,6 @@ export function HolidayImportDialog({
     onError: (error) => toast.error(hrErrorMessage(error)),
   });
 
-  const toggle = (date: string, on: boolean) =>
-    setTicked((current) => {
-      const next = new Set(current);
-      if (on) next.add(date);
-      else next.delete(date);
-      return next;
-    });
-
-  const row = (s: HolidaySuggestion) => {
-    const id = `hr-suggest-${s.date}`;
-    return (
-      <li key={`${s.date}-${s.name}`} className="flex items-start gap-3 py-1.5">
-        <Checkbox
-          id={id}
-          checked={s.alreadyInCalendar || ticked.has(s.date)}
-          disabled={s.alreadyInCalendar}
-          onCheckedChange={(checked) => toggle(s.date, checked === true)}
-          className="mt-0.5"
-        />
-        <Label htmlFor={id} className="grid gap-0.5 font-normal">
-          <span className="text-sm text-foreground">
-            {s.name}
-            {s.substitute && (
-              <span className="ml-1 text-xs text-muted-foreground">(observed)</span>
-            )}
-          </span>
-          <span className="text-xs text-muted-foreground">
-            {formatIsoDate(s.date)}
-            {s.alreadyInCalendar ? " · already on the calendar" : ""}
-            {s.type !== "public" ? ` · ${s.type}` : ""}
-          </span>
-        </Label>
-      </li>
-    );
-  };
-
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -130,7 +81,7 @@ export function HolidayImportDialog({
           <DialogTitle>Import holidays for {year}</DialogTitle>
           <DialogDescription>
             {country
-              ? "Public holidays are ticked. Untick any the office stays open for, and tick any observances it closes for."
+              ? "Federal holidays are ticked. Untick any the office stays open for, tick any others it closes for, and add your own."
               : "Choose a country in Working week first."}
           </DialogDescription>
         </DialogHeader>
@@ -140,22 +91,15 @@ export function HolidayImportDialog({
         ) : query.isError ? (
           <p className="text-sm text-destructive">{hrErrorMessage(query.error)}</p>
         ) : query.data ? (
-          <div className="max-h-[50vh] space-y-4 overflow-y-auto pr-1">
-            <section>
-              <h3 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                Public holidays
-              </h3>
-              <ul className="divide-y divide-border">{groups.publicHolidays.map(row)}</ul>
-            </section>
-            {groups.others.length > 0 && (
-              <section>
-                <h3 className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  Other observances
-                </h3>
-                <ul className="divide-y divide-border">{groups.others.map(row)}</ul>
-              </section>
-            )}
-          </div>
+          <HolidayPicker
+            items={query.data.suggestions}
+            workweek={workweek}
+            year={year}
+            value={value}
+            onChange={setValue}
+            disabled={importDays.isPending}
+            className="max-h-[55vh] overflow-y-auto pr-1"
+          />
         ) : null}
 
         <DialogFooter>
@@ -165,10 +109,10 @@ export function HolidayImportDialog({
           <Button
             type="button"
             variant="brand"
-            disabled={!query.data || ticked.size === 0 || importDays.isPending}
+            disabled={!query.data || days.length === 0 || importDays.isPending}
             onClick={() => importDays.mutate()}
           >
-            {importDays.isPending ? "Importing…" : `Import ${ticked.size}`}
+            {importDays.isPending ? "Importing…" : `Import ${days.length}`}
           </Button>
         </DialogFooter>
       </DialogContent>

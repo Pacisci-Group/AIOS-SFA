@@ -20,8 +20,8 @@ interface CalendarTabProps {
 
 /**
  * The calendar side of `/settings/hr` (PAC-161): the working week, the year
- * grid, the import dialog and any pending Q4 proposal. Also the body of the
- * onboarding Calendar step, with `canWrite` always true there.
+ * grid, the import dialog and any pending Q4 proposal. The owner's setup
+ * step is its own, smaller thing (`agency-setup/HolidayStep.tsx`).
  */
 export function CalendarTab({ canWrite, proposalYear = null }: CalendarTabProps) {
   const [year, setYear] = useState(() => proposalYear ?? new Date().getFullYear());
@@ -47,6 +47,7 @@ export function CalendarTab({ canWrite, proposalYear = null }: CalendarTabProps)
       {calendar.pendingProposal && canWrite && (
         <ProposalBanner
           proposal={calendar.pendingProposal}
+          workweek={calendar.workweek}
           openReview={proposalYear === calendar.pendingProposal.year}
         />
       )}
@@ -115,7 +116,7 @@ export function CalendarTab({ canWrite, proposalYear = null }: CalendarTabProps)
         country={calendar.country}
         region={calendar.region}
         year={year}
-        source="import"
+        workweek={calendar.workweek}
       />
       <CalendarDayDialog
         year={year}

@@ -1,27 +1,15 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { AgencyCalendarView, Weekday } from "@sfa/shared";
 import { DetailCard } from "@/components/common/DetailCard";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  getHolidayRegions,
-  hrKeys,
-  updateAgencyCalendar,
-} from "@/lib/hr-api";
+import { hrKeys, updateAgencyCalendar } from "@/lib/hr-api";
 import { cn } from "@/lib/utils";
 import { hrErrorMessage } from "../hr-error";
 import { WEEKDAY_ORDER, WEEKDAY_SHORT } from "./calendar-display";
-
-const NONE = "__none__";
+import { RegionPicker } from "./RegionPicker";
 
 interface WorkweekCardProps {
   calendar: AgencyCalendarView;
@@ -53,12 +41,6 @@ export function WorkweekCard({
     setCountry(calendar.country);
     setRegion(calendar.region);
   }, [calendar.workweek, calendar.country, calendar.region]);
-
-  const regionsQuery = useQuery({
-    queryKey: hrKeys.regions(country),
-    queryFn: () => getHolidayRegions(country),
-    enabled: canWrite,
-  });
 
   const save = useMutation({
     mutationFn: () => updateAgencyCalendar({ workweek, country, region }),
@@ -107,56 +89,15 @@ export function WorkweekCard({
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="hr-country">Country</Label>
-            <Select
-              value={country ?? NONE}
-              disabled={!canWrite}
-              onValueChange={(value) => {
-                const next = value === NONE ? null : value;
-                setCountry(next);
-                setRegion(null);
-              }}
-            >
-              <SelectTrigger id="hr-country" className="w-full bg-card border-border">
-                <SelectValue placeholder="Choose a country" />
-              </SelectTrigger>
-              <SelectContent className="max-h-72">
-                <SelectItem value={NONE}>Not set</SelectItem>
-                {(regionsQuery.data?.countries ?? (country ? [{ code: country, name: country }] : [])).map(
-                  (option) => (
-                    <SelectItem key={option.code} value={option.code}>
-                      {option.name}
-                    </SelectItem>
-                  ),
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="hr-region">State or province</Label>
-            <Select
-              value={region ?? NONE}
-              disabled={!canWrite || !country}
-              onValueChange={(value) => setRegion(value === NONE ? null : value)}
-            >
-              <SelectTrigger id="hr-region" className="w-full bg-card border-border">
-                <SelectValue placeholder="None" />
-              </SelectTrigger>
-              <SelectContent className="max-h-72">
-                <SelectItem value={NONE}>None</SelectItem>
-                {(regionsQuery.data?.regions ?? (region ? [{ code: region, name: region }] : [])).map(
-                  (option) => (
-                    <SelectItem key={option.code} value={option.code}>
-                      {option.name}
-                    </SelectItem>
-                  ),
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+        <RegionPicker
+          country={country}
+          region={region}
+          disabled={!canWrite}
+          onChange={(next) => {
+            setCountry(next.country);
+            setRegion(next.region);
+          }}
+        />
 
         {canWrite && (
           <div className="flex justify-end">
