@@ -206,7 +206,7 @@ describe('HR settings (e2e)', () => {
   describe('holiday suggestions and days', () => {
     let closureId: string;
 
-    it('suggests US Oklahoma 2026 with public pre-checked and the rest not', async () => {
+    it('suggests US Oklahoma 2026 grouped federal / other, federal pre-checked', async () => {
       const res = await api()
         .get(
           '/api/v1/hr/calendar/holiday-suggestions?country=US&region=OK&year=2026',
@@ -219,14 +219,74 @@ describe('HR settings (e2e)', () => {
       );
       expect(thanksgiving).toMatchObject({
         type: 'public',
+        group: 'federal',
         preChecked: true,
         alreadyInCalendar: false,
+      });
+      // The federal label wins over the state's rename.
+      expect(
+        body.suggestions.find((s) => s.date === '2026-02-16'),
+      ).toMatchObject({ name: "Washington's Birthday", group: 'federal' });
+      // The state's own day, and an observance, are offered unchecked.
+      expect(
+        body.suggestions.find((s) => s.date === '2026-11-27'),
+      ).toMatchObject({
+        name: 'Day after Thanksgiving',
+        group: 'other',
+        preChecked: false,
       });
       const valentines = body.suggestions.find((s) => s.date === '2026-02-14');
       expect(valentines).toMatchObject({
         type: 'observance',
+        group: 'other',
         preChecked: false,
       });
+      // The weekend original of a substitute pair is listed but unchecked.
+      expect(
+        body.suggestions.find((s) => s.date === '2026-07-04'),
+      ).toMatchObject({ group: 'federal', preChecked: false });
+      expect(
+        body.suggestions.find((s) => s.date === '2026-07-03'),
+      ).toMatchObject({ group: 'federal', substitute: true, preChecked: true });
+      expect(new Set(body.suggestions.map((s) => s.date)).size).toBe(
+        body.suggestions.length,
+      );
+    });
+
+    it('imports the pre-checked default set for a Texas year whose Christmas Eve is a substitute day', async () => {
+      // Dec 25 2032 is a Saturday: the federal substitute lands on 12-24,
+      // the same day Texas has "Christmas Eve". v1 offered both rows and the
+      // batch's one-row-per-date rule 400'd the default import.
+      const res = await api()
+        .get(
+          '/api/v1/hr/calendar/holiday-suggestions?country=US&region=TX&year=2032',
+        )
+        .set(auth(managerToken))
+        .expect(200);
+      const suggestions = (res.body as HolidaySuggestionsResponse).suggestions;
+      expect(suggestions.filter((s) => s.date === '2032-12-24')).toEqual([
+        expect.objectContaining({
+          name: 'Christmas Day (substitute day)',
+          group: 'federal',
+          preChecked: true,
+        }),
+      ]);
+      const defaults = suggestions.filter((s) => s.preChecked);
+      const imported = await api()
+        .post('/api/v1/hr/calendar/days')
+        .set(auth(managerToken))
+        .send({
+          source: 'import',
+          days: defaults.map((s) => ({
+            date: s.date,
+            kind: 'holiday',
+            label: s.name,
+          })),
+        })
+        .expect(201);
+      expect((imported.body as { days: unknown[] }).days).toHaveLength(
+        defaults.length,
+      );
     });
 
     it('400s an unknown region', async () => {
@@ -427,6 +487,7 @@ describe('HR settings (e2e)', () => {
               status: 'pending',
               proposedAt: new Date(),
               items: [
+                // A pre-v2 item: no group, no preChecked (the view derives both).
                 {
                   date: '2027-01-01',
                   name: "New Year's Day",
@@ -438,12 +499,24 @@ describe('HR settings (e2e)', () => {
                   name: 'Independence Day (substitute day)',
                   type: 'public',
                   substitute: true,
+                  group: 'federal',
+                  preChecked: true,
                 },
                 {
                   date: '2027-11-25',
                   name: 'Thanksgiving Day',
                   type: 'public',
                   substitute: false,
+                  group: 'federal',
+                  preChecked: true,
+                },
+                {
+                  date: '2027-11-26',
+                  name: 'Day after Thanksgiving',
+                  type: 'public',
+                  substitute: false,
+                  group: 'other',
+                  preChecked: false,
                 },
               ],
               decidedAt: null,
@@ -466,9 +539,21 @@ describe('HR settings (e2e)', () => {
         .get('/api/v1/hr/calendar?year=2027')
         .set(auth(managerToken))
         .expect(200);
-      expect((pending.body as AgencyCalendarView).pendingProposal?.year).toBe(
-        2027,
-      );
+      const pendingProposal = (pending.body as AgencyCalendarView)
+        .pendingProposal;
+      expect(pendingProposal?.year).toBe(2027);
+      expect(
+        pendingProposal?.items.map((item) => [
+          item.date,
+          item.group,
+          item.preChecked,
+        ]),
+      ).toEqual([
+        ['2027-01-01', 'federal', true],
+        ['2027-07-05', 'federal', true],
+        ['2027-11-25', 'federal', true],
+        ['2027-11-26', 'other', false],
+      ]);
 
       await api()
         .post('/api/v1/hr/calendar/proposals/2027/confirm')

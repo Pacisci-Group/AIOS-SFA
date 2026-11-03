@@ -168,7 +168,7 @@ describe('ProposeNextYearHolidaysFn (e2e)', () => {
         proposals: {
           year: number;
           status: string;
-          items: { date: string }[];
+          items: { date: string; group?: string; preChecked?: boolean }[];
         }[];
       } | null
     )?.proposals ?? [];
@@ -269,8 +269,12 @@ describe('ProposeNextYearHolidaysFn (e2e)', () => {
 
     const [proposal] = await proposalsOf(chicagoId);
     expect(proposal).toMatchObject({ year: 2026, status: 'pending' });
-    expect(proposal.items.some((item) => item.date === '2026-11-26')).toBe(
-      true,
+    // Grouped and pre-checked as the import dialog would offer them.
+    expect(proposal.items.find((item) => item.date === '2026-11-26')).toEqual(
+      expect.objectContaining({ group: 'federal', preChecked: true }),
+    );
+    expect(proposal.items.find((item) => item.date === '2026-11-27')).toEqual(
+      expect.objectContaining({ group: 'other', preChecked: false }),
     );
 
     const sent = inngest.sent.filter(

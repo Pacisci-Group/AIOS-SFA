@@ -1,8 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import {
   DEFAULT_WORKWEEK,
+  HOLIDAY_SUGGESTION_GROUPS,
   HOLIDAY_SUGGESTION_TYPES,
   type HolidayProposalStatus,
+  type HolidaySuggestionGroup,
   type HolidaySuggestionType,
   type Weekday,
 } from '@sfa/shared';
@@ -26,6 +28,18 @@ export class HolidayProposalItem {
 
   @Prop({ default: false })
   substitute: boolean;
+
+  /**
+   * Added in PAC-161 v2 — optional on the schema because a proposal written
+   * before then has neither, and `.lean()` fills in no defaults: the view
+   * mapper derives `group` from `type` and `preChecked` from `group` for
+   * those (local dev databases only; no shared database held a proposal).
+   */
+  @Prop({ type: String, enum: HOLIDAY_SUGGESTION_GROUPS })
+  group?: HolidaySuggestionGroup;
+
+  @Prop({ type: Boolean })
+  preChecked?: boolean;
 }
 export const HolidayProposalItemSchema =
   SchemaFactory.createForClass(HolidayProposalItem);

@@ -1,6 +1,7 @@
 import {
   HOLIDAY_SUGGESTION_TYPES,
   type HolidayRegionOption,
+  type HolidaySuggestionGroup,
   type HolidaySuggestionType,
 } from '@sfa/shared';
 import Holidays from 'date-holidays';
@@ -11,12 +12,26 @@ import Holidays from 'date-holidays';
  *
  * ## What comes out
  *
- * One entry per holiday the package knows for the year, as the agency's
+ * One entry per **date** the package knows a holiday for, as the agency's
  * calendar would store it: a `YYYY-MM-DD`, a name, the package's own type
- * (`public` / `bank` / `school` / `optional` / `observance`) and whether it is
- * a substitute day (the Friday for a Saturday Fourth of July). Only `public`
- * ones are pre-checked; the rest are offered unchecked. A multi-day rule
+ * (`public` / `bank` / `school` / `optional` / `observance`), whether it is a
+ * substitute day (the Friday for a Saturday Fourth of July), the group it is
+ * offered in and whether it is ticked by default. A multi-day rule
  * contributes its **start** day only.
+ *
+ * ## Federal vs other is a merge of two instances, by date
+ *
+ * The region-less instance's `public` rows are the federal set. A state
+ * instance does **not** contain them verbatim: it renames some ("Presidents'
+ * Day" for Washington's Birthday in Texas and Oklahoma), drops others (14
+ * states have no Columbus Day row) and adds its own `public` days — sometimes
+ * on a federal date (Texas 2027 puts "Christmas Eve" on 12-24, the same day as
+ * "Christmas Day (substitute day)"). So the lists are merged by date: a
+ * federal date keeps the federal row and its label, every other date keeps
+ * the first row seen for it, regional first. The calendar holds one row per
+ * date and the batch DTO 400s a duplicate, so one row per date is the
+ * invariant here too — v1 deduped on `date:name` and the default import for a
+ * Texas agency in 2027 failed on exactly that.
  *
  * ## `date`, never `start`
  *
@@ -55,6 +70,19 @@ export interface RawHolidaySuggestion {
   name: string;
   type: HolidaySuggestionType;
   substitute: boolean;
+  group: HolidaySuggestionGroup;
+  preChecked: boolean;
+}
+
+/** The fields of a `date-holidays` row the grouping reads. */
+export interface PackageHolidayRow {
+  /** `'YYYY-MM-DD HH:mm:ss'`, or a `Date` in older rule paths. */
+  date: string | Date;
+  name: string;
+  type?: string;
+  substitute?: boolean;
+  /** The rule text; a substitute row carries the same one as its original. */
+  rule?: string;
 }
 
 /** The package parses the whole rule set per instance; one per place. */
@@ -152,6 +180,76 @@ function asType(value: unknown): HolidaySuggestionType {
     : 'observance';
 }
 
+function dayOf(row: PackageHolidayRow): string {
+  return row.date instanceof Date
+    ? row.date.toISOString().slice(0, 10)
+    : String(row.date).slice(0, 10);
+}
+
+type Grouped = Omit<RawHolidaySuggestion, 'preChecked'> & { rule: string };
+
+/**
+ * Merge the national and regional lists into one row per date (pure; the
+ * docblock above says why). Exported for the unit spec; callers use
+ * {@link suggestHolidays}.
+ *
+ * Pre-check: every `federal` row, except the **weekend original of a
+ * substitute pair** — a non-substitute row whose rule also produced a
+ * `substitute` row in the same year (the package stamps both with the same
+ * rule text). Both rows stay in the list: an agency that closes on the
+ * Saturday too can tick it. A substitute whose original falls in another year
+ * (2027-12-31 for New Year's Day 2028) has no partner and is ticked alone.
+ */
+export function groupHolidaySuggestions(
+  national: readonly PackageHolidayRow[],
+  regional: readonly PackageHolidayRow[],
+): RawHolidaySuggestion[] {
+  const byDate = new Map<string, Grouped>();
+  for (const row of national) {
+    if (row.type !== 'public') continue;
+    const date = dayOf(row);
+    if (byDate.has(date)) continue;
+    byDate.set(date, {
+      date,
+      name: row.name,
+      type: 'public',
+      substitute: row.substitute === true,
+      group: 'federal',
+      rule: row.rule ?? '',
+    });
+  }
+  // Regional first, so a state's `public` extra outranks a national
+  // observance on the same day; a federal date is already taken.
+  for (const row of [...regional, ...national]) {
+    const date = dayOf(row);
+    if (byDate.has(date)) continue;
+    byDate.set(date, {
+      date,
+      name: row.name,
+      type: asType(row.type),
+      substitute: row.substitute === true,
+      group: 'other',
+      rule: row.rule ?? '',
+    });
+  }
+
+  const substituteRules = new Set<string>();
+  for (const row of byDate.values()) {
+    if (row.group === 'federal' && row.substitute && row.rule) {
+      substituteRules.add(row.rule);
+    }
+  }
+
+  return [...byDate.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(({ rule, ...row }) => ({
+      ...row,
+      preChecked:
+        row.group === 'federal' &&
+        !(!row.substitute && substituteRules.has(rule)),
+    }));
+}
+
 export function suggestHolidays(input: {
   country: string;
   region: string | null;
@@ -165,22 +263,9 @@ export function suggestHolidays(input: {
   if (region && !isKnownRegion(country, region)) {
     throw new UnknownHolidayRegionError(country, region);
   }
-
-  const seen = new Set<string>();
-  const out: RawHolidaySuggestion[] = [];
-  for (const holiday of instanceFor(country, region).getHolidays(input.year)) {
-    const date = String(holiday.date).slice(0, 10);
-    // The package can emit the same date twice (a regional and a national
-    // rule); the calendar holds one row per date, so keep the first.
-    const key = `${date}:${holiday.name}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      date,
-      name: holiday.name,
-      type: asType(holiday.type),
-      substitute: holiday.substitute === true,
-    });
-  }
-  return out.sort((a, b) => a.date.localeCompare(b.date));
+  const national = instanceFor(country, null).getHolidays(input.year);
+  const regional = region
+    ? instanceFor(country, region).getHolidays(input.year)
+    : [];
+  return groupHolidaySuggestions(national, regional);
 }

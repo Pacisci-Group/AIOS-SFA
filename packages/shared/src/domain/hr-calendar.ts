@@ -63,7 +63,7 @@ export const CALENDAR_DAY_SOURCES = [
 ] as const;
 export type CalendarDaySource = (typeof CALENDAR_DAY_SOURCES)[number];
 
-/** The `date-holidays` vocabulary, verbatim. Only `public` is pre-checked. */
+/** The `date-holidays` vocabulary, verbatim — the sub-label on a suggestion. */
 export const HOLIDAY_SUGGESTION_TYPES = [
   'public',
   'bank',
@@ -72,6 +72,20 @@ export const HOLIDAY_SUGGESTION_TYPES = [
   'observance',
 ] as const;
 export type HolidaySuggestionType = (typeof HOLIDAY_SUGGESTION_TYPES)[number];
+
+/**
+ * Which list a suggestion is offered in (PAC-161 v2, epic §1).
+ *
+ * `federal` is the country's own public holidays — the `public` rows of the
+ * region-less `date-holidays` instance — and is what the owner is expected to
+ * close for; `other` is everything else the package knows for the place: a
+ * state's own public days, observances, optional and bank days. A state
+ * instance *renames or drops* federal rows (36 states have no "Washington's
+ * Birthday"; Texas calls it "Presidents' Day"), so the split is computed on
+ * the API by merging both instances by date, never from `type` alone.
+ */
+export const HOLIDAY_SUGGESTION_GROUPS = ['federal', 'other'] as const;
+export type HolidaySuggestionGroup = (typeof HOLIDAY_SUGGESTION_GROUPS)[number];
 
 /** The country the platform's agencies are in until one says otherwise. */
 export const DEFAULT_CALENDAR_COUNTRY = 'US';
@@ -97,13 +111,17 @@ export interface AgencyCalendarDayView {
 }
 
 export interface HolidaySuggestion {
-  /** `YYYY-MM-DD`. */
+  /** `YYYY-MM-DD`. One row per date. */
   date: string;
   name: string;
   type: HolidaySuggestionType;
   /** A substitute day (Friday for a Saturday holiday) — the actual closure. */
   substitute: boolean;
-  /** `public` holidays are; the rest are offered unchecked. */
+  group: HolidaySuggestionGroup;
+  /**
+   * Ticked by default: the `federal` rows, except the weekend original of a
+   * substitute pair (the Saturday Fourth of July when the Friday is offered).
+   */
   preChecked: boolean;
   /** An active row already holds this date. */
   alreadyInCalendar: boolean;
@@ -116,6 +134,9 @@ export interface HolidayProposalItemView {
   name: string;
   type: HolidaySuggestionType;
   substitute: boolean;
+  group: HolidaySuggestionGroup;
+  /** As {@link HolidaySuggestion.preChecked}; the review dialog ticks these. */
+  preChecked: boolean;
 }
 
 /** Next year's holidays, proposed by the Q4 job for one-click confirmation. */

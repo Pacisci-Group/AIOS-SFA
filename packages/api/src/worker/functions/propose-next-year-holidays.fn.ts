@@ -58,8 +58,10 @@ type CalendarLean = {
  *
  * A new closure flags approved leave on that day for review (PAC-165), so
  * the job writes a **proposal** — the suggestions `date-holidays` makes for
- * the agency's stored country and region — and tells the `agency:hr:admin`
- * holders. Confirming is one click on the settings page, and it is theirs.
+ * the agency's stored country and region, grouped federal / other and with
+ * the federal ones pre-checked, exactly as the import dialog offers them —
+ * and tells the `agency:hr:admin` holders. Confirming is one click on the
+ * settings page ("Confirm N", the pre-checked ones), and it is theirs.
  *
  * ## One cron, every agency's own calendar
  *
@@ -199,6 +201,8 @@ export class ProposeNextYearHolidaysFn implements InngestFunctionProvider {
               name: item.name,
               type: item.type,
               substitute: item.substitute,
+              group: item.group,
+              preChecked: item.preChecked,
             })),
             decidedAt: null,
             decidedBy: null,

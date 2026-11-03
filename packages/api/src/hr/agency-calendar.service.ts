@@ -274,7 +274,6 @@ export class AgencyCalendarService {
       year: input.year,
       suggestions: raw.map((row) => ({
         ...row,
-        preChecked: row.type === 'public',
         alreadyInCalendar: existing.has(row.date),
       })),
     };
@@ -447,11 +446,17 @@ function toProposalView(proposal: HolidayProposal): HolidayProposalView {
     year: proposal.year,
     status: proposal.status,
     proposedAt: proposal.proposedAt.toISOString(),
-    items: proposal.items.map((item) => ({
-      date: item.date,
-      name: item.name,
-      type: item.type,
-      substitute: item.substitute,
-    })),
+    items: proposal.items.map((item) => {
+      // Pre-v2 items (see the schema) carry neither field.
+      const group = item.group ?? (item.type === 'public' ? 'federal' : 'other');
+      return {
+        date: item.date,
+        name: item.name,
+        type: item.type,
+        substitute: item.substitute,
+        group,
+        preChecked: item.preChecked ?? group === 'federal',
+      };
+    }),
   };
 }
