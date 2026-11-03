@@ -253,11 +253,7 @@ export function groupHolidaySuggestions(
       ...row,
       preChecked:
         row.group === 'federal' &&
-        !(
-          !row.substitute &&
-          isWeekend(row.date) &&
-          substituteRules.has(rule)
-        ),
+        !(!row.substitute && isWeekend(row.date) && substituteRules.has(rule)),
     }));
 }
 

@@ -94,9 +94,9 @@ describe('holiday suggestions (date-holidays, PAC-161)', () => {
         substitute: false,
         preChecked: true,
       });
-      expect(
-        [...rows.values()].filter((row) => row.preChecked),
-      ).toHaveLength(12);
+      expect([...rows.values()].filter((row) => row.preChecked)).toHaveLength(
+        12,
+      );
       expect(rows.get('2027-12-24')).toMatchObject({
         name: 'Christmas Day (substitute day)',
         preChecked: true,
@@ -173,17 +173,34 @@ describe('holiday suggestions (date-holidays, PAC-161)', () => {
   });
 
   describe('groupHolidaySuggestions (pure)', () => {
-    const rule = '07-04 and if sunday then next monday if saturday then previous friday';
+    const rule =
+      '07-04 and if sunday then next monday if saturday then previous friday';
 
     it('lets a regional public extra outrank a national observance on the same day', () => {
       const rows = groupHolidaySuggestions(
         [
-          { date: '2026-03-02 00:00:00', name: 'Read Across America', type: 'observance' },
-          { date: '2026-01-01 00:00:00', name: "New Year's Day", type: 'public' },
+          {
+            date: '2026-03-02 00:00:00',
+            name: 'Read Across America',
+            type: 'observance',
+          },
+          {
+            date: '2026-01-01 00:00:00',
+            name: "New Year's Day",
+            type: 'public',
+          },
         ],
         [
-          { date: '2026-03-02 00:00:00', name: 'Texas Independence Day', type: 'public' },
-          { date: '2026-01-01 00:00:00', name: "New Year's Day", type: 'public' },
+          {
+            date: '2026-03-02 00:00:00',
+            name: 'Texas Independence Day',
+            type: 'public',
+          },
+          {
+            date: '2026-01-01 00:00:00',
+            name: "New Year's Day",
+            type: 'public',
+          },
         ],
       );
       expect(rows).toEqual([
@@ -209,7 +226,12 @@ describe('holiday suggestions (date-holidays, PAC-161)', () => {
     it('pairs a substitute with its original by rule text', () => {
       const rows = groupHolidaySuggestions(
         [
-          { date: '2026-07-04 00:00:00', name: 'Independence Day', type: 'public', rule },
+          {
+            date: '2026-07-04 00:00:00',
+            name: 'Independence Day',
+            type: 'public',
+            rule,
+          },
           {
             date: '2026-07-03 00:00:00',
             name: 'Independence Day (substitute day)',
@@ -228,7 +250,13 @@ describe('holiday suggestions (date-holidays, PAC-161)', () => {
 
     it('treats an unknown type as an observance and a Date as its UTC day', () => {
       const rows = groupHolidaySuggestions(
-        [{ date: new Date('2026-05-10T00:00:00Z'), name: "Mother's Day", type: 'weird' }],
+        [
+          {
+            date: new Date('2026-05-10T00:00:00Z'),
+            name: "Mother's Day",
+            type: 'weird',
+          },
+        ],
         [],
       );
       expect(rows).toEqual([

@@ -448,7 +448,8 @@ function toProposalView(proposal: HolidayProposal): HolidayProposalView {
     proposedAt: proposal.proposedAt.toISOString(),
     items: proposal.items.map((item) => {
       // Pre-v2 items (see the schema) carry neither field.
-      const group = item.group ?? (item.type === 'public' ? 'federal' : 'other');
+      const group =
+        item.group ?? (item.type === 'public' ? 'federal' : 'other');
       return {
         date: item.date,
         name: item.name,
