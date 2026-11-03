@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 import type { InvitePreview } from "@/lib/invite-api";
@@ -19,7 +19,9 @@ import { acceptInvite } from "@/lib/invite-api";
 import {
   AGENCY_SETUP_STEPS,
   AgencySetupStepContent,
+  AgencySetupStepHost,
   SKIP_FLAG_BY_STEP,
+  type StepContinueHandler,
 } from "./AgencySetupSteps";
 
 /** Phase 1: what the invitee tells us about themselves before they have a session. */
@@ -47,8 +49,9 @@ const profileSchema = z.object({
  * the session in place and carries straight on — bouncing an owner to `/login`
  * to type a password they set four seconds ago is the thing this avoids.
  *
- * Every phase-2 step writes as it goes and is skippable; skipping completes the
- * setup so the app never nags. See `AgencySetupSteps`.
+ * Every phase-2 step writes as it goes (the holiday step on Continue) and all
+ * but the time zone are skippable; skipping completes the setup so the app
+ * never nags. See `AgencySetupSteps`.
  */
 export function InviteWizard({
   token,
@@ -66,6 +69,19 @@ export function InviteWizard({
   const [finishing, setFinishing] = useState(false);
   // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
   const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
+  // The current step's Continue handler and whether it is mid-save
+  // (`useStepContinue`); only the holiday step writes on Continue.
+  const continueRef = useRef<StepContinueHandler | null>(null);
+  const [stepBusy, setStepBusy] = useState(false);
+  const stepControls = useMemo(
+    () => ({
+      register: (handler: StepContinueHandler | null) => {
+        continueRef.current = handler;
+      },
+      setBusy: setStepBusy,
+    }),
+    [],
+  );
 
   const personalSteps = [
     {
@@ -97,6 +113,13 @@ export function InviteWizard({
     setStepIndex(index);
     window.scrollTo({ top: 0 });
   };
+
+  /** Run the step's own save, if it has one, then advance. */
+  async function advance() {
+    const run = continueRef.current;
+    if (run && !(await run())) return;
+    goToStep(stepIndex + 1);
+  }
 
   /** Set the password, adopt the session, and either finish or carry on. */
   async function handlePassword(password: string) {
@@ -260,22 +283,24 @@ export function InviteWizard({
 
       {!inPersonalPhase && setupStep && (
         <div className="space-y-4">
-          <AgencySetupStepContent
-            id={setupStep.id}
-            agencyName={preview.agencyName}
-          />
+          <AgencySetupStepHost value={stepControls}>
+            <AgencySetupStepContent
+              id={setupStep.id}
+              agencyName={preview.agencyName}
+            />
+          </AgencySetupStepHost>
 
           <FormError>{submitError}</FormError>
 
           <WizardFooter
             onBack={() => goToStep(stepIndex - 1)}
-            disabled={finishing}
+            disabled={finishing || stepBusy}
             secondary={
               setupStep.skippable ? (
                 <Button
                   type="button"
                   variant="ghost"
-                  disabled={finishing}
+                  disabled={finishing || stepBusy}
                   onClick={() => {
                     const flag = SKIP_FLAG_BY_STEP[setupStep.id];
                     if (flag) {
@@ -292,13 +317,13 @@ export function InviteWizard({
             <Button
               type="button"
               variant="brand"
-              disabled={finishing}
+              disabled={finishing || stepBusy}
               className="active:scale-95"
               onClick={() => {
                 if (setupStep.id === "finish") {
                   void finish(skips);
                 } else {
-                  goToStep(stepIndex + 1);
+                  void advance();
                 }
               }}
             >

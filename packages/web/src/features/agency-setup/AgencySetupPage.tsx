@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { StepProgress } from "@/components/common/StepProgress";
@@ -17,7 +17,9 @@ import {
 import {
   AGENCY_SETUP_STEPS,
   AgencySetupStepContent,
+  AgencySetupStepHost,
   SKIP_FLAG_BY_STEP,
+  type StepContinueHandler,
 } from "./AgencySetupSteps";
 
 /**
@@ -42,6 +44,19 @@ export default function AgencySetupPage() {
   const [error, setError] = useState<string | null>(null);
   // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
   const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
+  // The current step's Continue handler and whether it is mid-save
+  // (`useStepContinue`); only the holiday step writes on Continue.
+  const continueRef = useRef<StepContinueHandler | null>(null);
+  const [stepBusy, setStepBusy] = useState(false);
+  const stepControls = useMemo(
+    () => ({
+      register: (handler: StepContinueHandler | null) => {
+        continueRef.current = handler;
+      },
+      setBusy: setStepBusy,
+    }),
+    [],
+  );
 
   const setupQuery = useQuery({
     queryKey: ["agency-setup"],
@@ -73,6 +88,13 @@ export default function AgencySetupPage() {
     setStepIndex(index);
     window.scrollTo({ top: 0 });
   };
+
+  /** Run the step's own save, if it has one, then advance. */
+  async function advance() {
+    const run = continueRef.current;
+    if (run && !(await run())) return;
+    goToStep(stepIndex + 1);
+  }
 
   async function finish(input: CompleteAgencySetupInput) {
     setFinishing(true);
@@ -110,8 +132,8 @@ export default function AgencySetupPage() {
           {agencyName} is already set up
         </h1>
         <p className="text-sm text-muted-foreground">
-          Your branding, email, calendar and leave policies live under
-          Settings, and can be changed whenever you like.
+          Your branding, email, time zone and holidays live under Settings,
+          and can be changed whenever you like.
         </p>
         <Button variant="brand" onClick={() => navigate("/", { replace: true })}>
           Go to my dashboard
@@ -127,7 +149,7 @@ export default function AgencySetupPage() {
           Welcome to {agencyName}
         </h1>
         <p className="text-sm text-muted-foreground">
-          A couple of things to make the app yours. You can skip any of them.
+          A few things to make the app yours. Most of them can be skipped.
         </p>
       </div>
 
@@ -139,19 +161,21 @@ export default function AgencySetupPage() {
         sticky={false}
       />
 
-      <AgencySetupStepContent id={step.id} agencyName={agencyName} />
+      <AgencySetupStepHost value={stepControls}>
+        <AgencySetupStepContent id={step.id} agencyName={agencyName} />
+      </AgencySetupStepHost>
 
       <FormError>{error}</FormError>
 
       <WizardFooter
         onBack={stepIndex > 0 ? () => goToStep(stepIndex - 1) : undefined}
-        disabled={finishing}
+        disabled={finishing || stepBusy}
         secondary={
           step.skippable ? (
             <Button
               type="button"
               variant="ghost"
-              disabled={finishing}
+              disabled={finishing || stepBusy}
               onClick={() => {
                 const flag = SKIP_FLAG_BY_STEP[step.id];
                 if (flag) setSkips((current) => ({ ...current, [flag]: true }));
@@ -166,13 +190,13 @@ export default function AgencySetupPage() {
         <Button
           type="button"
           variant="brand"
-          disabled={finishing}
+          disabled={finishing || stepBusy}
           className="active:scale-95"
           onClick={() => {
             if (step.id === "finish") {
               void finish(skips);
             } else {
-              goToStep(stepIndex + 1);
+              void advance();
             }
           }}
         >
