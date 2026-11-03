@@ -1,0 +1,69 @@
+meta {
+  name: Add Calendar Days (Custom range)
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/hr/calendar/days
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "source": "import",
+    "days": [
+      { "date": "2031-12-29", "kind": "holiday", "label": "Winter closure" },
+      { "date": "2031-12-30", "kind": "holiday", "label": "Winter closure" },
+      { "date": "2031-12-31", "kind": "holiday", "label": "Winter closure" },
+      { "date": "2032-01-01", "kind": "holiday", "label": "Winter closure" },
+      { "date": "2032-01-02", "kind": "holiday", "label": "Winter closure" }
+    ]
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("writes one row per working day, across the year boundary", function () {
+    const days = res.getBody().days;
+    expect(days.map((d) => d.date)).to.deep.equal([
+      "2031-12-29", "2031-12-30", "2031-12-31", "2032-01-01", "2032-01-02",
+    ]);
+    expect(days.every((d) => d.label === "Winter closure")).to.equal(true);
+    expect(days.every((d) => d.source === "import")).to.equal(true);
+  });
+}
+
+docs {
+  # POST /hr/calendar/days — a custom holiday range, as the web sends it (PAC-161 v2)
+
+  - **Module:** `hr` · **Permission:** `agency:hr:admin`
+
+  The holiday picker's "Custom holidays" section takes a name, a start and an
+  end date. The API has no range shape: the **client** expands the range to
+  one `holiday` row per day of the agency workweek (`expandHolidayRange` in
+  `@sfa/shared`) and sends the rows in the same batch as the ticked
+  suggestions, under the batch's `source` (`onboarding` from the setup step,
+  `import` from the settings dialog). This body is "Winter closure,
+  Dec 27 2031 – Jan 2 2032" on a Mon–Fri workweek: Dec 27–28 (a weekend) are
+  skipped, the five weekdays are sent.
+
+  Rules the client enforces before sending: end ≥ start, at most 60 days, the
+  range starts in the shown year (it may run into the next one — a Christmas
+  closure does), and no day collides with a ticked suggestion or a row
+  already on the calendar (the API would answer `409` for the latter).
+
+  ⚠ Re-running this request against the same database is a `409`: the dates
+  are already active. Remove them through **Remove Calendar Day** or pick
+  another year.
+
+  ## Response `201` — `{ "days": [AgencyCalendarDayView…] }`, sorted by date.
+}

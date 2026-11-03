@@ -63,6 +63,12 @@ docs {
   A `manual` batch needs a `reason` on every row (the audit trail for a hand
   change); `import` / `onboarding` rows carry none. 1–400 rows.
 
+  A **custom holiday range** ("Winter closure, Dec 24 – Jan 2") is not a
+  body shape of its own: the web expands it client-side to one `holiday` row
+  per agency-workweek day (`expandHolidayRange` in `@sfa/shared`, ≤ 60 days,
+  may cross the year) and sends them in the same batch as the ticked
+  suggestions — see **Add Calendar Days (Custom range)**.
+
   ## Semantics
   - One **active** row per date. A date already on the calendar is a `409`
     naming every clashing date, and **nothing from the batch is written**.

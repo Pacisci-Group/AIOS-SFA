@@ -25,13 +25,29 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("pre-checks public holidays only", function () {
+  test("groups federal / other and pre-checks the federal set", function () {
     const s = res.getBody().suggestions;
     const thanksgiving = s.find((h) => h.date === "2026-11-26");
-    expect(thanksgiving.type).to.equal("public");
+    expect(thanksgiving.group).to.equal("federal");
     expect(thanksgiving.preChecked).to.equal(true);
+    // Illinois' own public day is offered, unchecked.
+    const pulaski = s.find((h) => h.name === "Casimir Pulaski Day");
+    expect(pulaski.group).to.equal("other");
+    expect(pulaski.preChecked).to.equal(false);
     const valentines = s.find((h) => h.date === "2026-02-14");
+    expect(valentines.group).to.equal("other");
     expect(valentines.preChecked).to.equal(false);
+  });
+
+  test("lists the weekend original of a substitute pair unchecked", function () {
+    const s = res.getBody().suggestions;
+    expect(s.find((h) => h.date === "2026-07-03").preChecked).to.equal(true);
+    expect(s.find((h) => h.date === "2026-07-04").preChecked).to.equal(false);
+  });
+
+  test("emits one row per date", function () {
+    const dates = res.getBody().suggestions.map((h) => h.date);
+    expect(new Set(dates).size).to.equal(dates.length);
   });
 }
 
@@ -42,11 +58,23 @@ docs {
   - Query: `country` (required), `region` (optional), `year` (2000–2100).
 
   Runs the `date-holidays` package server-side — never in the browser — and
-  returns every holiday it knows for the year as the calendar would store it.
-  `public` holidays come `preChecked: true`; `bank` / `school` / `optional` /
-  `observance` unchecked. `substitute: true` marks the Friday or Monday the
-  office actually closes for a weekend holiday. `alreadyInCalendar` flags a
-  date an active row already holds, so the dialog can disable it.
+  returns one row per **date** the package knows a holiday for, as the
+  calendar would store it.
+
+  `group` is `federal` (the country's own public holidays — the `public` rows
+  of the region-less instance, which keep their federal label even where the
+  state renames them) or `other` (the state's own public days, observances,
+  optional and bank days). The two instances are merged **by date**, federal
+  winning — a state that adds a holiday on a federal date (Texas' "Christmas
+  Eve" in a year whose Christmas substitute falls on 12-24) yields one row.
+
+  `preChecked` is the federal set, except the weekend original of a
+  substitute pair: when the Fourth of July is a Saturday, the Friday
+  substitute is checked and the Saturday is listed unchecked. `substitute:
+  true` marks the Friday or Monday the office actually closes for a weekend
+  holiday; `type` is the package's own vocabulary for the sub-label.
+  `alreadyInCalendar` flags a date an active row already holds, so the
+  picker can disable it.
 
   **Nothing is written.** Saving is `POST /hr/calendar/days` with
   `source: "import"` and the ticked rows.
@@ -55,7 +83,9 @@ docs {
   ```json
   { "country": "US", "region": "IL", "year": 2026,
     "suggestions": [{ "date": "2026-07-03", "name": "Independence Day (substitute day)", "type": "public",
-                      "substitute": true, "preChecked": true, "alreadyInCalendar": false }, …] }
+                      "substitute": true, "group": "federal", "preChecked": true, "alreadyInCalendar": false },
+                    { "date": "2026-03-02", "name": "Casimir Pulaski Day", "type": "public",
+                      "substitute": false, "group": "other", "preChecked": false, "alreadyInCalendar": false }, …] }
   ```
   ## Errors
   - `400` — unknown country or region, or a year out of range.

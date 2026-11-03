@@ -118,6 +118,17 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
+| HR | Login as Manager | `POST /auth/login` | **PAC-161** — the Branch Manager is the Office Manager and holds `agency:hr:admin` by template + migration; the folder asserts the four HR permissions and captures `hrAdminAccessToken`. |
+| HR | Get Calendar | `GET /hr/calendar` | **PAC-161** — the agency calendar for a year: workweek, country/region, active rows, working days per month, any pending Q4 proposal. `hr:read` (every employee). |
+| HR | Update Calendar | `PATCH /hr/calendar` | **PAC-161** — workweek and where the agency is (`date-holidays` codes, upper-cased). `agency:hr:admin`. |
+| HR | Update Calendar (as Producer, 403) | `PATCH /hr/calendar` | **PAC-161** — a producer may read the calendar but never change it. |
+| HR | Get Holiday Regions | `GET /hr/calendar/holiday-regions` | **PAC-161** — the countries the package knows, and the regions of one. |
+| HR | Get Holiday Suggestions | `GET /hr/calendar/holiday-suggestions` | **PAC-161 v2** — one row per date, `group` of `federal` or `other` merged from two `date-holidays` instances (the federal label wins), `preChecked` on the federal set minus the weekend original of a substitute pair. Nothing is written. |
+| HR | Add Calendar Days | `POST /hr/calendar/days` | **PAC-161** — a `manual` closure with its reason; captures `hrCalendarDayId`. ⚠ `409` on a re-run against a database that already holds the date. |
+| HR | Add Calendar Days (Custom range) | `POST /hr/calendar/days` | **PAC-161 v2** — a custom holiday range as the web sends it: expanded client-side to one `holiday` row per workweek day, across the year boundary. Same re-run caveat. |
+| HR | Add Calendar Days (Duplicate, 409) | `POST /hr/calendar/days` | **PAC-161** — a date already active is a `409` naming it; nothing from the batch is written. |
+| HR | Remove Calendar Day | `DELETE /hr/calendar/days/:id` | **PAC-161** — soft-removes with a reason (`removedAt`), freeing the date. |
+| HR | Confirm Holiday Proposal (None, 404) | `POST /hr/calendar/proposals/:year/confirm` | **PAC-161** — a year with no Q4 proposal is a `404`. Confirming writes the chosen subset as `proposal` rows. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
 | Platform Agencies | Login as Super Admin | `POST /auth/login` | **PAC-69** — the platform operator. Each folder is self-contained, so this is duplicated rather than shared with **Platform Mailers**. |
 | Platform Agencies | Check Availability | `GET /platform/agencies/availability` | **PAC-69** — live slug/email/ticker checks for the onboarding wizard. `platform:agencies:read`. Mints the timestamped identity the rest of the folder uses. |
