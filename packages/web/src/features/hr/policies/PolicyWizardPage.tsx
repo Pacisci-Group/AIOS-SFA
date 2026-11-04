@@ -1,15 +1,18 @@
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   DEFAULT_WORK_WEEK_DAYS,
   FEDERAL_HOLIDAY_KEYS,
   POLICY_NAME_MAX_LENGTH,
-  type CreatablePolicyType,
+  SUGGESTED_TIME_OFF_POLICIES,
+  TIME_OFF_TYPE_KEYS,
   type CustomHoliday,
   type HolidayKey,
   type HrPolicyView,
+  type MemberListPolicyType,
+  type TimeOffTypeKey,
   type WorkWeekDay,
 } from "@sfa/shared";
 import { FormError } from "@/components/form";
@@ -18,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ApiError } from "@/lib/api-client";
 import {
   createHrPolicy,
@@ -33,7 +35,11 @@ import {
 } from "./HolidaySteps";
 import { PeopleStep } from "./PeopleStep";
 import { PolicyStepBar } from "./PolicyStepBar";
+import { PolicyWizardShell } from "./PolicyWizardShell";
 import { POLICY_TYPE_META } from "./policy-display";
+import { TimeOffPolicyPage } from "./time-off/TimeOffPolicyPage";
+import { TimeOffTypePicker } from "./time-off/TimeOffTypePicker";
+import { TimeOffWizard } from "./time-off/TimeOffWizard";
 import { WorkWeekSchedule, workWeekError } from "./WorkWeekStep";
 
 /** Everything the wizard edits, whichever type it is. */
@@ -47,7 +53,7 @@ interface Draft {
 
 type StepId = "federal" | "custom" | "schedule" | "people";
 
-const STEPS: Record<CreatablePolicyType, { id: StepId; label: string }[]> = {
+const STEPS: Record<MemberListPolicyType, { id: StepId; label: string }[]> = {
   holiday: [
     { id: "federal", label: "Select federal holidays" },
     { id: "custom", label: "Add custom holidays" },
@@ -59,12 +65,19 @@ const STEPS: Record<CreatablePolicyType, { id: StepId; label: string }[]> = {
   ],
 };
 
-const SLUG_TO_TYPE: Record<string, CreatablePolicyType> = {
+const SLUG_TO_TYPE: Record<string, MemberListPolicyType> = {
   holiday: "holiday",
   "work-week": "work_week",
 };
 
-function newDraft(type: CreatablePolicyType): Draft {
+/** `/settings/hr-policies/new/time-off` — the third type has its own wizard. */
+const TIME_OFF_SLUG = "time-off";
+
+function isTimeOffType(value: string | null): value is TimeOffTypeKey {
+  return (TIME_OFF_TYPE_KEYS as readonly string[]).includes(value ?? "");
+}
+
+function newDraft(type: MemberListPolicyType): Draft {
   return {
     name: type === "holiday" ? "Paid holidays" : "Standard work week",
     // A new holiday policy starts with the federal list ticked.
@@ -86,16 +99,20 @@ function draftFrom(policy: HrPolicyView): Draft {
 }
 
 /**
- * Create a Holiday or Work week policy at `/settings/hr-policies/new/:type`, or
- * edit one at `/settings/hr-policies/:policyId` (PAC-161 v3).
+ * Create a policy at `/settings/hr-policies/new/:type`, or open one at
+ * `/settings/hr-policies/:policyId` (PAC-161 v3, PAC-174).
  *
- * Stepped the way Gusto does it — a bar per step, the rules first and the
- * people last — and nothing is written until the last step's Save. Editing
- * opens the same steps with every one reachable from the bar, and Save on
- * any of them.
+ * Holiday and Work week: stepped the way Gusto does it — a bar per step, the
+ * rules first and the people last — and nothing is written until the last
+ * step's Save; editing opens the same steps with every one reachable from
+ * the bar. Time off (`new/time-off`): the type picker, then its own
+ * five-step TanStack Form wizard (`?type=` picks the kind, `&preset=1`
+ * pre-fills a suggested policy); an activated one opens on its policy page
+ * with per-section drawers rather than the wizard.
  */
 export default function PolicyWizardPage() {
   const { typeSlug, policyId } = useParams();
+  const [params] = useSearchParams();
   const createType = typeSlug ? SLUG_TO_TYPE[typeSlug] : undefined;
 
   const existing = useQuery({
@@ -118,6 +135,9 @@ export default function PolicyWizardPage() {
       );
     }
     const policy = existing.data;
+    if (policy.type === "time_off") {
+      return <TimeOffPolicyPage key={policy.id} policy={policy} />;
+    }
     return (
       <Wizard
         key={policy.id}
@@ -126,6 +146,15 @@ export default function PolicyWizardPage() {
         initial={draftFrom(policy)}
       />
     );
+  }
+
+  if (typeSlug === TIME_OFF_SLUG) {
+    const type = params.get("type");
+    if (!isTimeOffType(type)) return <TimeOffTypePicker />;
+    const preset = params.get("preset")
+      ? (SUGGESTED_TIME_OFF_POLICIES.find((s) => s.key === type) ?? null)
+      : null;
+    return <TimeOffWizard key={`${type}-${preset ? "preset" : "blank"}`} type={type} preset={preset} />;
   }
 
   if (!createType) {
@@ -143,35 +172,16 @@ function Shell({
   editing,
   children,
 }: {
-  type: CreatablePolicyType | null;
+  type: MemberListPolicyType | null;
   editing: boolean;
   children: React.ReactNode;
 }) {
-  const meta = type ? POLICY_TYPE_META[type] : null;
-  const noun = meta ? meta.singular : "policy";
+  const noun = type ? POLICY_TYPE_META[type].singular : "policy";
   const title = `${editing ? "Edit" : "Create"} ${noun}`;
   return (
-    <SettingsPage
-      title={title.charAt(0).toUpperCase() + title.slice(1)}
-      caption="HR policies"
-      icon={meta?.icon ?? POLICY_TYPE_META.holiday.icon}
-      backTo={type ? `/settings/hr-policies?type=${type}` : "/settings/hr-policies"}
-    >
-      <div className="space-y-6">
-        <nav aria-label="Breadcrumb" className="text-sm text-muted-foreground">
-          <Link to="/settings/hr-policies" className="text-primary underline-offset-4 hover:underline">
-            HR policies
-          </Link>
-          {meta && (
-            <>
-              {" / "}
-              <span className="capitalize">{meta.singular}</span>
-            </>
-          )}
-        </nav>
-        {children}
-      </div>
-    </SettingsPage>
+    <PolicyWizardShell type={type} title={title.charAt(0).toUpperCase() + title.slice(1)}>
+      {children}
+    </PolicyWizardShell>
   );
 }
 
@@ -180,7 +190,7 @@ function Wizard({
   policyId,
   initial,
 }: {
-  type: CreatablePolicyType;
+  type: MemberListPolicyType;
   policyId: string | null;
   initial: Draft;
 }) {

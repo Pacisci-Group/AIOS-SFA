@@ -8,6 +8,9 @@ import {
   DEFAULT_DEAL_AUDIT_STATUS,
   DEFAULT_WORK_WEEK_DAYS,
   FEDERAL_HOLIDAY_KEYS,
+  defaultStartingBalance,
+  defaultTimeOffPolicyRules,
+  type TimeOffPolicyRules,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
   type StoredAddress,
@@ -35,6 +38,10 @@ import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
 import { HolidayPolicy } from '../../hr/schemas/holiday-policy.schema';
 import { WorkWeekPolicy } from '../../hr/schemas/work-week-policy.schema';
+import { TimeOffPolicy } from '../../hr/schemas/time-off-policy.schema';
+import { LeaveLedger } from '../../hr/schemas/leave-ledger.schema';
+import { businessDateInstant } from '../../common/dates/business-dates';
+import { agencyTodayIso } from '../../performance/performance.range';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
@@ -256,6 +263,10 @@ export class DemoSeedService {
     private readonly holidayPolicyModel: Model<HolidayPolicy>,
     @InjectModel(WorkWeekPolicy.name)
     private readonly workWeekPolicyModel: Model<WorkWeekPolicy>,
+    @InjectModel(TimeOffPolicy.name)
+    private readonly timeOffPolicyModel: Model<TimeOffPolicy>,
+    @InjectModel(LeaveLedger.name)
+    private readonly leaveLedgerModel: Model<LeaveLedger>,
     @InjectModel(InterestedParty.name)
     private readonly interestedPartyModel: Model<InterestedParty>,
     @InjectModel(PriorInsurance.name)
@@ -1251,13 +1262,17 @@ export class DemoSeedService {
    * untrustworthy.
    */
   /**
-   * A Holiday and a Work week policy with the whole demo team enrolled
-   * (PAC-161 v3), so Settings → HR policies has something to show. Keyed on
-   * `{ agencyId, name }` in each collection: a reseed refreshes the members
-   * and leaves rules a demo user has edited alone.
+   * A Holiday, a Work week and two Time off policies with the whole demo
+   * team enrolled (PAC-161 v3, PAC-174), so Settings → HR policies has
+   * something to show. Keyed on `{ agencyId, name }` in each collection: a
+   * reseed refreshes the members and leaves rules a demo user has edited
+   * alone. The time off policies post one starting-balance row per person
+   * who has none yet, as activation would — the migrated agency gets no
+   * policies at all (decided 2026-11-04); this is the throwaway tenant.
    */
   private async seedHrPolicies(ctx: Ctx, team: TeamMember[]): Promise<void> {
     const memberIds = team.map((member) => member.userId);
+    await this.seedTimeOffPolicies(ctx, memberIds);
     await this.holidayPolicyModel.updateOne(
       { agencyId: ctx.agencyId, name: 'Paid holidays', archivedAt: null },
       {
@@ -1277,6 +1292,77 @@ export class DemoSeedService {
       },
       { upsert: true },
     );
+  }
+
+  private async seedTimeOffPolicies(
+    ctx: Ctx,
+    memberIds: Types.ObjectId[],
+  ): Promise<void> {
+    const policies: { name: string; rules: TimeOffPolicyRules }[] = [
+      {
+        name: 'Paid time off',
+        rules: {
+          ...defaultTimeOffPolicyRules('pto'),
+          description: 'Vacation and personal days.',
+          hoursPerYear: 80,
+          maxBalanceHours: 120,
+          carryoverCapHours: 40,
+          waitingPeriodDays: 30,
+          autoApprove: {
+            enabled: true,
+            maxCalendarDays: 3,
+            minNoticeHours: 48,
+          },
+        },
+      },
+      {
+        name: 'Sick leave',
+        rules: {
+          ...defaultTimeOffPolicyRules('sick'),
+          hoursPerYear: 40,
+          accrualFrequency: 'monthly',
+          annualUsageCapHours: 40,
+        },
+      },
+    ];
+    const effectiveAt = businessDateInstant(
+      agencyTodayIso(ctx.timeZone),
+      ctx.timeZone,
+    );
+    for (const { name, rules } of policies) {
+      const policy = await this.timeOffPolicyModel
+        .findOneAndUpdate(
+          { agencyId: ctx.agencyId, name, archivedAt: null },
+          { $set: { memberIds }, $setOnInsert: rules },
+          { upsert: true, new: true },
+        )
+        .select('_id')
+        .lean<{ _id: Types.ObjectId }>();
+      if (!policy) continue;
+      const enrolled = new Set(
+        (
+          await this.leaveLedgerModel.distinct('userId', {
+            policyId: policy._id,
+          })
+        ).map((id) => id.toString()),
+      );
+      const hours = defaultStartingBalance(rules) ?? 0;
+      const rows = memberIds
+        .filter((userId) => !enrolled.has(userId.toString()))
+        .map((userId) => ({
+          agencyId: ctx.agencyId,
+          policyId: policy._id,
+          userId,
+          kind: 'allocation' as const,
+          hours,
+          effectiveAt,
+          periodKey: null,
+          reason: null,
+          source: { kind: 'activation' as const, id: policy._id },
+          reversesId: null,
+        }));
+      if (rows.length) await this.leaveLedgerModel.insertMany(rows);
+    }
   }
 
   private async seedDealAuditItems(

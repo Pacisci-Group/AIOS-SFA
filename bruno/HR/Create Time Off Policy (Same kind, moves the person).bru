@@ -1,0 +1,75 @@
+meta {
+  name: Create Time Off Policy (Same kind, moves the person)
+  type: http
+  seq: 19
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{hrSecondTimeOffPolicyName}}",
+    "timeOff": {
+      "timeOffType": "pto",
+      "description": "Vacation and personal days.",
+      "compensation": "paid",
+      "accrualType": "fixed_amount",
+      "hoursPerYear": 80,
+      "accrualFrequency": "yearly",
+      "resetDateKind": "fixed",
+      "resetMonthDay": "01-01",
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": 120,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": 40,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": 30,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": true,
+      "autoApprove": { "enabled": true, "maxCalendarDays": 3, "minNoticeHours": 48 }
+    },
+    "memberIds": ["{{hrPersonId}}"]
+  }
+}
+
+script:pre-request {
+  bru.setVar("hrSecondTimeOffPolicyName", `Bruno managers PTO ${Date.now()}`);
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrSecondTimeOffPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("enrols the person with the yearly default as their balance", function () {
+    const body = res.getBody();
+    expect(body.memberCount).to.equal(1);
+    expect(body.members[0].balanceHours).to.equal(80);
+  });
+}
+
+docs {
+  # POST /hr/policies — a second PTO policy moves the person (PAC-174)
+
+  One policy per `timeOffType` per person: enrolling someone here takes them
+  out of the first run's PTO policy (a `removed_from_policy` row there; their
+  balance there resumes if they ever come back). The next request shows the
+  first policy empty.
+}

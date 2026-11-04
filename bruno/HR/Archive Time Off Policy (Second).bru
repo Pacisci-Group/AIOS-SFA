@@ -1,0 +1,27 @@
+meta {
+  name: Archive Time Off Policy (Second)
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{hrSecondTimeOffPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — tidy up the run's second PTO policy (PAC-174)
+
+  Soft archive: the row, its ledger and history stay. A time off policy with
+  a request still `Submitted` against it is a `409` — decide it first.
+}

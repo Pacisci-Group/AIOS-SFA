@@ -1,0 +1,53 @@
+meta {
+  name: Update Time Off Policy (Enrol with balance)
+  type: http
+  seq: 17
+}
+
+patch {
+  url: {{baseUrl}}/hr/policies/{{hrTimeOffPolicyId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "timeOff": { "hoursPerYear": 96, "carryoverCapHours": 0 },
+    "memberIds": ["{{hrPersonId}}"],
+    "startingBalanceHours": { "{{hrPersonId}}": 12.5 }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("edits the rules and posts the starting balance", function () {
+    const body = res.getBody();
+    expect(body.timeOff.hoursPerYear).to.equal(96);
+    expect(body.timeOff.carryoverCapHours).to.equal(0);
+    expect(body.memberCount).to.equal(1);
+    expect(body.members[0].id).to.equal(bru.getVar("hrPersonId"));
+    expect(body.members[0].balanceHours).to.equal(12.5);
+  });
+}
+
+docs {
+  # PATCH /hr/policies/:policyId — edit a Time off policy's rules and people (PAC-174)
+
+  Module `hr`, permission `agency:hr:admin`. `timeOff` is a **partial** rule
+  set merged over the stored one and validated whole; `compensation` and
+  `accrualType` may be sent but must equal the stored value (locked). `memberIds`
+  replaces the list: people added get an `allocation` row — `startingBalanceHours`
+  or the default — unless they were in this policy before, in which case their
+  balance resumes and a balance for them is a `400`; people removed get a
+  `removed_from_policy` row; people added leave their other policy of the kind.
+
+  `400` locked field, rule violation, wrong type; `404` archived/unknown;
+  `409` name taken.
+}

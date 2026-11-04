@@ -13,6 +13,14 @@ auth:bearer {
   token: {{hrAdminAccessToken}}
 }
 
+script:post-response {
+  // The time off requests enrol the first active person.
+  if (res.getStatus() === 200) {
+    const active = res.getBody().people.find((p) => p.status === "active");
+    if (active) bru.setVar("hrPersonId", active.id);
+  }
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);
@@ -22,7 +30,7 @@ tests {
     const people = res.getBody().people;
     expect(people).to.be.an("array").that.is.not.empty;
     const person = people[0];
-    expect(person).to.have.keys(["id", "name", "email", "branchName", "status", "policies"]);
+    expect(person).to.have.keys(["id", "name", "email", "branchName", "status", "policies", "timeOffPolicies"]);
     expect(["active", "invited"]).to.include(person.status);
   });
 }
@@ -40,10 +48,14 @@ docs {
       "id": "…", "name": "Pat Producer", "email": "producer@demoagency.local",
       "branchName": "Main", "status": "active",
       "policies": { "holiday": { "id": "…", "name": "Paid holidays" },
-                    "work_week": { "id": "…", "name": "Standard week" } }
+                    "work_week": { "id": "…", "name": "Standard week" } },
+      "timeOffPolicies": { "pto": { "id": "…", "name": "Paid time off" },
+                           "sick": { "id": "…", "name": "Sick leave" } }
   }] }
   ```
 
-  `policies` names the person's current policy of each single-enrolment type
-  (absent key = none). The wizard uses it to say "Moves from Paid holidays".
+  `policies` names the person's current Holiday and Work week policy,
+  `timeOffPolicies` their current time off policy per kind (PAC-174; Custom
+  is never listed — it moves nobody). Absent key = none. The wizard uses them
+  to say "Moves from Paid holidays".
 }
