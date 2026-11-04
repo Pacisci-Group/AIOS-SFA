@@ -1,0 +1,119 @@
+meta {
+  name: Create Time Off Policy
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{hrTimeOffPolicyName}}",
+    "timeOff": {
+      "timeOffType": "pto",
+      "description": "Vacation and personal days.",
+      "compensation": "paid",
+      "accrualType": "fixed_amount",
+      "hoursPerYear": 80,
+      "accrualFrequency": "yearly",
+      "resetDateKind": "fixed",
+      "resetMonthDay": "01-01",
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": 120,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": 40,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": 30,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": true,
+      "autoApprove": { "enabled": true, "maxCalendarDays": 3, "minNoticeHours": 48 }
+    },
+    "memberIds": []
+  }
+}
+
+script:pre-request {
+  // Unique per run: a name is unique per type among active policies.
+  bru.setVar("hrTimeOffPolicyName", `Bruno PTO ${Date.now()}`);
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrTimeOffPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("echoes the rules, reserved fields null", function () {
+    const body = res.getBody();
+    expect(body.type).to.equal("time_off");
+    expect(body.timeOff.timeOffType).to.equal("pto");
+    expect(body.timeOff.hoursPerYear).to.equal(80);
+    expect(body.timeOff.accrualFrequency).to.equal("yearly");
+    expect(body.timeOff.resetMonthDay).to.equal("01-01");
+    expect(body.timeOff.accrualRate).to.equal(null);
+    expect(body.timeOff.autoApprove).to.eql({ enabled: true, maxCalendarDays: 3, minNoticeHours: 48 });
+    expect(body.memberCount).to.equal(0);
+  });
+}
+
+docs {
+  # POST /hr/policies — create (activate) a Time off policy (PAC-174)
+
+  Module `hr`, permission `agency:hr:admin`, agency-wide.
+
+  A time off policy is **one kind of time off** with an accrual model and the
+  people enrolled. There is no draft: `POST` activates it, and the starting
+  balances are posted to `leaveLedger` at once, dated today on the agency's
+  calendar.
+
+  Body (`type: "time_off"`):
+  - `name` — 1–80, unique per type among active policies (case-insensitive).
+  - `timeOff` — every field of `TimeOffPolicyRules` (`@sfa/shared`):
+    - `timeOffType` — `pto` | `sick` | `unpaid` | `bereavement` | `custom`.
+      One policy per kind per person; **Custom is exempt**.
+    - `description` — ≤ 500 or `null`.
+    - `compensation` — `paid` | `unpaid`; **`unpaid` kind must be `unpaid`**
+      (`400`), the rest default paid. **Locked after creation.**
+    - `accrualType` — `fixed_amount` | `unlimited` (`hours_worked` is reserved:
+      `400` "not available yet"). **Unlimited is locked after creation** and
+      nulls every accrual field.
+    - `hoursPerYear` (> 0 on a fixed amount), `accrualFrequency` — `yearly` |
+      `monthly` (`per_pay_period` reserved, `400`), `resetDateKind` —
+      `hire_anniversary` | `fixed`, `resetMonthDay` — `MM-DD` with `fixed`.
+    - `maxBalanceHours`, `carryoverCapHours` (`0` = none, `null` = all; dropped
+      on anniversary + yearly), `annualUsageCapHours` (Sick only; dropped
+      otherwise), `waitingPeriodDays` (usage; calendar days after hire).
+    - `accrualRate`, `accrualRateUnit`, `maxAccruedPerYearHours`,
+      `accrualWaitingPeriodDays` — reserved, must be `null`.
+    - `allowNegativeBalance`, `payOutOnTermination` (stored only, PAC-123).
+    - `autoApprove` — `{ enabled, maxCalendarDays, minNoticeHours }`; on needs
+      at least one rule.
+  - `memberIds[]` — users of this agency. **Enrolling someone moves them** out
+    of any other active policy of the same `timeOffType` (a
+    `removed_from_policy` ledger row is written there).
+  - `startingBalanceHours` — `{ "<userId>": hours }`, optional, keys must be
+    in `memberIds`. Default: the yearly total on a Yearly policy, else `0`;
+    nothing at all on Unlimited.
+
+  Response `201`: the policy view — `id, type, name, timeOff, memberCount,
+  members[] (each with balanceHours, null on Unlimited), createdAt, updatedAt`.
+
+  Errors: `400` rule violations, reserved values, unknown people, a balance
+  for someone not enrolled; `409` name taken; `403` without `agency:hr:admin`.
+}

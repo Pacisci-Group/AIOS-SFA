@@ -1,0 +1,57 @@
+meta {
+  name: Create Time Off Policy (Paid Unpaid Time Off, 400)
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "Bruno paid unpaid",
+    "timeOff": {
+      "timeOffType": "unpaid",
+      "description": "Vacation and personal days.",
+      "compensation": "paid",
+      "accrualType": "fixed_amount",
+      "hoursPerYear": 80,
+      "accrualFrequency": "yearly",
+      "resetDateKind": "fixed",
+      "resetMonthDay": "01-01",
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": 120,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": 40,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": 30,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": true,
+      "autoApprove": { "enabled": true, "maxCalendarDays": 3, "minNoticeHours": 48 }
+    },
+    "memberIds": []
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /hr/policies — Unpaid Time Off cannot be paid (PAC-174)
+
+  The `unpaid` kind is unpaid by definition; sending `compensation: "paid"`
+  is a `400` rather than a silent correction.
+}

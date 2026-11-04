@@ -1,0 +1,58 @@
+meta {
+  name: Create Time Off Policy (Reserved accrual type, 400)
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "Bruno hours worked",
+    "timeOff": {
+      "timeOffType": "pto",
+      "description": "Vacation and personal days.",
+      "compensation": "paid",
+      "accrualType": "hours_worked",
+      "hoursPerYear": 80,
+      "accrualFrequency": "yearly",
+      "resetDateKind": "fixed",
+      "resetMonthDay": "01-01",
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": 120,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": 40,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": 30,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": true,
+      "autoApprove": { "enabled": true, "maxCalendarDays": 3, "minNoticeHours": 48 }
+    },
+    "memberIds": []
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /hr/policies — a reserved accrual value is refused (PAC-174)
+
+  `hours_worked` (PAC-167) and `per_pay_period` (PAC-123) are in the enums
+  so offering them later needs no migration, but the DTO refuses them until
+  then: `400` "That option is not available yet."
+}
