@@ -627,3 +627,51 @@ policy → nothing.
 - TanStack array fields ignore `form.reset`; the balances are an object
   keyed by user id, and the drawer forms remount by `key`.
 - `gh` needs the sandbox off (TLS); `git` chained commands too.
+
+## As built (2026-11-04, branch `asad/pac-174-time-off-policies`)
+
+Seven commits over `asad/pac-161-agency-holiday-calendar` in the order of
+§4, each green on its own.
+
+| Topic | Plan | Built | Why |
+|---|---|---|---|
+| Cross-field validation (§2.4) | `api/common/time-off/time-off-policy.validate.ts` | `timeOffPolicyRulesError` + `normalizeTimeOffPolicyRules` in **shared** (`time-off-policy.ts`); the API's DTO and the web form's `superRefine` call the same function | One rule set for both sides; the API keeps only the lock comparison in the service |
+| Hire date seam (§2.10) | `hire-dates.ts` function | `HireDatesService` (injectable, returns null for everyone) | PAC-162 will need a model behind it; DI from the start |
+| Anniversary + yearly + carryover (§5) | `400` | **Normalised to null** (as `resetMonthDay` on a non-fixed reset and the usage cap on a non-Sick kind) | The UI hides the field; a stale value should not fail the save. A paid Unpaid Time Off and a reserved value are still `400`s |
+| Reset rows (§2.10) | expiration/carryover pair every time | As planned; `reason: 'carryover_cap'` on both rows when hours were lost | — |
+| `people()` shape (§2.8) | `policies.timeOff` map | A sibling `timeOffPolicies: Partial<Record<TimeOffTypeKey, PolicyRef>>` on `PolicyPersonView`; `policies` keeps the Holiday / Work week keys | `PeopleStep` indexes `policies[type]`; nesting a different key shape inside it would have cost a cast |
+| `CREATABLE_POLICY_TYPES` | gains `time_off` | Aliased to `HR_POLICY_TYPES`; `MEMBER_LIST_POLICY_TYPES` (`holiday`, `work_week`) names the two the old wizard still handles | Every call site keeps compiling |
+| Review step | per-section Edit → `goToStep` | As planned; the step bar is clickable **backwards** only while creating, and after an Edit the admin walks forward again through Continue | The forward steps re-validate on the way |
+| Wizard shell | — | `PolicyWizardShell` lifted out of `PolicyWizardPage` so the picker, the wizard and the policy page share the chrome | — |
+| Minimum notice (§7.8) | days entered, hours stored | As planned (`noticeLabel` shows "2 days" / "36 h") | — |
+| Seed (§2.16) | Paid time off + Sick leave | As planned, plus auto-approval on the PTO policy (3 days / 48 h) so the demo shows the rules | — |
+| Verification web server | `localhost:5173` | A second API on port 4999 from the fresh build and a Vite on 5199 proxying to it | The watch server on 4000 was serving a build with no HR routes at all (404, not 401) |
+
+Verification runs: shared jest 352 (29 new); api unit 1446 (10 new DTO
+cases); api e2e `hr-policies` 25 (11 new) and `worker/accrue-time-off` 3;
+Bruno `HR/` 24 requests, 37/38 tests — the one failure is the folder's
+pre-existing "List HR Policies (as Producer, 403)" case, which 401s when
+the folder runs without the Auth folder's producer token; web `tsc` + build
+on every commit. Browser, as the demo Branch Manager on a branch API:
+picker → PTO preset → the five steps (waiting period switch reveals its
+field; a carryover cap above the max balance blocks Continue with the
+message on the field; Enrollment shows "In Paid time off" / "Moves from";
+Set balances with a per-person box and "Apply to everyone") → Review with
+Edit back to Basic setup → Activate: a `409` ("There is already a policy
+called "Paid Time Off"") rendered in the form; renamed, `201`, the policy
+page with 20 h / 80 h balances and the auto-approval rules; the Basic
+setup drawer with both choices disabled; the Accrual drawer `PATCH` (96 h);
+the Enrollment drawer; Archive → `204` → the filtered list. Light and dark.
+
+Not run: the Unlimited branch and a Sick policy in the browser (both
+covered by e2e and Bruno), and a monthly tick of the job against the dev
+database (covered by the worker e2e).
+
+Found on the way: the local dev database holds three documents in
+`timeOffPolicies` from the PAC-161 v3 interim build (the single-collection
+version, before the split), named like holiday / work week policies with no
+accrual fields. They render as "No hours set" and count on the card. They
+exist on no shared database; `db.timeOffPolicies.deleteMany({ accrualType:
+{ $exists: false } })` clears them.
+
+Open points (§7) all taken as written; none answered before the build.
