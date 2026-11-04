@@ -142,11 +142,11 @@ tests {
     });
   });
 
-  test("activities are newest first", function () {
+  test("activities are newest first, by when each was recorded", function () {
     const activities = res.getBody().activities;
     for (let i = 1; i < activities.length; i++) {
-      const previous = activities[i - 1].occurredAt;
-      const current = activities[i].occurredAt;
+      const previous = activities[i - 1].recordedAt;
+      const current = activities[i].recordedAt;
       if (previous && current) {
         expect(new Date(previous).getTime()).to.be.at.least(
           new Date(current).getTime()
@@ -267,6 +267,15 @@ docs {
   precedes `subjectType` because `POST /activities` writes `subjectType: 'lead'`
   for every client-logged row.
 
+  **`activities[].occurredAt` / `activities[].recordedAt`** — two timestamps.
+  `occurredAt` is when the event happened; on `sold`, `quoted` and
+  `lead_created` rows that is the **business date** from the form (agency-local
+  midnight), not a clock time. `recordedAt` is when the row was entered into the
+  app (the activity's `createdAt`), so a sale back-dated to last week reads as
+  the moment it was marked sold. The timeline shows `recordedAt` and the array
+  is ordered by it. On `source: 'migration'` and demo-seed rows `recordedAt`
+  equals `occurredAt`, because their `createdAt` is only the import run.
+
   ## Response `200`
   ```json
   {
@@ -353,7 +362,8 @@ docs {
         "id": "665f...e55",
         "type": "quoted",
         "summary": "Quote recap created",
-        "occurredAt": "2026-07-24T00:00:00.000Z",
+        "occurredAt": "2026-07-24T05:00:00.000Z",
+        "recordedAt": "2026-07-25T14:32:10.000Z",
         "userName": "Pat Producer",
         "origin": "quote_recap"
       }
@@ -380,7 +390,7 @@ docs {
   | earlierQuoteRecaps | array           | summaries, newest first                                    |
   | deal               | object \| null  | `null` until the lead is sold                              |
   | priorInsurance     | object \| null  | only stored fields; no fabricated limits/deductibles       |
-  | activities         | array           | newest first, capped at 50                                 |
+  | activities         | array           | newest first by `recordedAt`, capped at 50                 |
 
   No `legacy*` ids, `isTestRecord`, `agencyId`/`branchId`, storage keys, or raw
   select codes are ever returned.

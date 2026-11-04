@@ -24,6 +24,7 @@ import {
   normalizePriorPolicyType,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { activityRecordedAt } from '../activities/activity-recorded-at';
 import {
   Activity,
   ActivityDocument,
@@ -759,20 +760,36 @@ export class LeadDetailService {
    * Gating cannot live on the controller. The timeline is an embedded array on
    * `GET /leads/:id`, so a `@RequirePermissions` there would 403 the whole page
    * for every producer.
+   *
+   * ## Ordered by when each row was recorded, in two steps
+   *
+   * The timeline shows {@link activityRecordedAt}, not `occurredAt` — a sold or
+   * quoted row's `occurredAt` is the business date from the form. The query
+   * picks the 50 most recently *created* rows, so a back-dated sale entered
+   * today is never pushed off a busy lead by its own sold date. The rows are
+   * then re-sorted in memory on the timestamp the client actually shows, which
+   * differs from `createdAt` only on migrated and demo rows.
    */
   private async loadActivities(
     lead: LeadDocument,
     agencyId: string,
     canSeeChangeLogs: boolean,
   ): Promise<ActivityDocument[]> {
-    return this.activityModel
+    const rows = await this.activityModel
       .find({
         agencyId,
         leadId: lead._id,
         ...(canSeeChangeLogs ? {} : { type: { $ne: 'field_changed' } }),
       })
-      .sort({ occurredAt: -1, _id: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(ACTIVITY_LIMIT);
+
+    const at = (row: ActivityDocument) =>
+      activityRecordedAt(row)?.getTime() ?? 0;
+    return rows.sort(
+      (a, b) =>
+        at(b) - at(a) || b._id.toString().localeCompare(a._id.toString()),
+    );
   }
 
   /**
@@ -1045,6 +1062,7 @@ export class LeadDetailService {
       type: activity.type,
       summary: activity.summary ?? null,
       occurredAt: iso(activity.occurredAt),
+      recordedAt: iso(activityRecordedAt(activity)),
       userName: userName || null,
       origin: this.toActivityOrigin(activity),
       // Straight through, with no normalization: the writer already resolved
