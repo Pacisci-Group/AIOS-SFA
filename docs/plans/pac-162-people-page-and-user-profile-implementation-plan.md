@@ -760,11 +760,15 @@ Found on the way, local database only: `employeeProfiles` rows the closed
 PR #155 build wrote on 2026-10-23 were already `active` with v1 hire
 dates, so the seed's insert-only facts did not apply to them (Morgan Lee
 reads Active here; pending on any fresh database) — the migration unset
-their dead fields as planned; and the three PAC-174 interim
-`timeOffPolicies` orphans ("Paid holidays", "Standard week", "Texas office
-holidays" with no `accrualType`) still show as time off policies on the
-profile and in the Policies step — delete them by hand with
+their dead fields as planned; and the PAC-174 interim `timeOffPolicies`
+orphans (rows with no `accrualType`: "Paid holidays", "Standard week",
+"Texas office holidays" and two archived Bruno leftovers) showed as time
+off policies on the profile and in the Policies step. Deleted on
+2026-11-04 with Asad's go-ahead, together with the two `leaveLedger` rows
+the browser walk had written against "Texas office holidays" (an
+allocation and its removal, net zero) — on another database that booted
+the interim build the same clean-up is
 `db.timeOffPolicies.deleteMany({ accrualType: { $exists: false } })`
-(the sandbox refused the delete from here).
+plus the ledger rows whose `policyId` matched.
 
 Open points (§7) all taken as written; none answered before the build.
