@@ -1,66 +1,55 @@
 import { Link } from "react-router-dom";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/common/UserAvatar";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { userStatus, type AgencyUser } from "@/lib/users-api";
-import { UserRowMenu } from "../UserRowMenu";
+import type { AgencyUser } from "@/lib/users-api";
+import { PersonRowMenu } from "./PersonRowMenu";
 import {
+  AVATAR_FALLBACK_CLASS,
   branchLabel,
   displayName,
-  initials,
   STATUS_BADGE,
-} from "./user-display";
+} from "./person-display";
 
-interface UserCardProps {
+interface PersonCardProps {
   user: AgencyUser;
   branchNames: Map<string, string>;
   showBranch: boolean;
-  canOpenPermissions: boolean;
 }
 
 /**
- * One employee as a card — phone and tablet, where the table's five columns
+ * One person as a card — phone and tablet, where the table's five columns
  * don't fit. The counterpart to `LeadCard`, and the same trade: every field the
  * table shows is still here, stacked, with the row menu pinned to the corner.
+ * The card opens the profile, as the table row does.
  */
-export function UserCard({
-  user,
-  branchNames,
-  showBranch,
-  canOpenPermissions,
-}: UserCardProps) {
-  const status = userStatus(user);
+export function PersonCard({ user, branchNames, showBranch }: PersonCardProps) {
   const name = displayName(user);
 
   return (
     <div className="relative flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5 transition-colors hover:bg-muted/50">
-      <Avatar className="size-8">
-        <AvatarFallback className="bg-sidebar-accent text-xs font-bold text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground">
-          {initials(user)}
-        </AvatarFallback>
-      </Avatar>
+      <UserAvatar
+        name={name}
+        avatarUrl={user.avatarUrl}
+        className="size-8"
+        fallbackClassName={AVATAR_FALLBACK_CLASS}
+      />
 
       <div className="min-w-0 flex-1">
-        {canOpenPermissions ? (
-          <Link
-            to={`/settings/users/${user._id}/permissions`}
-            className="block truncate text-base font-medium text-foreground after:absolute after:inset-0 after:content-['']"
-          >
-            {name}
-          </Link>
-        ) : (
-          <p className="truncate text-base font-medium text-foreground">
-            {name}
-          </p>
-        )}
+        <Link
+          to={`/people/${user._id}`}
+          className="block truncate text-base font-medium text-foreground after:absolute after:inset-0 after:content-['']"
+        >
+          {name}
+        </Link>
         <p className="truncate text-sm text-muted-foreground">{user.email}</p>
 
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <Badge
             size="sm"
-            className={cn("font-semibold", STATUS_BADGE[status].className)}
+            className={cn("font-semibold", STATUS_BADGE[user.status].className)}
           >
-            {STATUS_BADGE[status].label}
+            {STATUS_BADGE[user.status].label}
           </Badge>
 
           {user.roleIds.map((role) => (
@@ -87,7 +76,7 @@ export function UserCard({
       </div>
 
       <span className="relative z-10">
-        <UserRowMenu user={user} />
+        <PersonRowMenu user={user} />
       </span>
     </div>
   );

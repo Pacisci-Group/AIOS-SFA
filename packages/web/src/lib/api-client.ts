@@ -143,6 +143,12 @@ export interface AuthUser {
   firstName: string | null;
   lastName: string | null;
   /**
+   * Free text (PAC-162), edited on the profile form and by HR on the
+   * People profile. Optional only because a blob stored before the field
+   * existed deserializes without it.
+   */
+  phone?: string | null;
+  /**
    * Relative API path of the profile photo, or null when none is set (PAC-81).
    * Stable (it carries a cache-buster, not a signature), but **authenticated**
    * — fetch it with {@link apiFetchBlob}, never point an `<img src>` at it.

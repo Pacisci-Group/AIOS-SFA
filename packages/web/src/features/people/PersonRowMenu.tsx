@@ -2,6 +2,8 @@ import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRightLeft,
+  ClipboardCheck,
+  Contact,
   KeyRound,
   Loader2,
   MoreHorizontal,
@@ -40,12 +42,12 @@ import {
   resendInvite,
   revokeInvite,
   sendPasswordReset,
-  userStatus,
   type AgencyUser,
   agencyUserOptionsKey,
 } from "@/lib/users-api";
-import { ChangeRoleDialog } from "./ChangeRoleDialog";
-import { TransferWorkDialog } from "./TransferWorkDialog";
+import { peopleKeys } from "@/lib/people-api";
+import { ChangeRoleDialog } from "@/features/admin/ChangeRoleDialog";
+import { TransferWorkDialog } from "@/features/admin/TransferWorkDialog";
 
 /** Which confirmation is open. `null` closes the dialog. */
 type Confirmation = "revoke" | "reset";
@@ -55,7 +57,8 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * Every per-user action, behind one `⋯` on the row.
+ * Every per-person action, behind one `⋯` on the row — and on the profile
+ * page header, which passes the same row (PAC-162).
  *
  * ## Why one menu instead of the three components it replaces
  *
@@ -75,10 +78,14 @@ function errorMessage(error: unknown, fallback: string): string {
  * calls `preventDefault()` before closing it explicitly, so the order is ours
  * rather than a race between Radix's focus restore and the dialog's autofocus.
  *
- * ## What renders when — unchanged from the three components
+ * ## What renders when
  *
+ * * **View profile** → always; the row's primary action, repeated here for
+ *   the keyboard and for the profile page itself (where it is hidden).
+ * * **Complete onboarding…** → a `pending_onboarding` row, for
+ *   `agency:hr:admin`; opens the profile with the onboarding sheet up.
  * * **invited** → Resend, Revoke. Both endpoints 409 on an active user.
- * * **active** → Change roles (including on your own row: giving up your own
+ * * **active** / **pending_onboarding** → Change roles (including on your own row: giving up your own
  *   owner role is server-supported, it is taking it off *someone else* that is
  *   blocked), Send password reset, Remove (never on your own row — self-removal
  *   400s, so offering it would only teach the error by clicking it).
@@ -93,7 +100,14 @@ function errorMessage(error: unknown, fallback: string): string {
  *   demands. The row used to link there unconditionally, so a directory-only
  *   reader clicking any row was redirected to the landing page.
  */
-export function UserRowMenu({ user }: { user: AgencyUser }) {
+export function PersonRowMenu({
+  user,
+  onProfile = false,
+}: {
+  user: AgencyUser;
+  /** Rendered on the profile page itself: no "View profile" item. */
+  onProfile?: boolean;
+}) {
   const { can } = usePermissions();
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
@@ -107,6 +121,10 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
   const invalidateUsers = () => {
     void queryClient.invalidateQueries({ queryKey: ["users"] });
+    // The profile page renders the same person (PAC-162).
+    void queryClient.invalidateQueries({
+      queryKey: peopleKeys.profile(user._id),
+    });
     // Deactivating or reactivating changes who is assignable, and the
     // pickers key on `agency-users` rather than `users`.
     void queryClient.invalidateQueries({ queryKey: agencyUserOptionsKey });
@@ -169,8 +187,15 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
       toast.error(errorMessage(error, "Could not reactivate this user.")),
   });
 
-  const status = userStatus(user);
+  const status = user.status;
   const isSelf = currentUser?.id === user._id;
+  // An account that can sign in: the HR onboarding does not change what the
+  // owner may do with it.
+  const accountActive = status === "active" || status === "pending_onboarding";
+  const mayOnboard =
+    status === "pending_onboarding" &&
+    can(AgencyPermission.HrAdmin) &&
+    !user.isPlatformAdmin;
   const mayManage =
     can("agency:users:write") && !user.isPlatformAdmin;
   const mayEditPermissions = can("agency:roles:read");
@@ -230,9 +255,11 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
   const open = confirm ? CONFIRMATIONS[confirm] : null;
 
-  // Nothing to offer: a reader with neither write access nor the permissions
-  // page renders no trigger at all rather than an empty menu.
-  if (!mayManage && !mayEditPermissions && !mayTransfer) return null;
+  // On the profile page the menu holds only the actions; on a row it always
+  // has View profile, so a reader with nothing else still gets a menu.
+  if (onProfile && !mayManage && !mayEditPermissions && !mayTransfer && !mayOnboard) {
+    return null;
+  }
 
   return (
     <>
@@ -252,7 +279,23 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
           </Button>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuContent align="end" className="w-56">
+          {!onProfile && (
+            <DropdownMenuItem asChild>
+              <Link to={`/people/${user._id}`}>
+                <Contact className="size-4" />
+                View profile
+              </Link>
+            </DropdownMenuItem>
+          )}
+          {mayOnboard && (
+            <DropdownMenuItem asChild>
+              <Link to={`/people/${user._id}?onboard=1`}>
+                <ClipboardCheck className="size-4" />
+                Complete onboarding…
+              </Link>
+            </DropdownMenuItem>
+          )}
           {mayEditPermissions && (
             <DropdownMenuItem asChild>
               <Link to={`/settings/users/${user._id}/permissions`}>
@@ -264,7 +307,7 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
           {mayManage && status === "invited" && (
             <>
-              {mayEditPermissions && <DropdownMenuSeparator />}
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => resend.mutate())}
@@ -283,9 +326,9 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
             </>
           )}
 
-          {mayManage && status === "active" && (
+          {mayManage && accountActive && (
             <>
-              {mayEditPermissions && <DropdownMenuSeparator />}
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => setRolesOpen(true))}
@@ -318,7 +361,7 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
           {mayManage && status === "deactivated" && (
             <>
-              {mayEditPermissions && <DropdownMenuSeparator />}
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => reactivate.mutate())}
@@ -330,9 +373,7 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
           )}
           {mayTransfer && (
             <>
-              {/* Only when something sits above it — a removed row for a
-                  transfer-only holder would otherwise open on a rule. */}
-              {(mayManage || mayEditPermissions) && <DropdownMenuSeparator />}
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => setWorkDialog("transfer"))}

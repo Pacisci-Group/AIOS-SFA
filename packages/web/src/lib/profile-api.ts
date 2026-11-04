@@ -29,6 +29,8 @@ interface PresignedUpload {
 export async function updateMyProfile(input: {
   firstName: string | null;
   lastName: string | null;
+  /** Free text (PAC-162); `null` clears, absent leaves alone. */
+  phone?: string | null;
 }): Promise<AuthUser> {
   const user = await apiFetch<AuthUser>('/me/profile', {
     method: 'PATCH',

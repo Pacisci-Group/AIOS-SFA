@@ -1,57 +1,47 @@
 import { useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { AlertCircle, Users } from 'lucide-react';
+import { AlertCircle, Contact } from 'lucide-react';
+import type { PeopleStatus } from '@sfa/shared';
 import { TablePagination } from '@/components/common/TablePagination';
 import {
   SEARCH_DEBOUNCE_MS,
   TableSearchInput,
 } from '@/components/common/TableSearchInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { InviteUserDialog } from '@/features/admin/InviteUserDialog';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { usePermissions } from '@/hooks/usePermissions';
 import { listBranches } from '@/lib/branches-api';
 import { listUsers } from '@/lib/users-api';
-import { InviteUserDialog } from './InviteUserDialog';
-import { UserCard } from './components/UserCard';
-import { UsersTable } from './components/UsersTable';
-
-/*
- * The status ranking that used to live here — invited, then active, then
- * deactivated — is now the server's `{ deactivatedAt: 1, isActive: 1, … }`
- * sort, which reproduces it exactly because BSON orders Null before Date.
- * Ranking a page in the browser would only ever have sorted that page.
- */
+import { PeopleTable } from './PeopleTable';
+import { PersonCard } from './PersonCard';
+import { StatusFacet } from './StatusFacet';
 
 /**
- * The agency directory (`/settings/users`).
+ * People (`/people`, PAC-162) — the agency directory of PAC-101 (it lived at
+ * `/settings/users`, which now redirects here), with onboarding in its status.
  *
- * ## What changed in the design pass
+ * ## What changed
  *
- * This page used to render its own copy of the settings header — at
- * `text-sm font-bold`, a type tier that exists nowhere else — inside a
- * `max-w-3xl` column, with a hand-built four-column grid and three labelled
- * ghost buttons on every row. It now uses the shared `SettingsPage` shell at
- * full width and the same table idiom as `/leads`, with the row actions behind
- * one `⋯` (see `UserRowMenu`).
+ * One list of every agency user, as before; the status is the server's
+ * four-way `status` (Invited → Pending onboarding → Active, plus Removed),
+ * a row opens the person's **profile** rather than the permissions page, the
+ * photo is the real one, and the Status column is a real-time facet. The ⋯
+ * menu is the one `/settings/users` had, plus View profile and Complete
+ * onboarding.
  *
- * ## Search and sort are server-side (PAC-101)
+ * ## Search, sort and the facet are server-side (PAC-101)
  *
- * This docblock used to say the opposite, and named this file as the one that
- * would grow a `ListUsersParams` if the roster ever outgrew a single response.
- * That is what happened — not because an agency got large, but because the
- * filter only covered three of the five rendered columns and could not be made
- * to satisfy the ticket's rule while it ran in the browser.
- *
- * The three pickers that shared this endpoint were moved to
- * `GET /users/options` first, so this page is its only consumer.
+ * The three pickers that shared this endpoint read `GET /users/options`, so
+ * this page is `GET /users`'s only consumer.
  */
 /** Matches the API default; the roster is short enough that one page is usual. */
 const PAGE_SIZE = 25;
 
-export default function UsersPage() {
+export default function PeoplePage() {
   const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<PeopleStatus[]>([]);
   const [page, setPage] = useState(1);
   const { can } = usePermissions();
 
@@ -60,8 +50,13 @@ export default function UsersPage() {
   const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
 
   const params = useMemo(
-    () => ({ page, pageSize: PAGE_SIZE, q: debouncedQuery.trim() || undefined }),
-    [page, debouncedQuery],
+    () => ({
+      page,
+      pageSize: PAGE_SIZE,
+      q: debouncedQuery.trim() || undefined,
+      status: status.length ? status : undefined,
+    }),
+    [page, debouncedQuery, status],
   );
 
   const usersQuery = useQuery({
@@ -88,23 +83,17 @@ export default function UsersPage() {
     [branchesQuery.data],
   );
 
-  /*
-   * No client-side filter, sort or platform-admin exclusion any more — all
-   * three moved to the server (PAC-101). The exclusion in particular had to:
-   * a post-fetch filter makes page sizes wrong, dropping rows the server
-   * counted.
-   */
   const users = usersQuery.data?.items ?? [];
   const total = usersQuery.data?.total ?? 0;
   const totalPages = usersQuery.data?.totalPages ?? 1;
 
   const showBranch = branchesQuery.isSuccess && branchNames.size > 0;
-  const canOpenPermissions = can('agency:roles:read');
   const isPending = usersQuery.isPending;
+  const filtered = !!debouncedQuery.trim() || status.length > 0;
 
   return (
     <SettingsPage
-      title="Agency Users"
+      title="People"
       caption={
         isPending || usersQuery.isError
           ? ' '
@@ -112,8 +101,10 @@ export default function UsersPage() {
             // after the first.
             `${total} ${total === 1 ? 'person' : 'people'}`
       }
-      icon={Users}
+      icon={Contact}
       width="wide"
+      // A top-level page, not a settings section: the arrow goes home.
+      backTo="/"
       action={
         /* Self-gates on `agency:users:write` and renders nothing without it, so
            a user who can only read the directory sees no invite button. */
@@ -129,18 +120,27 @@ export default function UsersPage() {
         </Alert>
       )}
 
-      <div className="relative mb-4 max-w-md">
-        <TableSearchInput
-          value={query}
-          onValueChange={(next) => {
-            setQuery(next);
-            // A new query invalidates the page number: page 3 of the old
-            // result set is very unlikely to exist in the new one.
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
+        <div className="relative w-full max-w-md">
+          <TableSearchInput
+            value={query}
+            onValueChange={(next) => {
+              setQuery(next);
+              // A new query invalidates the page number: page 3 of the old
+              // result set is very unlikely to exist in the new one.
+              setPage(1);
+            }}
+            placeholder="Search by name, email, role or branch…"
+            label="Search people"
+            busy={usersQuery.isFetching}
+          />
+        </div>
+        <StatusFacet
+          value={status}
+          onChange={(next) => {
+            setStatus(next);
             setPage(1);
           }}
-          placeholder="Search by name, email, role or branch…"
-          label="Search users"
-          busy={usersQuery.isFetching}
         />
       </div>
 
@@ -150,32 +150,28 @@ export default function UsersPage() {
             {/* The **debounced** value, not the raw input: keying off what the
                 user is still typing flips the copy before the request that
                 would justify it has fired. */}
-            {debouncedQuery.trim()
-              ? `Nobody matches “${debouncedQuery.trim()}”.`
-              : 'No users yet.'}
+            {filtered ? 'Nobody matches these filters.' : 'No people yet.'}
           </p>
         </div>
       ) : (
         <>
           {/* Desktop: the table. Below `md` its five columns don't fit. */}
           <div className="hidden md:block">
-            <UsersTable
+            <PeopleTable
               users={users}
               isPending={isPending}
               branchNames={branchNames}
               showBranch={showBranch}
-              canOpenPermissions={canOpenPermissions}
             />
           </div>
 
           <div className="flex flex-col gap-2 md:hidden">
             {users.map((user) => (
-              <UserCard
+              <PersonCard
                 key={user._id}
                 user={user}
                 branchNames={branchNames}
                 showBranch={showBranch}
-                canOpenPermissions={canOpenPermissions}
               />
             ))}
           </div>

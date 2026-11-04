@@ -76,7 +76,10 @@ const LeadDetailsPage = lazy(() => import('@/features/lead/LeadDetailsPage'));
 const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
 );
-const UsersPage = lazy(() => import('@/features/admin/UsersPage'));
+const PeoplePage = lazy(() => import('@/features/people/PeoplePage'));
+const PersonProfilePage = lazy(
+  () => import('@/features/people/PersonProfilePage'),
+);
 const BrandingPage = lazy(() => import('@/features/settings/BrandingPage'));
 const AgencyProfilePage = lazy(
   () => import('@/features/settings/AgencyProfilePage'),
@@ -770,19 +773,37 @@ export function App() {
                 />
               </Route>
 
-              {/* Owner-only user directory */}
+              {/*
+                People (PAC-162). The list needs `agency:users:read`; the
+                profile route is deliberately ungated here because anyone may
+                open their **own** — the page sends a viewer who is neither
+                the person nor a directory reader home, and the API 403s.
+              */}
               <Route
                 element={<RequirePermission permission="agency:users:read" />}
               >
                 <Route
-                  path="/settings/users"
+                  path="/people"
                   element={
                     <LazyPage>
-                      <UsersPage />
+                      <PeoplePage />
                     </LazyPage>
                   }
                 />
               </Route>
+              <Route
+                path="/people/:userId"
+                element={
+                  <LazyPage>
+                    <PersonProfilePage />
+                  </LazyPage>
+                }
+              />
+              {/* The directory's old address: bookmarks and the hub card. */}
+              <Route
+                path="/settings/users"
+                element={<Navigate to="/people" replace />}
+              />
 
               {/*
                 Super Admin panel (PAC-73). Above the tenant boundary: these
