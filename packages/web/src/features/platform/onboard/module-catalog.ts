@@ -90,7 +90,7 @@ export const MODULE_CATALOG: Record<ModuleKey, ModuleDescriptor> = {
   [ModuleKey.Hr]: {
     label: "HR",
     description:
-      "The agency holiday calendar and closures, and — as the HR stories land — time-off policies, People, requests and the team calendar.",
+      "Time off policies — holidays, work weeks and, as the HR stories land, leave — then People, requests and the team calendar.",
   },
 };
 

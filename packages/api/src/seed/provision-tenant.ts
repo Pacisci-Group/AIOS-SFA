@@ -6,8 +6,6 @@ import { Branch } from '../branches/schemas/branch.schema';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { Agency } from '../platform/schemas/agency.schema';
 import { seedAuditTemplates } from './audit-templates.seed';
-import { ensureAgencyCalendar } from '../common/hr/ensure-agency-calendar';
-import { AgencyCalendar } from '../hr/schemas/agency-calendar.schema';
 
 /**
  * Provisioning a tenant — everything an agency needs before it can hold data.
@@ -41,8 +39,6 @@ export interface ProvisionTenantModels {
   agencyModel: Model<Agency>;
   branchModel: Model<Branch>;
   auditTemplateModel: Model<AuditTemplate>;
-  /** The HR calendar document (PAC-161) — workweek and country only. */
-  agencyCalendarModel: Model<AgencyCalendar>;
   roleAssignments: RoleAssignmentsService;
 }
 
@@ -86,13 +82,8 @@ export async function provisionTenant(
   models: ProvisionTenantModels,
   options: ProvisionTenantOptions,
 ): Promise<ProvisionedTenant> {
-  const {
-    agencyModel,
-    branchModel,
-    auditTemplateModel,
-    agencyCalendarModel,
-    roleAssignments,
-  } = models;
+  const { agencyModel, branchModel, auditTemplateModel, roleAssignments } =
+    models;
 
   const modules = Object.fromEntries(
     ALL_MODULE_KEYS.map((key) => [key, { enabled: true }]),
@@ -195,15 +186,6 @@ export async function provisionTenant(
     agency._id.toString(),
     branch._id.toString(),
   );
-
-  /*
-   * The HR calendar (PAC-161): the Mon–Fri workweek and the platform's
-   * country, nothing else — no holiday rows (a person ticks those) and no
-   * leave policy (an agency may hold none). Find-or-create, like the rest.
-   */
-  await ensureAgencyCalendar(agencyCalendarModel, agency._id, {
-    regionHint: branch.address?.state ?? null,
-  });
 
   return {
     agencyId: agency._id,

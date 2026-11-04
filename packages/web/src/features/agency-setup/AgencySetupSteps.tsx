@@ -3,12 +3,12 @@ import { CheckCircle2 } from "lucide-react";
 import { BrandStep } from "./BrandStep";
 import { CarrierAppointmentsStep } from "./CarrierAppointmentsStep";
 import { EmailIdentityStep } from "./EmailIdentityStep";
-import { HolidayStep } from "./HolidayStep";
 import { TimeZoneStep } from "./TimeZoneStep";
 
 /**
  * Phase 2 of onboarding: making the app look and sound like the agency (PAC-69),
- * then its working day and holidays (PAC-161).
+ * then its working day (PAC-161). Holidays and work weeks are policies, set
+ * up later under Settings → Time off.
  *
  * Shared by the invite wizard (where it follows the name and password steps) and
  * by `/welcome/agency` (where it stands alone, for an owner who left partway
@@ -26,21 +26,16 @@ export type AgencySetupStepId =
   | "email"
   | "carriers"
   | "timezone"
-  | "holidays"
   | "finish";
 
 /**
- * Which `AgencySetupView` flag a skipped step records (PAC-69, PAC-161).
- * Steps not listed are skippable without a flag — nothing later keys off them.
- * `hrPolicySkipped` is stored on the agency already; PAC-174 adds the step
- * that records it.
+ * Which `AgencySetupView` flag a skipped step records (PAC-69). Steps not
+ * listed are skippable without a flag — nothing later keys off them.
  */
-export const SKIP_FLAG_BY_STEP: Partial<
-  Record<AgencySetupStepId, "skipped" | "calendarSkipped" | "hrPolicySkipped">
-> = {
-  brand: "skipped",
-  holidays: "calendarSkipped",
-};
+export const SKIP_FLAG_BY_STEP: Partial<Record<AgencySetupStepId, "skipped">> =
+  {
+    brand: "skipped",
+  };
 
 export interface AgencySetupStep {
   id: AgencySetupStepId;
@@ -81,15 +76,6 @@ export const AGENCY_SETUP_STEPS: readonly AgencySetupStep[] = [
     skippable: false,
   },
   {
-    // PAC-161. Federal holidays ticked, others not, custom closures by hand.
-    // Nothing is written until Continue; skipping writes nothing.
-    id: "holidays",
-    title: "Your holidays",
-    description:
-      "The days your office closes this year, so time off and attendance are counted on real working days.",
-    skippable: true,
-  },
-  {
     id: "finish",
     title: "All set",
     description: "That is everything we need.",
@@ -110,8 +96,8 @@ const StepControlsContext = createContext<StepControls | null>(null);
 /**
  * The hosts' side of the Continue hand-off: the wizard page and the invite
  * wizard both render `AgencySetupStepContent` inside this, hold the registered
- * handler in a ref, and run it before advancing. Most steps save as they go
- * and register nothing; the holiday step writes its ticked set on Continue.
+ * handler in a ref, and run it before advancing. Every step today saves as it
+ * goes and registers no handler; the time zone step uses the busy flag.
  */
 export const AgencySetupStepHost = StepControlsContext.Provider;
 
@@ -146,7 +132,6 @@ export function AgencySetupStepContent({
   if (id === "email") return <EmailIdentityStep />;
   if (id === "carriers") return <CarrierAppointmentsStep />;
   if (id === "timezone") return <TimeZoneStep />;
-  if (id === "holidays") return <HolidayStep />;
   // ⚠ `finish` must stay last: both wizards branch on it to call `complete`.
   return <FinishStep agencyName={agencyName} />;
 }

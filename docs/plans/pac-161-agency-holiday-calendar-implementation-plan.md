@@ -6,6 +6,13 @@ the [PAC-148](https://linear.app/paciscigroup/issue/PAC-148) epic (story v2,
 PAC-169. Written 2026-11-02; supersedes the v1 plan, which now exists only on the
 closed branch (`git show asad/pac-161-hr-foundation:docs/plans/pac-161-hr-foundation-implementation-plan.md`).
 
+> **Superseded in part by v3 (2026-11-03) — see the last section.** Asad
+> reviewed the PR and found the calendar page too much for what it does:
+> holidays and the working week are now **time off policies** with enrolled
+> people, on a Settings → Time off page. §1–§8 below are the v2 record; the
+> agency calendar, the import dialog, the Q4 proposal job and the owner's
+> Holiday step no longer exist.
+
 Paths are relative to the repo root; `api/` = `packages/api/src`,
 `web/` = `packages/web/src`, `shared/` = `packages/shared/src`.
 
@@ -490,3 +497,95 @@ wizard; owner: brand → email → carriers → time zone (saved on select, Denv
 
 Not run: the Skip path of the holiday step in the browser (the flag path is
 the `agency setup flags` e2e case, and the host code for Skip is unchanged).
+
+## v3 — holidays and work weeks become time off policies (2026-11-03)
+
+Asad on the open PR: the `/settings/hr` page (workweek card + year grid +
+import dialog + Q4 banner) is "way too complex for something so simple", and
+holidays should not be agency-wide. Decided in session:
+
+| Question | Answer |
+|---|---|
+| Where it lands | This PR (PAC-161). The Time off policy *type* is listed and counted, its creation is PAC-174 |
+| How holidays are stored | **Recurring by rule**, Gusto-style: a policy stores holiday *keys*; every year's dates are computed. No dated rows, no Q4 proposal |
+| Owner wizard Holiday step | **Removed.** The wizard keeps the Time zone step |
+| Closures / special working days / agency workweek | Closures come with the agency calendar page (PAC-169); the workweek is a Work week policy |
+
+### Model
+
+- **`timeOffPolicies`** (one collection, `type: holiday | work_week | time_off`):
+  `agencyId` (string), `name`, `holiday: { holidays: HolidayKey[], customHolidays[] }`
+  or `workWeek: { days: [{ weekday, start, end }] }`, `memberIds: ObjectId[]`,
+  `archivedAt/By` (soft archive, PAC-155). Indexes `{agencyId, archivedAt, type}`
+  and `{agencyId, type, memberIds}`.
+- **A person is in at most one active Holiday and one Work week policy.**
+  Enrolling someone in another policy of the type *moves* them (the save
+  `$pull`s them elsewhere); the wizard says "Moves from X" first. No Work week
+  policy → Mon–Fri 9–5; no Holiday policy → no holidays.
+- **`shared/domain/us-holidays.ts`** — 11 federal + 4 common holidays
+  (Good Friday, Day after Thanksgiving, Christmas Eve, New Year's Eve) by
+  rule; fixed-date federal holidays observed Sat→Fri / Sun→Mon (New Year's on
+  a Saturday lands on 31 Dec of the year before); one row per date, federal
+  name wins; custom holidays are all-day ranges ≤ 31 days, one-off or every
+  year (29 Feb → 28 Feb), every day listed (the week decides what is a
+  working day). Pure, shared by web and API. `date-holidays` is gone.
+- **`WorkingDaysService.forPerson(agencyId, userId, range)`** — the snapshot
+  and schedule from that person's two policies; the pure `working-days.ts`
+  arithmetic is unchanged.
+
+### HTTP (`agency:hr:admin`, module `hr`, `@SkipBranch`)
+
+`GET /hr/policies?type=` (list + every type's count) · `GET /hr/policies/people` ·
+`GET /hr/policies/:id` · `POST /hr/policies` (discriminated on `type`) ·
+`PATCH /hr/policies/:id` · `POST /hr/policies/:id/archive` (204). Bruno `HR/`.
+
+### Web
+
+- `/settings/time-off` (hub card "Time off"; `/settings/hr` redirects): three
+  cards with active counts — clicking one filters the list (`?type=`, again to
+  clear) — each with its own Create button, plus a "Create policy" menu.
+  Table: name, type, a one-line rules summary ("12 days off in 2026 · next
+  Thanksgiving Day, Nov 26" / "Mon–Fri · 9:00 AM – 5:00 PM · 40h a week"),
+  people, ⋯ Edit / Archive.
+- Stepped wizard (`/settings/time-off/new/holiday|work-week`,
+  `/settings/time-off/:id`) with Gusto's bar-per-step header. Holiday:
+  1 Select federal holidays (all ticked for a new policy, next date beside
+  each) · 2 Add custom holidays (the common extras, your own, and the year as
+  a list) · 3 Add employees. Work week: 1 Set the work week (a switch and
+  hours per weekday, "Copy to all days") · 2 Add employees. Nothing is
+  written until Save; editing makes every step reachable and adds "Save
+  changes" on each.
+
+### Removed
+
+Agency calendar schemas, controller, service and DTOs; `holiday-suggestions`
+and `date-holidays`; the Q4 `ProposeNextYearHolidaysFn` job and the
+`hr.holidays_proposed` notification; `PermissionHoldersService` (its only
+caller was that job — PAC-165 can bring it back from `01d4662`);
+`ensureAgencyCalendar` on every provisioning path; `holiday-range.ts`; the
+owner wizard's Holiday step and the `calendarSkipped` / `hrPolicySkipped`
+flags; the whole `features/hr/settings/` tree. Migration
+`20261103120000-drop_agency_calendars` drops `agencyCalendars` /
+`agencyCalendarDays` (the `hr_module` migration that creates them is
+immutable). The demo seed now enrols the whole team in "Paid holidays"
+(federal + Day after Thanksgiving) and "Standard week" (Mon–Fri 9–5).
+
+### Verification (2026-11-03)
+
+shared jest 325 (13 new holiday cases); api unit 1436; api e2e
+`time-off-policies` (14) + `agency-onboarding` + `agency-profile` (60 in
+all); Bruno `HR/` 13 requests / 21 tests against a demo-seeded database; web
+`tsc` + build; browser walk on a branch API as the demo Branch Manager: cards
+and filter, create a holiday policy with extras and a Dec 28–31 closure,
+enrol two people (moved out of "Paid holidays", 12 → 10), edit with step
+jumps, the work week step, light and dark.
+
+### Follow-ups
+
+- PAC-174: the `time_off` type's wizard (the card and filter already exist).
+- PAC-165: an employee's own holidays/hours read, and the reviewer list
+  (`PermissionHoldersService`, removed here).
+- PAC-169: closures and special working days on the agency calendar page
+  (the snapshot already understands both kinds).
+- `common/dates/business-days.ts` (audit aging) still has its own federal
+  list; it could read `us-holidays.ts`.

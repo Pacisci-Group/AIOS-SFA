@@ -6,6 +6,8 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  DEFAULT_WORK_WEEK_DAYS,
+  FEDERAL_HOLIDAY_KEYS,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
   type StoredAddress,
@@ -31,8 +33,7 @@ import { Policy } from '../../policies/schemas/policy.schema';
 import { DealAuditItem } from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
-import { ensureAgencyCalendar } from '../../common/hr/ensure-agency-calendar';
-import { AgencyCalendar } from '../../hr/schemas/agency-calendar.schema';
+import { TimeOffPolicy } from '../../hr/schemas/time-off-policy.schema';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
@@ -250,8 +251,8 @@ export class DemoSeedService {
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
-    @InjectModel(AgencyCalendar.name)
-    private readonly agencyCalendarModel: Model<AgencyCalendar>,
+    @InjectModel(TimeOffPolicy.name)
+    private readonly timeOffPolicyModel: Model<TimeOffPolicy>,
     @InjectModel(InterestedParty.name)
     private readonly interestedPartyModel: Model<InterestedParty>,
     @InjectModel(PriorInsurance.name)
@@ -322,6 +323,7 @@ export class DemoSeedService {
     const policies = await this.seedPolicies(ctx, deals, rng);
 
     await this.seedAuditTemplates(ctx);
+    await this.seedTimeOffPolicies(ctx, team);
     /*
      * Roll-ups **before** items (PAC-72): the board pages over `dealAudits`,
      * and an item needs its parent's `_id` to be loadable from a card. The
@@ -1234,12 +1236,6 @@ export class DemoSeedService {
       ctx.defaultBranchId,
     );
     for (let i = 0; i < created + refreshed; i++) this.inc('auditTemplates');
-
-    // The HR calendar (PAC-161): workweek and country only, like every
-    // provisioning path. Illinois, to match the demo seed's addresses.
-    await ensureAgencyCalendar(this.agencyCalendarModel, ctx.agencyId, {
-      regionHint: 'IL',
-    });
   }
 
   /**
@@ -1251,6 +1247,44 @@ export class DemoSeedService {
    * documents is exactly the kind of incoherence that makes demo data
    * untrustworthy.
    */
+  /**
+   * A Holiday and a Work week policy with the whole demo team enrolled
+   * (PAC-161 v3), so Settings → Time off has something to show. Keyed on
+   * `{ agencyId, type, name }`: a reseed refreshes the members and leaves
+   * rules a demo user has edited alone.
+   */
+  private async seedTimeOffPolicies(
+    ctx: Ctx,
+    team: TeamMember[],
+  ): Promise<void> {
+    const memberIds = team.map((member) => member.userId);
+    const seeds = [
+      {
+        type: 'holiday' as const,
+        name: 'Paid holidays',
+        holiday: {
+          holidays: [
+            ...FEDERAL_HOLIDAY_KEYS,
+            'day_after_thanksgiving' as const,
+          ],
+          customHolidays: [],
+        },
+      },
+      {
+        type: 'work_week' as const,
+        name: 'Standard week',
+        workWeek: { days: [...DEFAULT_WORK_WEEK_DAYS] },
+      },
+    ];
+    for (const { type, name, ...rules } of seeds) {
+      await this.timeOffPolicyModel.updateOne(
+        { agencyId: ctx.agencyId, type, name, archivedAt: null },
+        { $set: { memberIds }, $setOnInsert: rules },
+        { upsert: true },
+      );
+    }
+  }
+
   private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],

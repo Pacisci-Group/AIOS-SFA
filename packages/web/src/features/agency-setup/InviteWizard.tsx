@@ -49,8 +49,8 @@ const profileSchema = z.object({
  * the session in place and carries straight on — bouncing an owner to `/login`
  * to type a password they set four seconds ago is the thing this avoids.
  *
- * Every phase-2 step writes as it goes (the holiday step on Continue) and all
- * but the time zone are skippable; skipping completes the setup so the app
+ * Every phase-2 step writes as it goes and all but the time zone are
+ * skippable; skipping completes the setup so the app
  * never nags. See `AgencySetupSteps`.
  */
 export function InviteWizard({
@@ -70,7 +70,7 @@ export function InviteWizard({
   // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
   const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
   // The current step's Continue handler and whether it is mid-save
-  // (`useStepContinue`); only the holiday step writes on Continue.
+  // (`useStepContinue`); the time zone step reports a save in flight.
   const continueRef = useRef<StepContinueHandler | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
   const stepControls = useMemo(

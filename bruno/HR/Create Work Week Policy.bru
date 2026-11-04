@@ -1,0 +1,64 @@
+meta {
+  name: Create Work Week Policy
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "work_week",
+    "name": "{{hrWorkWeekName}}",
+    "workWeek": {
+      "days": [
+        { "weekday": 1, "start": "07:00", "end": "17:00" },
+        { "weekday": 2, "start": "07:00", "end": "17:00" },
+        { "weekday": 3, "start": "07:00", "end": "17:00" },
+        { "weekday": 4, "start": "07:00", "end": "17:00" }
+      ]
+    },
+    "memberIds": []
+  }
+}
+
+script:pre-request {
+  bru.setVar("hrWorkWeekName", `Bruno four tens ${Date.now()}`);
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrWorkWeekPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("stores one row per working weekday", function () {
+    expect(res.getBody().workWeek.days.map((d) => d.weekday)).to.eql([1, 2, 3, 4]);
+  });
+}
+
+docs {
+  # POST /hr/policies — create a Work week policy (PAC-161 v3)
+
+  Module `hr`, permission `agency:hr:admin`.
+
+  `workWeek.days[]` — `{ weekday 0–6 (Sunday = 0), start, end }`, 24-hour
+  `HH:mm` on the agency's clock, `end` after `start`, each weekday once, at
+  least one. Stored sorted by weekday; a weekday not listed is a day off.
+  Someone in no Work week policy works Mon–Fri 9–5.
+
+  Errors as for a Holiday policy.
+}

@@ -8,7 +8,6 @@ import { ModuleKey } from '@sfa/shared';
 import { AppModule } from '../src/app.module';
 import { AuditTemplate } from '../src/audit-templates/schemas/audit-template.schema';
 import { Branch } from '../src/branches/schemas/branch.schema';
-import { AgencyCalendar } from '../src/hr/schemas/agency-calendar.schema';
 import { InngestService } from '../src/inngest/inngest.service';
 import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import { RolePermission } from '../src/permissions/schemas/role-permission.schema';
@@ -72,7 +71,6 @@ describe('Agency onboarding (e2e)', () => {
   let rolePermissions: Model<RolePermission>;
   let userRoles: Model<UserRole>;
   let auditTemplates: Model<AuditTemplate>;
-  let calendars: Model<AgencyCalendar>;
   let users: Model<User>;
   let carriers: Model<Carrier>;
   let allstateId: Types.ObjectId;
@@ -138,9 +136,6 @@ describe('Agency onboarding (e2e)', () => {
     userRoles = app.get<Model<UserRole>>(getModelToken(UserRole.name));
     auditTemplates = app.get<Model<AuditTemplate>>(
       getModelToken(AuditTemplate.name),
-    );
-    calendars = app.get<Model<AgencyCalendar>>(
-      getModelToken(AgencyCalendar.name),
     );
     users = app.get<Model<User>>(getModelToken(User.name));
     carriers = app.get<Model<Carrier>>(getModelToken(Carrier.name));
@@ -254,20 +249,6 @@ describe('Agency onboarding (e2e)', () => {
         agencyId: result.agency.id,
       });
       expect(count).toBeGreaterThan(0);
-    });
-
-    it('creates the HR calendar from the branch address, and no leave policy (PAC-161)', async () => {
-      // String agencyId, like the templates. The branch fixture is in Austin,
-      // so the region is Texas; the workweek is Mon–Fri; nothing else.
-      const calendar = await calendars
-        .findOne({ agencyId: result.agency.id })
-        .lean();
-      expect(calendar).toMatchObject({
-        workweek: [1, 2, 3, 4, 5],
-        country: 'US',
-        region: 'TX',
-        proposals: [],
-      });
     });
 
     it('creates the owner as a pending invite holding the Agency Owner role', async () => {
@@ -649,7 +630,6 @@ describe('Agency onboarding (e2e)', () => {
         rolePermissions: await rolePermissions.countDocuments(),
         userRoles: await userRoles.countDocuments(),
         auditTemplates: await auditTemplates.countDocuments(),
-        calendars: await calendars.countDocuments(),
         users: await users.countDocuments(),
       };
 
@@ -676,7 +656,6 @@ describe('Agency onboarding (e2e)', () => {
         rolePermissions: await rolePermissions.countDocuments(),
         userRoles: await userRoles.countDocuments(),
         auditTemplates: await auditTemplates.countDocuments(),
-        calendars: await calendars.countDocuments(),
         users: await users.countDocuments(),
       };
       expect(after).toEqual(before);

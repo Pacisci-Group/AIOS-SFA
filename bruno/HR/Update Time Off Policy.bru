@@ -1,0 +1,47 @@
+meta {
+  name: Update Time Off Policy
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/hr/policies/{{hrPolicyId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "holiday": {
+      "holidays": ["thanksgiving", "christmas_day"],
+      "customHolidays": []
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("replaces the rules", function () {
+    expect(res.getBody().holiday).to.eql({
+      holidays: ["thanksgiving", "christmas_day"],
+      customHolidays: [],
+    });
+  });
+}
+
+docs {
+  # PATCH /hr/policies/:policyId — edit a policy (PAC-161 v3)
+
+  Module `hr`, permission `agency:hr:admin`. Any of `name`, `holiday`,
+  `workWeek`, `memberIds` (at least one); each replaces the stored value
+  whole. Rules must match the policy's type — `workWeek` on a Holiday policy
+  is a `400`. `memberIds` moves people out of their other policy of the type,
+  as on create. `404` archived/unknown, `409` name taken.
+}

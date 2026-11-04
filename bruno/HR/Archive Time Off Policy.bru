@@ -1,0 +1,29 @@
+meta {
+  name: Archive Time Off Policy
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{hrPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — archive a policy (PAC-161 v3)
+
+  Module `hr`, permission `agency:hr:admin`. Soft: sets `archivedAt` /
+  `archivedBy` and keeps the row (PAC-155). The policy leaves the list, its
+  name is free again, and its people are in no policy of that type until
+  enrolled elsewhere. A second archive is a `404`.
+}

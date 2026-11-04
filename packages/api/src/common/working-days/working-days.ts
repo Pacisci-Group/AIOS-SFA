@@ -14,7 +14,7 @@ import {
 } from '../../performance/performance.range';
 
 /**
- * Working-day arithmetic on an agency's own calendar (PAC-161) — the one
+ * Working-day arithmetic on a person's calendar (PAC-161) — the one
  * place anything in the HR module counts days.
  *
  * Pure: no Mongo, no zone. Everything takes and returns a `CalendarDate`

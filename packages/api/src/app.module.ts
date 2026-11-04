@@ -158,8 +158,8 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // hour (PAC-141, PAC-149). Same shape, own `agency/profile` prefix, gated
     // on its own `agency:settings:*` pair.
     AgencyProfileModule,
-    // HR (PAC-161): the agency calendar, leave policies and the HR Policy
-    // view, under its own `hr/*` prefix and the `hr` module entitlement.
+    // HR (PAC-161): time off policies (holidays, work weeks), under its own
+    // `hr/*` prefix and the `hr` module entitlement.
     HrModule,
     // The agency's carrier appointments (PAC-93). Same shape as the modules
     // above — its own `agency/carrier-appointments` prefix, its own

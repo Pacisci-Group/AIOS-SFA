@@ -1,0 +1,25 @@
+meta {
+  name: List Time Off Policies (as Producer, 403)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/hr/policies
+  auth: inherit
+}
+
+tests {
+  test("a producer never sees the policies", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /hr/policies as a producer — 403
+
+  Every `/hr/policies` route is `agency:hr:admin`. `hr:read` (every
+  employee) reads nothing here; an employee's own holidays and hours arrive
+  with PAC-165. The collection's default bearer is the producer, so this pins
+  the gate.
+}

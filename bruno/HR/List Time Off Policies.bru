@@ -1,0 +1,44 @@
+meta {
+  name: List Time Off Policies
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/hr/policies?type=work_week
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("filters to the type and counts every type", function () {
+    const body = res.getBody();
+    expect(body.counts).to.have.keys(["holiday", "work_week", "time_off"]);
+    expect(body.counts.work_week).to.be.at.least(1);
+    expect(body.policies.every((p) => p.type === "work_week")).to.equal(true);
+    expect(body.policies.map((p) => p.id)).to.include(bru.getVar("hrWorkWeekPolicyId"));
+  });
+}
+
+docs {
+  # GET /hr/policies — the Time off page (PAC-161 v3)
+
+  Module `hr`, permission `agency:hr:admin`, agency-wide.
+
+  Query `type` — `holiday` | `work_week` | `time_off`, optional.
+
+  ```json
+  { "policies": [ /* active, newest first, rules but no members */ ],
+    "counts": { "holiday": 2, "work_week": 1, "time_off": 0 } }
+  ```
+
+  `counts` is always every type's active count, whatever `type` asked for —
+  the page's three cards. `time_off` is always 0 until PAC-174.
+}

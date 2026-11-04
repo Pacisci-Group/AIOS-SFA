@@ -88,8 +88,9 @@ const EmailSenderPage = lazy(
 const CarrierAppointmentsPage = lazy(
   () => import('@/features/settings/CarrierAppointmentsPage'),
 );
-const HrSettingsPage = lazy(
-  () => import('@/features/hr/settings/HrSettingsPage'),
+const TimeOffPage = lazy(() => import('@/features/hr/time-off/TimeOffPage'));
+const PolicyWizardPage = lazy(
+  () => import('@/features/hr/time-off/PolicyWizardPage'),
 );
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
@@ -672,20 +673,41 @@ export function App() {
                   }
                 />
               </Route>
-              {/* HR (PAC-161): the agency calendar, leave policies and the HR
-                  Policy slots. `agency:hr:admin` — an admin capability the
-                  Branch Manager and the owner hold; `hr:read` alone sees
-                  none of this. */}
+              {/* Time off (PAC-161 v3): Holiday and Work week policies, and
+                  the time off policies of PAC-174. `agency:hr:admin` — an
+                  admin capability the Branch Manager and the owner hold;
+                  `hr:read` alone sees none of this. `/settings/hr` was the
+                  v2 calendar page and redirects here. */}
               <Route
                 element={<RequirePermission permission="agency:hr:admin" />}
               >
                 <Route
-                  path="/settings/hr"
+                  path="/settings/time-off"
                   element={
                     <LazyPage>
-                      <HrSettingsPage />
+                      <TimeOffPage />
                     </LazyPage>
                   }
+                />
+                <Route
+                  path="/settings/time-off/new/:typeSlug"
+                  element={
+                    <LazyPage>
+                      <PolicyWizardPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/settings/time-off/:policyId"
+                  element={
+                    <LazyPage>
+                      <PolicyWizardPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/settings/hr"
+                  element={<Navigate to="/settings/time-off" replace />}
                 />
               </Route>
               {/* The agency's working day — time zone and end-of-day hour

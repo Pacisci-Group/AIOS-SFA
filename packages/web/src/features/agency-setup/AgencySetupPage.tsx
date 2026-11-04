@@ -45,7 +45,7 @@ export default function AgencySetupPage() {
   // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
   const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
   // The current step's Continue handler and whether it is mid-save
-  // (`useStepContinue`); only the holiday step writes on Continue.
+  // (`useStepContinue`); the time zone step reports a save in flight.
   const continueRef = useRef<StepContinueHandler | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
   const stepControls = useMemo(
@@ -132,7 +132,7 @@ export default function AgencySetupPage() {
           {agencyName} is already set up
         </h1>
         <p className="text-sm text-muted-foreground">
-          Your branding, email, time zone and holidays live under Settings,
+          Your branding, email and time zone live under Settings,
           and can be changed whenever you like.
         </p>
         <Button variant="brand" onClick={() => navigate("/", { replace: true })}>

@@ -1,21 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
-  DEFAULT_WORKWEEK,
-  type CalendarDayKind,
+  DEFAULT_WORK_WEEK_DAYS,
+  holidaysBetween,
+  type HolidayPolicyRules,
   type ScheduledDay,
-  type Weekday,
   type WorkSchedule,
+  type WorkWeekDay,
 } from '@sfa/shared';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
-  AgencyCalendar,
-  type AgencyCalendarDocument,
-} from '../../hr/schemas/agency-calendar.schema';
-import {
-  AgencyCalendarDay,
-  type AgencyCalendarDayDocument,
-} from '../../hr/schemas/agency-calendar-day.schema';
+  TimeOffPolicy,
+  type TimeOffPolicyDocument,
+} from '../../hr/schemas/time-off-policy.schema';
 import {
   type CalendarDate,
   toIsoDate,
@@ -31,70 +28,85 @@ import {
   workingDaysInMonth,
 } from './working-days';
 
-/** What a lean read of the settings document yields; defaults do not apply. */
-export type AgencyCalendarLean = {
-  workweek?: Weekday[];
-  country?: string | null;
-  region?: string | null;
-};
-
-export interface CalendarSettings {
-  workweek: Weekday[];
-  country: string | null;
-  region: string | null;
+/** A person's week and holidays, as their two policies say. */
+export interface PersonCalendar {
+  snapshot: CalendarSnapshot;
+  schedule: WorkSchedule;
+  /** The policies it came from; `null` = the default (Mon–Fri / no holidays). */
+  holidayPolicyId: string | null;
+  workWeekPolicyId: string | null;
 }
 
 /**
- * The one working-day service (PAC-161): loads an agency's calendar once into
- * a {@link CalendarSnapshot} and answers every "is this a working day" question
- * from it. Lives in `common/` so PAC-165's worker jobs may import it.
+ * The one working-day service (PAC-161 v3): builds a person's
+ * {@link CalendarSnapshot} from their Holiday and Work week policies and
+ * answers every "is this a working day" question from it. Lives in
+ * `common/` so PAC-165's worker jobs may import it.
  *
- * Never throws for an agency with no calendar document: a database that
- * predates the `hr_module` migration, or a test fixture, gets the Mon–Fri
- * default and no closed days. HR is then "a workweek and nothing more", which
- * is a working state, not an error.
+ * Working days are **per person** now: two people in the same agency can be
+ * in different Holiday policies and work different weeks. Someone in no Work
+ * week policy works Mon–Fri 9–5; someone in no Holiday policy has no
+ * holidays. Never throws for a person in neither — that is a working state.
  */
 @Injectable()
 export class WorkingDaysService {
   constructor(
-    @InjectModel(AgencyCalendar.name)
-    private readonly calendars: Model<AgencyCalendarDocument>,
-    @InjectModel(AgencyCalendarDay.name)
-    private readonly days: Model<AgencyCalendarDayDocument>,
+    @InjectModel(TimeOffPolicy.name)
+    private readonly policies: Model<TimeOffPolicyDocument>,
   ) {}
 
-  async settings(agencyId: string): Promise<CalendarSettings> {
-    const doc = await this.calendars
-      .findOne({ agencyId })
-      .select('workweek country region')
-      .lean<AgencyCalendarLean | null>();
-    return {
-      workweek: doc?.workweek?.length ? doc.workweek : [...DEFAULT_WORKWEEK],
-      country: doc?.country ?? null,
-      region: doc?.region ?? null,
-    };
-  }
-
   /**
-   * The calendar as a snapshot. `range` bounds the rows read (inclusive
-   * `YYYY-MM-DD` strings); omit it for the whole history — the rows are small,
-   * and a job walking an unbounded span wants them all.
+   * `range` bounds the holidays computed (inclusive `YYYY-MM-DD`). Holidays
+   * are computed by rule, not read, so the range is required: an unbounded
+   * span would be every year there is.
    */
-  async snapshot(
+  async forPerson(
     agencyId: string,
-    range?: { from: string; to: string },
-  ): Promise<CalendarSnapshot> {
-    const settings = await this.settings(agencyId);
-    const rows = await this.days
+    userId: string,
+    range: { from: string; to: string },
+  ): Promise<PersonCalendar> {
+    const rows = await this.policies
       .find({
         agencyId,
-        // Spelled out: the active-row unique index is partial on it.
-        removedAt: null,
-        ...(range ? { date: { $gte: range.from, $lte: range.to } } : {}),
+        archivedAt: null,
+        type: { $in: ['holiday', 'work_week'] },
+        memberIds: new Types.ObjectId(userId),
       })
-      .select('date kind')
-      .lean<{ date: string; kind: CalendarDayKind }[]>();
-    return snapshotFrom(settings.workweek, rows);
+      .select('type holiday workWeek')
+      .lean<
+        {
+          _id: Types.ObjectId;
+          type: 'holiday' | 'work_week';
+          holiday?: HolidayPolicyRules;
+          workWeek?: { days: WorkWeekDay[] };
+        }[]
+      >();
+    const holidayPolicy = rows.find((row) => row.type === 'holiday') ?? null;
+    const workWeekPolicy = rows.find((row) => row.type === 'work_week') ?? null;
+
+    const days = workWeekPolicy?.workWeek?.days?.length
+      ? workWeekPolicy.workWeek.days
+      : DEFAULT_WORK_WEEK_DAYS;
+    const holidays = holidayPolicy?.holiday
+      ? holidaysBetween(
+          {
+            holidays: holidayPolicy.holiday.holidays ?? [],
+            customHolidays: holidayPolicy.holiday.customHolidays ?? [],
+          },
+          range.from,
+          range.to,
+        )
+      : [];
+
+    return {
+      snapshot: snapshotFrom(
+        days.map((day) => day.weekday),
+        holidays.map((row) => ({ date: row.date, kind: 'holiday' as const })),
+      ),
+      schedule: toSchedule(days),
+      holidayPolicyId: holidayPolicy?._id.toString() ?? null,
+      workWeekPolicyId: workWeekPolicy?._id.toString() ?? null,
+    };
   }
 
   /** Today on the agency's calendar. */
@@ -139,23 +151,16 @@ export class WorkingDaysService {
     return scheduledDaysBetween(calendar, schedule, from, to);
   }
 
-  /** `'YYYY-MM'` → working days, for every month of `year`. */
-  workingDaysByMonth(
-    calendar: CalendarSnapshot,
-    year: number,
-  ): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (let month = 1; month <= 12; month += 1) {
-      out[`${year}-${String(month).padStart(2, '0')}`] = workingDaysInMonth(
-        calendar,
-        year,
-        month,
-      );
-    }
-    return out;
-  }
-
   static isoOf(date: CalendarDate): string {
     return toIsoDate(date);
   }
+}
+
+/** A Work week policy's rows as the schedule `scheduledDaysBetween` takes. */
+export function toSchedule(days: readonly WorkWeekDay[]): WorkSchedule {
+  const schedule: WorkSchedule = {};
+  for (const day of days) {
+    schedule[day.weekday] = { start: day.start, end: day.end };
+  }
+  return schedule;
 }

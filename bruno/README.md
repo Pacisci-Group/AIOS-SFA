@@ -119,16 +119,17 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
 | HR | Login as Manager | `POST /auth/login` | **PAC-161** — the Branch Manager is the Office Manager and holds `agency:hr:admin` by template + migration; the folder asserts the four HR permissions and captures `hrAdminAccessToken`. |
-| HR | Get Calendar | `GET /hr/calendar` | **PAC-161** — the agency calendar for a year: workweek, country/region, active rows, working days per month, any pending Q4 proposal. `hr:read` (every employee). |
-| HR | Update Calendar | `PATCH /hr/calendar` | **PAC-161** — workweek and where the agency is (`date-holidays` codes, upper-cased). `agency:hr:admin`. |
-| HR | Update Calendar (as Producer, 403) | `PATCH /hr/calendar` | **PAC-161** — a producer may read the calendar but never change it. |
-| HR | Get Holiday Regions | `GET /hr/calendar/holiday-regions` | **PAC-161** — the countries the package knows, and the regions of one. |
-| HR | Get Holiday Suggestions | `GET /hr/calendar/holiday-suggestions` | **PAC-161 v2** — one row per date, `group` of `federal` or `other` merged from two `date-holidays` instances (the federal label wins), `preChecked` on the federal set minus the weekend original of a substitute pair. Nothing is written. |
-| HR | Add Calendar Days | `POST /hr/calendar/days` | **PAC-161** — a `manual` closure with its reason; captures `hrCalendarDayId`. ⚠ `409` on a re-run against a database that already holds the date. |
-| HR | Add Calendar Days (Custom range) | `POST /hr/calendar/days` | **PAC-161 v2** — a custom holiday range as the web sends it: expanded client-side to one `holiday` row per workweek day, across the year boundary. Same re-run caveat. |
-| HR | Add Calendar Days (Duplicate, 409) | `POST /hr/calendar/days` | **PAC-161** — a date already active is a `409` naming it; nothing from the batch is written. |
-| HR | Remove Calendar Day | `DELETE /hr/calendar/days/:id` | **PAC-161** — soft-removes with a reason (`removedAt`), freeing the date. |
-| HR | Confirm Holiday Proposal (None, 404) | `POST /hr/calendar/proposals/:year/confirm` | **PAC-161** — a year with no Q4 proposal is a `404`. Confirming writes the chosen subset as `proposal` rows. |
+| HR | List Time Off Policies (as Producer, 403) | `GET /hr/policies` | **PAC-161 v3** — every policy route is `agency:hr:admin`; a producer sees none of it. |
+| HR | List Policy People | `GET /hr/policies/people` | **PAC-161 v3** — who a policy can enrol (active + invited, never a platform admin) and each person's current Holiday / Work week policy. |
+| HR | Create Holiday Policy | `POST /hr/policies` | **PAC-161 v3** — holidays by key (recurring every year, observed on the nearest weekday) plus custom all-day ranges; captures `hrPolicyId`. Unique name per run. |
+| HR | Create Holiday Policy (Duplicate name, 409) | `POST /hr/policies` | **PAC-161 v3** — a name is unique per type among active policies. |
+| HR | Get Time Off Policy | `GET /hr/policies/:policyId` | **PAC-161 v3** — one policy with its members; `404` once archived. |
+| HR | Update Time Off Policy | `PATCH /hr/policies/:policyId` | **PAC-161 v3** — replaces name / rules / members; rules of the wrong type are a `400`. |
+| HR | Create Work Week Policy | `POST /hr/policies` | **PAC-161 v3** — working weekdays with `HH:mm` hours; captures `hrWorkWeekPolicyId`. |
+| HR | List Time Off Policies | `GET /hr/policies?type=` | **PAC-161 v3** — the Time off page: active policies (filtered by `type`) and every type's count for the three cards. |
+| HR | Archive Time Off Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — soft archive (`204`); the people are freed. |
+| HR | Archive Time Off Policy (Again, 404) | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — an archived policy is a `404`. |
+| HR | Archive Work Week Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — tidies up the run's Work week policy. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
 | Platform Agencies | Login as Super Admin | `POST /auth/login` | **PAC-69** — the platform operator. Each folder is self-contained, so this is duplicated rather than shared with **Platform Mailers**. |
 | Platform Agencies | Check Availability | `GET /platform/agencies/availability` | **PAC-69** — live slug/email/ticker checks for the onboarding wizard. `platform:agencies:read`. Mints the timestamped identity the rest of the folder uses. |

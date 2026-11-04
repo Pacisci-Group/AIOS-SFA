@@ -1,98 +1,61 @@
 import type {
-  AddCalendarDaysInput,
-  AddCalendarDaysResponse,
-  AgencyCalendarDayView,
-  AgencyCalendarView,
-  ConfirmHolidayProposalInput,
-  HolidayProposalView,
-  HolidayRegionsResponse,
-  HolidaySuggestionsResponse,
-  UpdateAgencyCalendarInput,
+  CreateTimeOffPolicyInput,
+  PolicyPeopleResponse,
+  TimeOffPoliciesResponse,
+  TimeOffPolicyType,
+  TimeOffPolicyView,
+  UpdateTimeOffPolicyInput,
 } from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
 /**
- * The HR foundation's endpoints (PAC-161): the agency calendar, holiday
- * suggestions and the Q4 next-year proposals.
- *
- * Reading the calendar is `hr:read` (every employee); everything else is
- * `agency:hr:admin`. Callers outside an admin's session must tolerate a 403.
+ * Time off policies (PAC-161 v3) — Settings → Time off. Every call is
+ * `agency:hr:admin`; the page is gated on the same permission.
  */
 
 export const hrKeys = {
-  calendar: (year: number) => ['hr', 'calendar', year] as const,
-  regions: (country: string | null) => ['hr', 'regions', country] as const,
+  all: ['hr', 'policies'] as const,
+  policies: (type: TimeOffPolicyType | null) =>
+    ['hr', 'policies', 'list', type] as const,
+  policy: (id: string) => ['hr', 'policies', 'one', id] as const,
+  people: ['hr', 'policies', 'people'] as const,
 };
 
-export function getAgencyCalendar(year: number): Promise<AgencyCalendarView> {
-  return apiFetch<AgencyCalendarView>(`/hr/calendar?year=${year}`);
-}
-
-export function updateAgencyCalendar(
-  input: UpdateAgencyCalendarInput,
-): Promise<AgencyCalendarView> {
-  return apiFetch<AgencyCalendarView>('/hr/calendar', {
-    method: 'PATCH',
-    body: JSON.stringify(input),
-  });
-}
-
-export function getHolidayRegions(
-  country: string | null,
-): Promise<HolidayRegionsResponse> {
-  const query = country ? `?country=${encodeURIComponent(country)}` : '';
-  return apiFetch<HolidayRegionsResponse>(`/hr/calendar/holiday-regions${query}`);
-}
-
-export function getHolidaySuggestions(input: {
-  country: string;
-  region: string | null;
-  year: number;
-}): Promise<HolidaySuggestionsResponse> {
-  const params = new URLSearchParams({
-    country: input.country,
-    year: String(input.year),
-  });
-  if (input.region) params.set('region', input.region);
-  return apiFetch<HolidaySuggestionsResponse>(
-    `/hr/calendar/holiday-suggestions?${params.toString()}`,
+export function listTimeOffPolicies(
+  type: TimeOffPolicyType | null,
+): Promise<TimeOffPoliciesResponse> {
+  return apiFetch<TimeOffPoliciesResponse>(
+    `/hr/policies${type ? `?type=${type}` : ''}`,
   );
 }
 
-export function addCalendarDays(
-  input: AddCalendarDaysInput,
-): Promise<AddCalendarDaysResponse> {
-  return apiFetch<AddCalendarDaysResponse>('/hr/calendar/days', {
+export function getTimeOffPolicy(id: string): Promise<TimeOffPolicyView> {
+  return apiFetch<TimeOffPolicyView>(`/hr/policies/${id}`);
+}
+
+export function listPolicyPeople(): Promise<PolicyPeopleResponse> {
+  return apiFetch<PolicyPeopleResponse>('/hr/policies/people');
+}
+
+export function createTimeOffPolicy(
+  input: CreateTimeOffPolicyInput,
+): Promise<TimeOffPolicyView> {
+  return apiFetch<TimeOffPolicyView>('/hr/policies', {
     method: 'POST',
     body: JSON.stringify(input),
   });
 }
 
-export function removeCalendarDay(
+export function updateTimeOffPolicy(
   id: string,
-  reason: string,
-): Promise<AgencyCalendarDayView> {
-  return apiFetch<AgencyCalendarDayView>(`/hr/calendar/days/${id}`, {
-    method: 'DELETE',
-    body: JSON.stringify({ reason }),
+  input: UpdateTimeOffPolicyInput,
+): Promise<TimeOffPolicyView> {
+  return apiFetch<TimeOffPolicyView>(`/hr/policies/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
   });
 }
 
-export function confirmHolidayProposal(
-  year: number,
-  input: ConfirmHolidayProposalInput,
-): Promise<HolidayProposalView> {
-  return apiFetch<HolidayProposalView>(
-    `/hr/calendar/proposals/${year}/confirm`,
-    { method: 'POST', body: JSON.stringify(input) },
-  );
-}
-
-export function dismissHolidayProposal(
-  year: number,
-): Promise<HolidayProposalView> {
-  return apiFetch<HolidayProposalView>(
-    `/hr/calendar/proposals/${year}/dismiss`,
-    { method: 'POST' },
-  );
+export function archiveTimeOffPolicy(id: string): Promise<void> {
+  return apiFetch<void>(`/hr/policies/${id}/archive`, { method: 'POST' });
 }

@@ -2,11 +2,11 @@ import { AgencyPermission } from "@sfa/shared";
 import {
   AtSign,
   BadgeCheck,
-  CalendarDays,
   Clock,
   Globe,
   KeyRound,
   Palette,
+  Plane,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -96,11 +96,11 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     // PAC-161. An admin capability rather than a module pair: the Branch
     // Manager (the Office Manager) and the owner hold it by default.
-    to: "/settings/hr",
-    label: "HR",
+    to: "/settings/time-off",
+    label: "Time off",
     description:
-      "Your working week, holidays and closures.",
-    icon: CalendarDays,
+      "Holiday and work week policies, and who each one applies to.",
+    icon: Plane,
     permission: AgencyPermission.HrAdmin,
   },
 ];

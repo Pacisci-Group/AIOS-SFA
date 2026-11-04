@@ -1,25 +1,20 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import {
-  AgencyCalendar,
-  AgencyCalendarSchema,
-} from '../../hr/schemas/agency-calendar.schema';
-import {
-  AgencyCalendarDay,
-  AgencyCalendarDaySchema,
-} from '../../hr/schemas/agency-calendar-day.schema';
+  TimeOffPolicy,
+  TimeOffPolicySchema,
+} from '../../hr/schemas/time-off-policy.schema';
 import { WorkingDaysService } from './working-days.service';
 
 /**
- * The working-day service and the two calendar schemas it reads (PAC-161).
- * Imported by the HR feature module and by the worker — a job counting
- * business days must never grow its own loop over the calendar.
+ * The working-day service and the policy schema it reads (PAC-161 v3).
+ * Imported by the HR feature module and, from PAC-165, by the worker — a job
+ * counting business days must never grow its own loop over the policies.
  */
 @Module({
   imports: [
     MongooseModule.forFeature([
-      { name: AgencyCalendar.name, schema: AgencyCalendarSchema },
-      { name: AgencyCalendarDay.name, schema: AgencyCalendarDaySchema },
+      { name: TimeOffPolicy.name, schema: TimeOffPolicySchema },
     ]),
   ],
   providers: [WorkingDaysService],

@@ -139,12 +139,4 @@ export interface AgencySetupView {
   completedAt: string | null;
   /** Whether the owner skipped the white-label step rather than filling it in. */
   brandingSkipped: boolean;
-  /**
-   * The two HR phases (PAC-161), recorded the same way. Skipping the calendar
-   * leaves the workweek only; skipping HR Policy leaves the agency with **no**
-   * leave policy, which is a working state — the agency does not use leave
-   * until one is added under Settings.
-   */
-  calendarSkipped: boolean;
-  hrPolicySkipped: boolean;
 }
