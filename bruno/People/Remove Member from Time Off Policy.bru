@@ -1,0 +1,29 @@
+meta {
+  name: Remove Member from Time Off Policy
+  type: http
+  seq: 17
+}
+
+delete {
+  url: {{baseUrl}}/hr/policies/{{peoplePolicyId}}/members/{{peoplePersonId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /hr/policies/:policyId/members/:userId — Remove from policy (PAC-162)
+
+  Module `hr`, permission `agency:hr:admin`. Takes one person out of a
+  policy; a time off policy posts a `removed_from_policy` row and keeps the
+  ledger, so the balance resumes if they are re-added. `404` when they are
+  not a member, or the policy is archived / unknown.
+}

@@ -1,0 +1,28 @@
+meta {
+  name: Revoke Invite (People)
+  type: http
+  seq: 22
+}
+
+delete {
+  url: {{baseUrl}}/users/{{peoplePersonId}}/invite
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /users/:userId/invite — deletes the profile with the row (PAC-162)
+
+  The invite was never accepted, so it can still be revoked: the user row
+  **and its employee profile** are deleted, leaving no residue from the run
+  (the archived policy keeps its ledger rows, as every archive does).
+}

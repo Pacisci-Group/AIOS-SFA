@@ -40,6 +40,7 @@ import { HolidayPolicy } from '../../hr/schemas/holiday-policy.schema';
 import { WorkWeekPolicy } from '../../hr/schemas/work-week-policy.schema';
 import { TimeOffPolicy } from '../../hr/schemas/time-off-policy.schema';
 import { LeaveLedger } from '../../hr/schemas/leave-ledger.schema';
+import { EmployeeProfile } from '../../hr/schemas/employee-profile.schema';
 import { businessDateInstant } from '../../common/dates/business-dates';
 import { agencyTodayIso } from '../../performance/performance.range';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
@@ -89,6 +90,7 @@ import {
   STREET_NAMES,
   STREET_SUFFIXES,
   TEAM,
+  TEAM_PROFILES,
   TeamMemberSpec,
 } from './demo-data';
 import { createRng, Rng } from './rng';
@@ -267,6 +269,8 @@ export class DemoSeedService {
     private readonly timeOffPolicyModel: Model<TimeOffPolicy>,
     @InjectModel(LeaveLedger.name)
     private readonly leaveLedgerModel: Model<LeaveLedger>,
+    @InjectModel(EmployeeProfile.name)
+    private readonly employeeProfileModel: Model<EmployeeProfile>,
     @InjectModel(InterestedParty.name)
     private readonly interestedPartyModel: Model<InterestedParty>,
     @InjectModel(PriorInsurance.name)
@@ -530,6 +534,7 @@ export class DemoSeedService {
         roleId ? [roleId] : [],
       );
       this.inc('users');
+      await this.seedEmployeeProfile(ctx, user._id, spec);
       team.push({
         spec,
         email,
@@ -540,6 +545,51 @@ export class DemoSeedService {
       });
     }
     return team;
+  }
+
+  /**
+   * The person's HR record (PAC-162): `active` with the facts in
+   * `TEAM_PROFILES`, `pending` for a member not listed there. The facts are
+   * `$setOnInsert` — a demo click (Complete onboarding, Edit details) is
+   * not undone by the next reseed — but the phone is re-stamped with the
+   * rest of the user row. The demo seed writes through the model like the
+   * policies above; the authorship plugin leaves the author null (system).
+   */
+  private async seedEmployeeProfile(
+    ctx: Ctx,
+    userId: Types.ObjectId,
+    spec: TeamMemberSpec,
+  ): Promise<void> {
+    const facts = TEAM_PROFILES[spec.key];
+    if (facts?.phone) {
+      await this.userModel.updateOne(
+        { _id: userId },
+        { $set: { phone: facts.phone } },
+      );
+    }
+    await this.employeeProfileModel.updateOne(
+      { agencyId: ctx.agencyId, userId },
+      {
+        $setOnInsert: facts
+          ? {
+              status: 'active',
+              hireDate: facts.hireDate,
+              terminationDate: null,
+              dateOfBirth: facts.dateOfBirth ?? null,
+              showBirthday: facts.showBirthday ?? true,
+              onboarding: { completedAt: this.now, completedBy: null },
+            }
+          : {
+              status: 'pending',
+              hireDate: null,
+              terminationDate: null,
+              dateOfBirth: null,
+              showBirthday: true,
+              onboarding: { completedAt: null, completedBy: null },
+            },
+      },
+      { upsert: true },
+    );
   }
 
   // ---------------------------------------------------------------------------

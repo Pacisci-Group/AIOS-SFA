@@ -1,0 +1,34 @@
+meta {
+  name: Update Person Facts (Future hire date, 400)
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/hr/people/{{peoplePersonId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+body:json {
+  {
+    "hireDate": "2099-01-01"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH /hr/people/:userId — a hire date in the future (PAC-162)
+
+  Judged on the agency's calendar day (`AccessContext.timeZone`), not the
+  server clock: a hire date after today is a `400`.
+}

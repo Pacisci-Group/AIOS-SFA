@@ -1,0 +1,34 @@
+meta {
+  name: Complete Onboarding (Again, 409)
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/hr/people/{{peoplePersonId}}/onboarding/complete
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+body:json {
+  {
+    "hireDate": "2026-01-05"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST /hr/people/:userId/onboarding/complete — already complete (PAC-162)
+
+  An `active` profile answers `409` ("Onboarding is already complete.");
+  the facts are edited with `PATCH /hr/people/:userId` from here on.
+}

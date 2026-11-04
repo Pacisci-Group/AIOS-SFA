@@ -1,0 +1,43 @@
+meta {
+  name: Login as Producer
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("peopleProducerToken", res.getBody().accessToken);
+    bru.setVar("peopleProducerId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+}
+
+docs {
+  # POST /auth/login — People folder helper
+
+  A producer: holds `hr:read` and no `agency:users:read`, so they may open
+  **their own** profile (with its time off and schedule) and nobody else's.
+  Captures `peopleProducerToken` and `peopleProducerId`.
+}

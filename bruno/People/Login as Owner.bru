@@ -1,0 +1,50 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("peopleOwnerToken", res.getBody().accessToken);
+    bru.setVar("peopleOwnerId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the auth blob carries the phone (PAC-162)", function () {
+    expect(res.getBody().user).to.have.property("phone");
+  });
+}
+
+docs {
+  # POST /auth/login — People folder helper
+
+  Signs in the demo Agency Owner and captures `peopleOwnerToken` (the
+  directory, invites, removal) and `peopleOwnerId`. The folder is
+  self-contained — it relies on nothing another folder captured.
+
+  The auth blob gained `phone` with PAC-162 (free text, edited at
+  `/settings/profile` and by HR on the People profile).
+}

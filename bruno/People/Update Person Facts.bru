@@ -1,0 +1,55 @@
+meta {
+  name: Update Person Facts
+  type: http
+  seq: 12
+}
+
+patch {
+  url: {{baseUrl}}/hr/people/{{peoplePersonId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+body:json {
+  {
+    "phone": "(312) 555-0199",
+    "dateOfBirth": "1991-07-14",
+    "showBirthday": false,
+    "lastName": "Newbie-Smith"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("writes the user facts and the profile facts", function () {
+    const body = res.getBody();
+    expect(body.user.phone).to.equal("(312) 555-0199");
+    expect(body.user.name).to.equal("Nia Newbie-Smith");
+    expect(body.employment.dateOfBirth).to.equal("1991-07-14");
+    expect(body.employment.showBirthday).to.equal(false);
+    expect(body.employment.status).to.equal("pending");
+  });
+}
+
+docs {
+  # PATCH /hr/people/:userId — edit a person's facts (PAC-162)
+
+  Module `hr`, permission `agency:hr:admin`. Body (every field optional,
+  `null` clears, at least one): `firstName`, `lastName`, `phone` (free text,
+  ≤ 30), `hireDate`, `dateOfBirth` (`YYYY-MM-DD`), `showBirthday`. Name and
+  phone are written to the user row (the person edits the same at
+  `/settings/profile`), the dates to the employee profile. Returns the
+  profile view.
+
+  `400` — a hire date after today on the agency's calendar, a date of birth
+  not in the past or before 1900, a hire date after the termination date,
+  clearing the hire date of an `active` employee, an empty body. `404` —
+  unknown person or a platform admin.
+}

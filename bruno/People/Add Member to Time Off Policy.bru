@@ -1,0 +1,48 @@
+meta {
+  name: Add Member to Time Off Policy
+  type: http
+  seq: 19
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{peoplePolicyId}}/members
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+body:json {
+  {
+    "userId": "{{peoplePersonId}}"
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the balance resumes for a returning person", function () {
+    const me = res.getBody().members.find((m) => m.id === bru.getVar("peoplePersonId"));
+    expect(me.balanceHours).to.equal(16);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/members — Add to policy (PAC-162)
+
+  Module `hr`, permission `agency:hr:admin`. Body `{ userId,
+  startingBalanceHours? }`. The same rules as a member-list save: a time off
+  policy posts an `allocation` row (the balance given, or the policy's
+  default) **unless the person was in it before** — then their balance
+  resumes and a balance for them is a `400`; they leave their other policy of
+  the kind with a `removed_from_policy` row there. Holiday / Work week move
+  them likewise. Already a member: a no-op `201`, unless a balance was sent
+  (`400`). Returns the policy view.
+
+  `400` — balance on a non-time-off policy, person not enrollable. `404` —
+  archived / unknown policy.
+}
