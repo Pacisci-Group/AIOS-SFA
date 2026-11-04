@@ -39,7 +39,9 @@ export function DetailsCard({
       }
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <DataRow label="Email" value={user.email} />
+        {/* `break-all` inherits to the value: a long address wraps instead of
+            running under the next column. */}
+        <DataRow label="Email" value={user.email} className="break-all" />
         <DataRow label="Phone" value={user.phone ?? NOT_AVAILABLE} />
         <DataRow label="Branch" value={user.branch?.name ?? "Unassigned"} />
         <DataRow label="Role" value={user.roles.map((role) => role.name).join(", ") || NOT_AVAILABLE} />
