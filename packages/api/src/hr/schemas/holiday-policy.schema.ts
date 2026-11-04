@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HOLIDAY_KEYS, type HolidayKey } from '@sfa/shared';
 import { HydratedDocument } from 'mongoose';
-import { PolicyRecord } from './policy-record.schema';
+import { MemberListPolicyRecord } from './policy-record.schema';
 
 export type HolidayPolicyDocument = HydratedDocument<HolidayPolicy>;
 
@@ -35,7 +35,7 @@ export const CustomHolidayRowSchema =
  * each year.
  */
 @Schema({ timestamps: true, collection: 'holidayPolicies' })
-export class HolidayPolicy extends PolicyRecord {
+export class HolidayPolicy extends MemberListPolicyRecord {
   /** Catalog holidays (`HOLIDAY_KEYS`), recurring every year, catalog order. */
   @Prop({ type: [String], enum: HOLIDAY_KEYS, default: [] })
   holidays: HolidayKey[];

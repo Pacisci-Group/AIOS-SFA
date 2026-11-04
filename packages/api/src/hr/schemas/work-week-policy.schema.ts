@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type { Weekday } from '@sfa/shared';
 import { HydratedDocument } from 'mongoose';
-import { PolicyRecord } from './policy-record.schema';
+import { MemberListPolicyRecord } from './policy-record.schema';
 
 export type WorkWeekPolicyDocument = HydratedDocument<WorkWeekPolicy>;
 
@@ -30,7 +30,7 @@ export const WorkWeekDayRowSchema =
  * which PAC-165 uses to turn a time off request into hours.
  */
 @Schema({ timestamps: true, collection: 'workWeekPolicies' })
-export class WorkWeekPolicy extends PolicyRecord {
+export class WorkWeekPolicy extends MemberListPolicyRecord {
   @Prop({ type: [WorkWeekDayRowSchema], default: [] })
   days: WorkWeekDayRow[];
 }

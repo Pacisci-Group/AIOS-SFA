@@ -520,10 +520,14 @@ holidays should not be agency-wide. Decided in session:
     `customHolidays: [{ id, name, start, end, repeatsYearly }]`, `memberIds`.
   - `workWeekPolicies` — `agencyId`, `name`, `days: [{ weekday, start, end }]`,
     `memberIds`.
-  - Both extend `PolicyRecord` (`hr/schemas/policy-record.schema.ts`):
-    `name`, `memberIds`, `archivedAt/By` (soft archive, PAC-155), timestamps
-    and authorship. Indexes on each: `{agencyId, archivedAt}` and
-    `{agencyId, memberIds}`. PAC-174 adds its own collection for leave.
+  - `PolicyRecord` (`hr/schemas/policy-record.schema.ts`) is every policy
+    type's base: `name`, `archivedAt/By` (soft archive, PAC-155), timestamps
+    and authorship. Holiday and Work week extend `MemberListPolicyRecord`,
+    which adds the embedded `memberIds`. Indexes on each: `{agencyId,
+    archivedAt}` and `{agencyId, memberIds}`.
+  - PAC-174 adds `timeOffPolicies` on `PolicyRecord` alone, with enrolment in
+    its own `timeOffEnrollments` collection (a person can be in several, and
+    each enrolment has a start date and starting balance). Noted on PAC-174.
   - The wire contract is unchanged: `GET /hr/policies` reads both and merges,
     and a policy id is looked up in each.
 - **A person is in at most one active Holiday and one Work week policy.**

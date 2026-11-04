@@ -29,7 +29,7 @@ import {
   HolidayPolicy,
   type HolidayPolicyDocument,
 } from './schemas/holiday-policy.schema';
-import type { PolicyRecord } from './schemas/policy-record.schema';
+import type { MemberListPolicyRecord } from './schemas/policy-record.schema';
 import {
   WorkWeekPolicy,
   type WorkWeekDayRow,
@@ -51,8 +51,12 @@ type StoredRow = {
 /** A row tagged with the collection it came from. */
 type PolicyLean = StoredRow & { type: CreatablePolicyType };
 
-/** The operations every policy collection shares (`PolicyRecord`'s fields). */
-type PolicyModel = Model<PolicyRecord>;
+/**
+ * The operations the member-list collections share (Holiday, Work week).
+ * PAC-174's time off policies enrol through their own collection and get a
+ * branch of their own here.
+ */
+type PolicyModel = Model<MemberListPolicyRecord>;
 
 type UserLean = {
   _id: Types.ObjectId;
