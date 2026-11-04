@@ -155,7 +155,7 @@ export function DevNavPage() {
                 Administration
               </h2>
               <div className="grid gap-2">
-                <NavCard to="/settings/users" label="Agency Users" icon={Users} />
+                <NavCard to="/people" label="People" icon={Users} />
                 <NavCard
                   to="/settings/roles"
                   label="Roles & Permissions"

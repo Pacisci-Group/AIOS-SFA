@@ -1,0 +1,39 @@
+meta {
+  name: Update My Profile (Phone)
+  type: http
+  seq: 20
+}
+
+patch {
+  url: {{baseUrl}}/me/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleProducerToken}}
+}
+
+body:json {
+  {
+    "phone": "(312) 555-0102"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the auth blob reflects the phone", function () {
+    expect(res.getBody().phone).to.equal("(312) 555-0102");
+  });
+}
+
+docs {
+  # PATCH /me/profile — own phone (PAC-162)
+
+  `updateMyProfileSchema` gained `phone` (free text, ≤ 30, `clearable`).
+  Returns the auth-user blob, which now carries `phone`. The demo producer's
+  seeded number is written back so a re-run changes nothing.
+}

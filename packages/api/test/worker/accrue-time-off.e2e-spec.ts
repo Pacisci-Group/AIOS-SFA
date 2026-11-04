@@ -9,6 +9,7 @@ import { WorkerModule } from '../../src/worker/worker.module';
 import { AccrueTimeOffFn } from '../../src/worker/functions/accrue-time-off.fn';
 import { MailTransport } from '../../src/worker/email/mail-transport';
 import { Agency } from '../../src/platform/schemas/agency.schema';
+import { EmployeeProfile } from '../../src/hr/schemas/employee-profile.schema';
 import { LeaveLedger } from '../../src/hr/schemas/leave-ledger.schema';
 import { TimeOffPolicy } from '../../src/hr/schemas/time-off-policy.schema';
 import { inlineStep } from '../helpers/inline-step';
@@ -45,6 +46,7 @@ describe('AccrueTimeOffFn (e2e)', () => {
   let agencies: Model<Agency>;
   let policies: Model<TimeOffPolicy>;
   let ledger: Model<LeaveLedger>;
+  let profiles: Model<EmployeeProfile>;
 
   const agencyId = new Types.ObjectId();
   const alice = new Types.ObjectId();
@@ -81,6 +83,7 @@ describe('AccrueTimeOffFn (e2e)', () => {
       .distinct('_id');
     await ledger.deleteMany({ policyId: { $in: ids } });
     await policies.deleteMany({ agencyId: agencyId.toString() });
+    await profiles.deleteMany({ agencyId: agencyId.toString() });
     await agencies.collection.deleteMany({ _id: agencyId });
   }
 
@@ -143,6 +146,9 @@ describe('AccrueTimeOffFn (e2e)', () => {
     agencies = app.get<Model<Agency>>(getModelToken(Agency.name));
     policies = app.get<Model<TimeOffPolicy>>(getModelToken(TimeOffPolicy.name));
     ledger = app.get<Model<LeaveLedger>>(getModelToken(LeaveLedger.name));
+    profiles = app.get<Model<EmployeeProfile>>(
+      getModelToken(EmployeeProfile.name),
+    );
     // The partial unique index is what makes the job idempotent; build it
     // before the first write rather than trusting autoIndex's timing.
     await ledger.syncIndexes();
@@ -310,5 +316,48 @@ describe('AccrueTimeOffFn (e2e)', () => {
     expect(await rows(archived, alice)).toHaveLength(0);
     expect(await rows(unlimited, alice)).toHaveLength(0);
     expect(await rows(anniversary, alice)).toHaveLength(0);
+  });
+
+  it('runs the anniversary reset for a person whose profile has a hire date (PAC-162)', async () => {
+    const anniversary = await insertPolicy({
+      name: 'Anniversary PTO',
+      hoursPerYear: 80,
+      accrualFrequency: 'yearly',
+      resetDateKind: 'hire_anniversary',
+      resetMonthDay: null,
+      maxBalanceHours: null,
+      carryoverCapHours: 0,
+      memberIds: [alice, bob],
+    });
+    // Alice was hired on 1 March two years earlier; Bob has no hire date.
+    await profiles.create({
+      agencyId: agencyId.toString(),
+      userId: alice,
+      status: 'active',
+      hireDate: '2023-03-01',
+    });
+    await ledger.create({
+      agencyId: agencyId.toString(),
+      policyId: anniversary,
+      userId: alice,
+      kind: 'allocation',
+      hours: 30,
+      effectiveAt: new Date('2024-03-01T06:00:00Z'),
+      source: { kind: 'activation', id: anniversary },
+    });
+
+    await run(CHICAGO_MAR_1_0030);
+    const kinds = (await rows(anniversary, alice)).map((row) => row.kind);
+    expect(kinds).toEqual([
+      'allocation',
+      'expiration',
+      'carryover',
+      'allocation',
+    ]);
+    expect(await balance(anniversary, alice)).toBe(80);
+    expect(await rows(anniversary, bob)).toHaveLength(0);
+
+    await run(new Date(CHICAGO_MAR_1_0030.getTime() + 3_600_000));
+    expect(await rows(anniversary, alice)).toHaveLength(4);
   });
 });

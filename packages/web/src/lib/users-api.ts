@@ -1,4 +1,8 @@
-import type { PageLevelOverride, UserAvailability } from '@sfa/shared';
+import type {
+  PageLevelOverride,
+  PeopleStatus,
+  UserAvailability,
+} from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
 
 export interface AgencyUserRole {
@@ -14,36 +18,30 @@ export interface AgencyUser {
   email: string;
   firstName?: string;
   lastName?: string;
+  /** Free text (PAC-162); on the profile, not in the list. */
+  phone?: string;
   /** Taking leads or not (PAC-139 §6). Set by the user, never from the directory. */
   availability: UserAvailability;
   isActive: boolean;
   /**
    * ISO-8601 when the user was removed from the agency; null otherwise.
    *
-   * ⚠ `isActive: false` on its own is ambiguous — it covers both a pending
-   * invite and a removed employee. Use {@link userStatus} rather than reading
-   * `isActive` directly, or an ex-employee renders as "Invited" and gets offered
-   * a "Resend invite" button.
+   * ⚠ Neither this nor `isActive` is the status any more — read {@link status},
+   * which the server derives from both **and** the employee profile (PAC-162).
    */
   deactivatedAt: string | null;
+  /**
+   * Invited · Pending onboarding · Active · Deactivated, derived on the
+   * server. The one value the badge, the row menu and the facet read; the
+   * old client-side `userStatus()` is gone so nothing can disagree with it.
+   */
+  status: PeopleStatus;
+  /** `/users/:id/avatar?v=…` or null — authenticated; render through `UserAvatar`. */
+  avatarUrl: string | null;
   isPlatformAdmin: boolean;
   roleIds: AgencyUserRole[];
   createdAt?: string;
   updatedAt?: string;
-}
-
-export type UserStatus = 'active' | 'invited' | 'deactivated';
-
-/**
- * The single place the three-way status is derived.
- *
- * Extracted rather than inlined because the badge, both row-action components
- * and the empty-state copy all need it, and a nested ternary repeated four times
- * is how one of them ends up disagreeing with the others.
- */
-export function userStatus(user: AgencyUser): UserStatus {
-  if (user.deactivatedAt) return 'deactivated';
-  return user.isActive ? 'active' : 'invited';
 }
 
 /** What a removal put back into the unassigned queue. */
@@ -123,19 +121,13 @@ export interface InviteResponse {
   inviteToken?: string;
 }
 
-/** The three states the Status column shows. */
-export const AGENCY_USER_STATUSES = [
-  'active',
-  'invited',
-  'deactivated',
-] as const;
-
 export interface ListUsersParams {
   page?: number;
   pageSize?: number;
   /** Name, email, role name — and branch name, for a caller who can see it. */
   q?: string;
-  status?: UserStatus[];
+  /** The Status facet, ORed (PAC-162: four values). */
+  status?: PeopleStatus[];
 }
 
 export interface AgencyUserListResponse {

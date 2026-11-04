@@ -67,3 +67,25 @@ export interface ScheduledDay {
   scheduledMinutes: number;
   reason: ScheduledDayReason;
 }
+
+/** Minutes past midnight of an `'HH:mm'` clock value. */
+export function clockMinutes(value: string): number {
+  const [hours, minutes] = value.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+/** Hours between a day's `start` and `end`, two decimals; never negative. */
+export function scheduledDayHours(day: WorkScheduleDay): number {
+  const minutes = clockMinutes(day.end) - clockMinutes(day.start);
+  return Math.max(0, Math.round((minutes / 60) * 100) / 100);
+}
+
+/**
+ * The hours a person is scheduled for in a week — Σ (end − start) over the
+ * rows of their Work week policy, two decimals. Nobody clocks in, so this is
+ * the figure the profile shows (PAC-162) and PAC-165 turns a day off into.
+ */
+export function weeklyHours(days: readonly WorkScheduleDay[]): number {
+  const total = days.reduce((sum, day) => sum + scheduledDayHours(day), 0);
+  return Math.round(total * 100) / 100;
+}

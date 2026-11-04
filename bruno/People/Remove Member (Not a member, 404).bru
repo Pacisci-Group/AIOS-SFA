@@ -1,0 +1,26 @@
+meta {
+  name: Remove Member (Not a member, 404)
+  type: http
+  seq: 18
+}
+
+delete {
+  url: {{baseUrl}}/hr/policies/{{peoplePolicyId}}/members/{{peoplePersonId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # DELETE /hr/policies/:policyId/members/:userId — not a member (PAC-162)
+
+  Removing someone who is not in the policy is a `404`, not a silent no-op.
+}

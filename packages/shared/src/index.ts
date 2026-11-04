@@ -15,6 +15,7 @@ export * from './domain/google-address';
 export * from './domain/hot-lead';
 export * from './domain/hr-policy';
 export * from './domain/leave-ledger';
+export * from './domain/people';
 export * from './domain/time-off-policy';
 export * from './domain/time-off-accrual';
 export * from './domain/time-off-rules';

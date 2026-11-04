@@ -1,0 +1,67 @@
+meta {
+  name: Get Person Profile (Invited)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/users/{{peoplePersonId}}/profile
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the account and the HR facts, pending", function () {
+    const body = res.getBody();
+    expect(body.user.status).to.equal("invited");
+    expect(body.user.name).to.equal("Nia Newbie");
+    expect(body.user.phone).to.equal(null);
+    expect(body.employment.status).to.equal("pending");
+    expect(body.employment.hireDate).to.equal(null);
+    expect(body.employment).to.have.property("dateOfBirth");
+    expect(body.employment.onboardingCompletedAt).to.equal(null);
+  });
+
+  test("an HR admin sees the time off and schedule sections", function () {
+    const body = res.getBody();
+    expect(body.timeOff.policies).to.be.an("array");
+    expect(body.schedule.hoursPerWeek).to.equal(40);
+    expect(body.schedule.workWeek).to.equal(null);
+  });
+}
+
+docs {
+  # GET /users/:userId/profile — the People profile (PAC-162)
+
+  One read behind `/people/:userId`, assembled from the services that own
+  each fact:
+
+  - `user` — id, email, name halves + `name`, `phone`, `avatarUrl`, `branch`
+    `{ id, name }`, `roles[] { id, name }`, `availability`, `isActive`,
+    `deactivatedAt`, `status` (the list's four-way status).
+  - `employment` — profile `status` (`pending` / `active` / `terminated`),
+    `hireDate`, `terminationDate`, `onboardingCompletedAt/By`, and — **only for
+    the person themself or an `agency:hr:admin`** — `dateOfBirth` +
+    `showBirthday` (omitted otherwise, never an age).
+  - `timeOff.policies[]` — the active time off policies the person is in:
+    `{ id, name, timeOff: <rules>, balanceHours }` (`null` on Unlimited), the
+    balance being the sum of their `leaveLedger` rows.
+  - `schedule` — `workWeek { id, name } | null` (null = the default Mon–Fri
+    9–5), `days[]`, `hoursPerWeek` (Σ end − start — nobody clocks in), and
+    `holiday { id, name } | null`.
+
+  `timeOff` and `schedule` are present only for the person themself holding
+  `hr:read`, or an `agency:hr:admin`.
+
+  **Permission** — **none declared**: the service answers `403` unless the
+  caller is the person (`access.userId === :userId`) or holds
+  `agency:users:read`. The one such route on the users controller. `404` for
+  an unknown id or a platform admin.
+}

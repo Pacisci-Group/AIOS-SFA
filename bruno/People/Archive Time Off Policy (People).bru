@@ -1,0 +1,26 @@
+meta {
+  name: Archive Time Off Policy (People)
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{peoplePolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — folder tidy-up
+
+  Archives the run's PTO policy. See `HR/Archive Time Off Policy`.
+}

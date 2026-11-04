@@ -1,39 +1,42 @@
 import { Link } from "react-router-dom";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/common/UserAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { userStatus, type AgencyUser } from "@/lib/users-api";
-import { UserRowMenu } from "../UserRowMenu";
+import type { AgencyUser } from "@/lib/users-api";
+import { PersonRowMenu } from "./PersonRowMenu";
 import {
+  AVATAR_FALLBACK_CLASS,
   branchLabel,
   displayName,
-  initials,
   STATUS_BADGE,
-} from "./user-display";
+} from "./person-display";
 
-/** User · Role · Branch · Status · Actions */
-const GRID_COLS = "1.6fr 1fr 1fr 110px 40px";
+/** Person · Role · Branch · Status · Actions */
+const GRID_COLS = "1.6fr 1fr 1fr 150px 40px";
 /** Without the branch column, which needs `agency:branches:read` to populate. */
-const GRID_COLS_NO_BRANCH = "1.6fr 1fr 110px 40px";
+const GRID_COLS_NO_BRANCH = "1.6fr 1fr 150px 40px";
 
-interface UsersTableProps {
+interface PeopleTableProps {
   users: AgencyUser[];
   isPending: boolean;
   /** Branch id → name. Empty when the caller cannot read branches. */
   branchNames: Map<string, string>;
   showBranch: boolean;
-  /** Whether row-level navigation to the permissions page is allowed. */
-  canOpenPermissions: boolean;
 }
 
 /**
- * Desktop agency directory.
+ * Desktop People list (PAC-162; the agency directory of PAC-101).
  *
  * CSS-grid rows rather than the `Table` primitive, matching `LeadsTable` — the
  * two lists are the same object at different scales and should not look like
  * two different apps. Column widths, header treatment, row padding, hover and
  * the stretched-link pattern are all lifted from it deliberately.
+ *
+ * A row opens the person's **profile** (`/people/:userId`); the permissions
+ * page it used to open is in the ⋯ menu and on the profile's Role card. The
+ * photo is the real one when there is one (`UserAvatar` fetches it with the
+ * auth header — an `<img src>` would 401).
  *
  * The **Branch** column is conditional. It is the one fact about an employee
  * this directory could never show, and now that the invite form assigns a
@@ -41,17 +44,16 @@ interface UsersTableProps {
  * `agency:branches:read`, which the directory itself does not require. When
  * that read is refused the column is dropped rather than filled with ids.
  */
-export function UsersTable({
+export function PeopleTable({
   users,
   isPending,
   branchNames,
   showBranch,
-  canOpenPermissions,
-}: UsersTableProps) {
+}: PeopleTableProps) {
   const columns = showBranch ? GRID_COLS : GRID_COLS_NO_BRANCH;
   const headers = showBranch
-    ? ["User", "Role", "Branch", "Status", ""]
-    : ["User", "Role", "Status", ""];
+    ? ["Person", "Role", "Branch", "Status", ""]
+    : ["Person", "Role", "Status", ""];
 
   return (
     <div className="overflow-x-auto">
@@ -86,7 +88,6 @@ export function UsersTable({
               </div>
             ))
           : users.map((user, i) => {
-              const status = userStatus(user);
               const name = displayName(user);
 
               return (
@@ -99,35 +100,20 @@ export function UsersTable({
                   style={{ gridTemplateColumns: columns }}
                 >
                   <div className="flex min-w-0 items-center gap-3">
-                    <Avatar className="size-8">
-                      {/* The whole fallback chip needs a light variant, not
-                          just the text: `blue-900` stays dark whatever the
-                          theme, so recolouring only the text trades dark-on-dark
-                          for blue-on-blue. Same pair as the sidebar chip. */}
-                      <AvatarFallback className="bg-sidebar-accent text-xs font-bold text-sidebar-accent-foreground dark:bg-blue-900 dark:text-foreground">
-                        {initials(user)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <UserAvatar
+                      name={name}
+                      avatarUrl={user.avatarUrl}
+                      className="size-8"
+                      fallbackClassName={AVATAR_FALLBACK_CLASS}
+                    />
                     <div className="min-w-0">
-                      {/*
-                        The stretched link is the row's primary action, and it
-                        only exists when the permissions route would actually
-                        admit the viewer — it is gated on `agency:roles:read`,
-                        so a directory-only reader used to be redirected to the
-                        landing page by clicking any row.
-                      */}
-                      {canOpenPermissions ? (
-                        <Link
-                          to={`/settings/users/${user._id}/permissions`}
-                          className="block truncate text-base font-medium text-foreground after:absolute after:inset-0 after:content-['']"
-                        >
-                          {name}
-                        </Link>
-                      ) : (
-                        <p className="truncate text-base font-medium text-foreground">
-                          {name}
-                        </p>
-                      )}
+                      {/* The stretched link is the row's primary action. */}
+                      <Link
+                        to={`/people/${user._id}`}
+                        className="block truncate text-base font-medium text-foreground after:absolute after:inset-0 after:content-['']"
+                      >
+                        {name}
+                      </Link>
                       <p className="truncate text-sm text-muted-foreground">
                         {user.email}
                       </p>
@@ -167,14 +153,17 @@ export function UsersTable({
 
                   <Badge
                     size="sm"
-                    className={cn("font-semibold", STATUS_BADGE[status].className)}
+                    className={cn(
+                      "font-semibold",
+                      STATUS_BADGE[user.status].className,
+                    )}
                   >
-                    {STATUS_BADGE[status].label}
+                    {STATUS_BADGE[user.status].label}
                   </Badge>
 
                   {/* Above the stretched link so its clicks don't navigate. */}
                   <span className="relative z-10 justify-self-end">
-                    <UserRowMenu user={user} />
+                    <PersonRowMenu user={user} />
                   </span>
                 </div>
               );

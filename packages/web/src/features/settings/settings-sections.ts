@@ -43,10 +43,13 @@ export interface SettingsSection {
  */
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
-    to: "/settings/users",
-    label: "Agency Users",
+    // PAC-162: the directory is the People page now (`/settings/users`
+    // redirects). The card stays so the hub still lists where invites and
+    // onboarding happen, and so the sidebar's hub gate keeps counting it.
+    to: "/people",
+    label: "People",
     description:
-      "Invite employees, set who they are, and remove people who have left.",
+      "Invite employees, open a person's profile, and complete their onboarding.",
     icon: Users,
     permission: AgencyPermission.UsersRead,
   },

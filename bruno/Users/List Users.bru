@@ -68,6 +68,14 @@ tests {
     // a removed employee. `deactivatedAt` is what separates them.
     expect(user).to.have.property("deactivatedAt");
   });
+
+  test("every row carries the derived status and an avatar url (PAC-162)", function () {
+    const statuses = ["invited", "pending_onboarding", "active", "deactivated"];
+    for (const user of res.getBody().items) {
+      expect(statuses).to.include(user.status);
+      expect(user).to.have.property("avatarUrl");
+    }
+  });
 }
 
 docs {

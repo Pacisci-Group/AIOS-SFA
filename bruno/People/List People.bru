@@ -1,0 +1,58 @@
+meta {
+  name: List People
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/users?pageSize=100
+  auth: bearer
+}
+
+params:query {
+  pageSize: 100
+  ~status: pending_onboarding,active
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every row carries a four-way status and an avatar url (PAC-162)", function () {
+    const statuses = ["invited", "pending_onboarding", "active", "deactivated"];
+    for (const row of res.getBody().items) {
+      expect(statuses).to.include(row.status);
+      expect(row).to.have.property("avatarUrl");
+    }
+  });
+
+  test("the demo seed left one producer pending onboarding", function () {
+    const pending = res.getBody().items.filter((row) => row.status === "pending_onboarding");
+    expect(pending.length).to.be.greaterThan(0);
+  });
+}
+
+docs {
+  # GET /users — the People list (PAC-162)
+
+  The agency directory of PAC-101, with two additions per row:
+
+  - **`status`** — `invited` · `pending_onboarding` · `active` ·
+    `deactivated`, derived on the server from the account (`isActive`,
+    `deactivatedAt`) and the employee profile (`pending` / `active`). The
+    account wins: a removed person is `deactivated` whatever the profile says,
+    and an invited person is `invited` even if HR onboarded them early. The
+    web no longer derives a status itself.
+  - **`avatarUrl`** — `/users/:id/avatar?v=…` or `null`; fetched with the
+    caller's auth header.
+
+  `status[]` accepts the four values (ORed). `pending_onboarding` / `active`
+  split active accounts by their profile.
+
+  **Permission** — `agency:users:read`.
+}

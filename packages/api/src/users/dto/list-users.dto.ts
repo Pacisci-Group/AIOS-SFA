@@ -1,13 +1,14 @@
+import { PEOPLE_STATUSES, type PeopleStatus } from '@sfa/shared';
 import { z } from 'zod';
 import { multiValue } from '../../leads/dto/multi-value';
 
-/** The three states a row's Status badge can show. */
-export const AGENCY_USER_STATUSES = [
-  'active',
-  'invited',
-  'deactivated',
-] as const;
-export type AgencyUserStatus = (typeof AGENCY_USER_STATUSES)[number];
+/**
+ * The four states a row's Status badge can show (PAC-162): Invited ·
+ * Pending onboarding · Active · Deactivated — `PEOPLE_STATUSES` in shared,
+ * derived by `common/hr/people-status.ts`.
+ */
+export const AGENCY_USER_STATUSES = PEOPLE_STATUSES;
+export type AgencyUserStatus = PeopleStatus;
 
 /**
  * Query for the agency directory (PAC-101).
@@ -34,7 +35,8 @@ export const listAgencyUsersSchema = z.object({
    * Multi-select, ORed — the Status column as a facet.
    *
    * A facet rather than searchable text because the value is **derived**, not
-   * stored: it comes from `isActive` + `deactivatedAt`. Substring-matching a
+   * stored: it comes from `isActive` + `deactivatedAt` + the employee
+   * profile's status. Substring-matching a
    * label that does not exist in the database would need an `$expr`/`$switch`
    * in the `$or`, and it would make `act` match both "active" and
    * "deactivated" — worse than useless. Same treatment `Leads` gives `status`

@@ -1,0 +1,43 @@
+meta {
+  name: Login as Manager
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{managerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("peopleHrToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in as the HR admin", function () {
+    expect([200, 201]).to.include(res.getStatus());
+    expect(res.getBody().user.permissions).to.include("agency:hr:admin");
+  });
+}
+
+docs {
+  # POST /auth/login — People folder helper
+
+  The demo Branch Manager, who holds `agency:hr:admin` by template: the HR
+  writes below (facts, Complete onboarding, Add / Remove from policy) run
+  as `peopleHrToken`.
+}

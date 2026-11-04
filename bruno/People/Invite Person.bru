@@ -1,0 +1,54 @@
+meta {
+  name: Invite Person
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/users/invite
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  // A fresh address per run; **Revoke Invite** deletes the row at the end.
+  bru.setVar("peopleInviteEmail", `pac162-person-${Date.now()}@sfa.local`);
+}
+
+body:json {
+  {
+    "email": "{{peopleInviteEmail}}",
+    "roleIds": ["{{peopleRoleId}}"],
+    "firstName": "Nia",
+    "lastName": "Newbie"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("peoplePersonId", res.getBody().userId);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /users/invite — creates the employee profile too (PAC-162)
+
+  Unchanged contract (see `Users/Invite User`); what is new is the seam: the
+  invited person's `employeeProfiles` row is created `pending` with the user
+  row, so the People list shows them as **Invited** now and **Pending
+  onboarding** once they accept. Captures `peoplePersonId`.
+}

@@ -1,0 +1,68 @@
+meta {
+  name: Complete Onboarding
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/hr/people/{{peoplePersonId}}/onboarding/complete
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+body:json {
+  {
+    "hireDate": "2026-01-05",
+    "policies": [
+      { "policyId": "{{peoplePolicyId}}", "startingBalanceHours": 16 }
+    ]
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the profile is active, with the hire date and the balance", function () {
+    const body = res.getBody();
+    expect(body.employment.status).to.equal("active");
+    expect(body.employment.hireDate).to.equal("2026-01-05");
+    expect(body.employment.onboardingCompletedAt).to.be.a("string");
+    expect(body.employment.onboardingCompletedBy.name).to.be.a("string");
+    // Untouched: the facts request set it and this body did not send it.
+    expect(body.employment.dateOfBirth).to.equal("1991-07-14");
+    const policy = body.timeOff.policies.find((p) => p.id === bru.getVar("peoplePolicyId"));
+    expect(policy.balanceHours).to.equal(16);
+  });
+
+  test("the list still says Invited until the invite is accepted", function () {
+    expect(res.getBody().user.status).to.equal("invited");
+  });
+}
+
+docs {
+  # POST /hr/people/:userId/onboarding/complete — Pending → Active (PAC-162)
+
+  Module `hr`, permission `agency:hr:admin`. Body: `hireDate` (required,
+  `YYYY-MM-DD`, not after today on the agency's calendar), optional
+  `dateOfBirth`, `showBirthday`, `phone`, and `policies[]` of
+  `{ policyId, startingBalanceHours? }` — each enrolled through the same
+  rules as `POST /hr/policies/:id/members` (a time off policy posts the
+  balance or the policy's default; Holiday / Work week just move the
+  person). Enrolment happens **before** the status flips, so a failed policy
+  leaves the person pending and the request retryable.
+
+  Sets `status: active`, clears `terminationDate` (a reactivated person's),
+  stamps `onboarding.completedAt/By`. Returns the profile view.
+
+  Allowed before the invite is accepted: the list keeps saying **Invited**
+  and flips straight to **Active** on acceptance.
+
+  `409` — already complete, or the person has been removed (reactivate
+  first). `400` — the date rules. `404` — unknown person.
+}

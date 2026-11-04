@@ -73,6 +73,7 @@ import {
 } from '../audit-templates/schemas/audit-template.schema';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
+import { EmployeeProfilesModule } from '../common/hr/employee-profiles.module';
 import {
   AgencyRole,
   AgencyRoleSchema,
@@ -106,6 +107,9 @@ import { MigrationService } from './migration.service';
     // Imported leads and deals reference a `leadSources` row (PAC-135). The
     // module depends on nothing, so it is safe in this standalone graph.
     LeadSourcesModule,
+    // Every imported user gets a pending HR record after the Users step
+    // (PAC-162). Depends on nothing either.
+    EmployeeProfilesModule,
     MongooseModule.forFeature([
       { name: Agency.name, schema: AgencySchema },
       // Resolves the global carrier the tenant's appointment is with (PAC-93).

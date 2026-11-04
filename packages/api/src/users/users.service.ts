@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,17 +9,39 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
+import type { Response } from 'express';
 import {
   type AccessContext,
   AgencyPermission,
   ALL_MODULE_KEYS,
   allPagePermissionKeys,
+  DEFAULT_USER_AVAILABILITY,
+  DEFAULT_WORK_WEEK_DAYS,
+  ModuleKey,
+  modulePermission,
   PageLevel,
   PageLevelOverride,
   pageLevelToPermissions,
   permissionsToPageLevel,
+  type PersonProfileView,
+  type PersonTimeOffPolicyView,
+  weeklyHours,
 } from '@sfa/shared';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { avatarUrlFor } from '../common/avatar-url';
+import { peopleStatus } from '../common/hr/people-status';
+import { LeaveLedgerService } from '../common/time-off/leave-ledger.service';
+import {
+  timeOffRulesOf,
+  type TimeOffFieldsLean,
+} from '../common/time-off/time-off-policy.lean';
+import { HolidayPolicy } from '../hr/schemas/holiday-policy.schema';
+import { TimeOffPolicy } from '../hr/schemas/time-off-policy.schema';
+import {
+  WorkWeekPolicy,
+  type WorkWeekDayRow,
+} from '../hr/schemas/work-week-policy.schema';
+import { StorageService } from '../storage/storage.service';
 import { hashResetToken, mintResetToken } from '../common/crypto/reset-token';
 import {
   inviteExpiryDays,
@@ -73,6 +96,8 @@ import {
 } from './dto/list-users.dto';
 import { type ListUserOptionsDto } from './dto/list-user-options.dto';
 import { buildSearchFilter, tokenRegex } from '../common/mongo/search-filter';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
+import { agencyTodayIso } from '../performance/performance.range';
 import { USER_SEARCH_FIELDS, idsMatching } from './user-search';
 
 /**
@@ -93,19 +118,55 @@ function fullName(first?: string, last?: string): string | null {
  * Derived, not stored — see `ListAgencyUsersDto.status` for why it is a facet
  * rather than searchable text. `undefined` (no filter) and an empty array are
  * both "no filter": a cleared multi-select must not empty the table.
+ *
+ * Pending onboarding and Active split an active account by its employee
+ * profile (PAC-162), which lives in another collection: `onboarded` is the
+ * set of user ids whose profile is `active`, read once per page by the
+ * caller only when one of those two values is selected.
  */
 function statusFilter(
   selected: AgencyUserStatus[] | undefined,
+  onboarded: Types.ObjectId[],
 ): FilterQuery<UserDocument>[] | null {
   if (!selected?.length) return null;
 
   const clauses: Record<AgencyUserStatus, FilterQuery<UserDocument>> = {
-    active: { isActive: true },
+    active: { isActive: true, _id: { $in: onboarded } },
+    pending_onboarding: { isActive: true, _id: { $nin: onboarded } },
     invited: { isActive: false, deactivatedAt: null },
     deactivated: { deactivatedAt: { $ne: null } },
   };
   return [...new Set(selected)].map((state) => clauses[state]);
 }
+
+/** Whether the facet needs the onboarded set at all. */
+function needsProfiles(selected: AgencyUserStatus[] | undefined): boolean {
+  return !!selected?.some(
+    (state) => state === 'active' || state === 'pending_onboarding',
+  );
+}
+
+/** `User` as `.lean()` returns it for the directory and the profile. */
+type DirectoryUser = Pick<
+  User,
+  | 'email'
+  | 'firstName'
+  | 'lastName'
+  | 'phone'
+  | 'avatarKey'
+  | 'availability'
+  | 'isActive'
+  | 'deactivatedAt'
+  | 'branchId'
+  | 'isPlatformAdmin'
+> & { _id: Types.ObjectId; createdAt?: Date; updatedAt?: Date };
+
+/** A lean Holiday / Work week row, as the profile's Schedule reads it. */
+type SchedulePolicyLean = {
+  _id: Types.ObjectId;
+  name: string;
+  days?: WorkWeekDayRow[];
+};
 
 @Injectable()
 export class UsersService {
@@ -114,6 +175,14 @@ export class UsersService {
     @InjectModel(AgencyRole.name) private roleModel: Model<AgencyRoleDocument>,
     @InjectModel(Agency.name) private agencyModel: Model<AgencyDocument>,
     @InjectModel(Branch.name) private branchModel: Model<BranchDocument>,
+    @InjectModel(TimeOffPolicy.name)
+    private timeOffPolicies: Model<TimeOffPolicy>,
+    @InjectModel(WorkWeekPolicy.name)
+    private workWeekPolicies: Model<WorkWeekPolicy>,
+    @InjectModel(HolidayPolicy.name)
+    private holidayPolicies: Model<HolidayPolicy>,
+    private ledger: LeaveLedgerService,
+    private storage: StorageService,
     private permissionsService: PermissionsService,
     private roleAssignments: RoleAssignmentsService,
     private ownerProtection: OwnerProtectionService,
@@ -125,6 +194,7 @@ export class UsersService {
     private tenantUrls: TenantUrlService,
     private tenantBranding: TenantBrandingService,
     private hostResolver: HostTenantResolver,
+    private profiles: EmployeeProfilesService,
   ) {}
 
   /**
@@ -208,7 +278,10 @@ export class UsersService {
       isPlatformAdmin: { $ne: true },
     };
 
-    const status = statusFilter(query.status);
+    const onboarded = needsProfiles(query.status)
+      ? await this.profiles.activeUserIds(agencyId)
+      : [];
+    const status = statusFilter(query.status, onboarded);
     if (status) filter.$or = status;
 
     const search = await this.buildUserSearch(agencyId, query.q, access);
@@ -229,22 +302,245 @@ export class UsersService {
         .skip((page - 1) * pageSize)
         .limit(pageSize)
         .select('-passwordHash -inviteToken -passwordResetToken')
-        .lean(),
+        .lean<(DirectoryUser & { avatarKey?: string })[]>(),
     ]);
 
-    const byUser = await this.roleAssignments.rolesForUsers(
-      users.map((user) => user._id),
-    );
+    const ids = users.map((user) => user._id);
+    const [byUser, profiles] = await Promise.all([
+      this.roleAssignments.rolesForUsers(ids),
+      this.profiles.profilesFor(agencyId, ids),
+    ]);
     return {
       page,
       pageSize,
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      items: users.map((user) => ({
+      items: users.map(({ avatarKey, ...user }) => ({
         ...user,
         roleIds: byUser.get(user._id.toString()) ?? [],
+        status: peopleStatus(user, profiles.get(user._id.toString())),
+        avatarUrl: avatarUrlFor(
+          `/users/${user._id.toString()}/avatar`,
+          avatarKey,
+        ),
       })),
     };
+  }
+
+  /**
+   * The People profile (PAC-162): the account, the HR facts, and — for the
+   * person themself or an HR admin — their time off policies with balances
+   * and their week. One read, assembled from the services that own each
+   * fact; nothing is copied onto the profile.
+   *
+   * ## Self, or `agency:users:read`
+   *
+   * The one route in this controller with no `@RequirePermissions`: anyone
+   * may open their own profile (it is theirs, as `/settings/profile` is),
+   * and that is not a capability an owner grants. The check is here, and
+   * the e2e for the 403 was written before the route.
+   *
+   * ## What the viewer sees
+   *
+   * - `user` + `employment`: the viewer above.
+   * - `employment.dateOfBirth` / `showBirthday`: self or `agency:hr:admin`
+   *   (the epic: admins see the date, never an age; nobody else sees it).
+   *   **Omitted**, not nulled, so a client cannot read "hidden" as "unset".
+   * - `timeOff` + `schedule`: self holding `hr:read`, or `agency:hr:admin`.
+   *   `hr:write` alone (a reviewer) does not open a colleague's balances.
+   */
+  async personProfile(
+    access: AccessContext,
+    agencyId: string,
+    userId: string,
+  ): Promise<PersonProfileView> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+    const isSelf = access.userId === userId;
+    const holds = (permission: string) =>
+      access.permissions.includes(permission);
+    if (!isSelf && !holds(AgencyPermission.UsersRead)) {
+      throw new ForbiddenException('You can only view your own profile.');
+    }
+
+    const user = await this.userModel
+      .findOne({
+        _id: new Types.ObjectId(userId),
+        agencyId: new Types.ObjectId(agencyId),
+        isPlatformAdmin: { $ne: true },
+      })
+      .select('-passwordHash -inviteToken -passwordResetToken')
+      .lean<(DirectoryUser & { avatarKey?: string }) | null>();
+    if (!user) throw new NotFoundException('User not found');
+
+    const [profile, roles, branch] = await Promise.all([
+      this.profiles.profileFor(agencyId, user._id),
+      this.roleAssignments.rolesForUsers([user._id]),
+      user.branchId
+        ? this.branchModel
+            .findById(user.branchId)
+            .select('name')
+            .lean<{ _id: Types.ObjectId; name: string } | null>()
+        : null,
+    ]);
+
+    const hrAdmin = holds(AgencyPermission.HrAdmin);
+    const seesHr =
+      hrAdmin || (isSelf && holds(modulePermission(ModuleKey.Hr, 'read')));
+    const seesBirthday = hrAdmin || isSelf;
+
+    const completedBy = profile?.onboarding?.completedBy
+      ? await this.userModel
+          .findById(profile.onboarding.completedBy)
+          .select('firstName lastName email')
+          .lean<
+            | (Pick<User, 'firstName' | 'lastName' | 'email'> & {
+                _id: Types.ObjectId;
+              })
+            | null
+          >()
+      : null;
+
+    const view: PersonProfileView = {
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        firstName: user.firstName ?? null,
+        lastName: user.lastName ?? null,
+        name: fullName(user.firstName, user.lastName) ?? user.email,
+        phone: user.phone ?? null,
+        avatarUrl: avatarUrlFor(
+          `/users/${user._id.toString()}/avatar`,
+          user.avatarKey,
+        ),
+        branch: branch
+          ? { id: branch._id.toString(), name: branch.name }
+          : null,
+        roles: (roles.get(user._id.toString()) ?? []).map((role) => ({
+          id: role._id.toString(),
+          name: role.name,
+        })),
+        availability: user.availability ?? DEFAULT_USER_AVAILABILITY,
+        isActive: user.isActive,
+        deactivatedAt: user.deactivatedAt?.toISOString() ?? null,
+        status: peopleStatus(user, profile),
+      },
+      employment: {
+        status: profile?.status ?? 'pending',
+        hireDate: profile?.hireDate ?? null,
+        terminationDate: profile?.terminationDate ?? null,
+        ...(seesBirthday
+          ? {
+              dateOfBirth: profile?.dateOfBirth ?? null,
+              showBirthday: profile?.showBirthday ?? true,
+            }
+          : {}),
+        onboardingCompletedAt:
+          profile?.onboarding?.completedAt?.toISOString() ?? null,
+        onboardingCompletedBy: completedBy
+          ? {
+              id: completedBy._id.toString(),
+              name:
+                fullName(completedBy.firstName, completedBy.lastName) ??
+                completedBy.email,
+            }
+          : null,
+      },
+    };
+    if (!seesHr) return view;
+
+    const member = { agencyId, archivedAt: null, memberIds: user._id };
+    const [timeOffRows, workWeek, holiday] = await Promise.all([
+      this.timeOffPolicies
+        .find(member)
+        .sort({ createdAt: 1 })
+        .lean<(TimeOffFieldsLean & { _id: Types.ObjectId; name: string })[]>(),
+      this.workWeekPolicies
+        .findOne(member)
+        .select('name days')
+        .lean<SchedulePolicyLean | null>(),
+      this.holidayPolicies
+        .findOne(member)
+        .select('name')
+        .lean<SchedulePolicyLean | null>(),
+    ]);
+    const policies: PersonTimeOffPolicyView[] = [];
+    for (const row of timeOffRows) {
+      const rules = timeOffRulesOf(row);
+      const balanceHours =
+        rules.accrualType === 'unlimited'
+          ? null
+          : ((await this.ledger.balances(row._id, [user._id])).get(
+              user._id.toString(),
+            ) ?? 0);
+      policies.push({
+        id: row._id.toString(),
+        name: row.name,
+        timeOff: rules,
+        balanceHours,
+      });
+    }
+    const days = (
+      workWeek?.days?.length ? workWeek.days : DEFAULT_WORK_WEEK_DAYS
+    ).map(({ weekday, start, end }) => ({ weekday, start, end }));
+    view.timeOff = { policies };
+    view.schedule = {
+      workWeek: workWeek
+        ? { id: workWeek._id.toString(), name: workWeek.name }
+        : null,
+      days,
+      hoursPerWeek: weeklyHours(days),
+      holiday: holiday
+        ? { id: holiday._id.toString(), name: holiday.name }
+        : null,
+    };
+    return view;
+  }
+
+  /**
+   * A person's photo bytes for the People pages (PAC-162) — the same
+   * stream as `GET /me/avatar`, for a viewer who may open the profile
+   * (self or `agency:users:read`). `404` without a photo.
+   */
+  async streamAvatar(
+    access: AccessContext,
+    agencyId: string,
+    userId: string,
+    res: Response,
+  ): Promise<void> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+    if (
+      access.userId !== userId &&
+      !access.permissions.includes(AgencyPermission.UsersRead)
+    ) {
+      throw new ForbiddenException('You can only view your own profile.');
+    }
+    const user = await this.userModel
+      .findOne({
+        _id: new Types.ObjectId(userId),
+        agencyId: new Types.ObjectId(agencyId),
+      })
+      .select('avatarKey')
+      .lean<{ avatarKey?: string } | null>();
+    if (!user?.avatarKey) {
+      throw new NotFoundException();
+    }
+
+    const stat = await this.storage.statObject(user.avatarKey);
+    const stream = await this.storage.getObjectStream(user.avatarKey);
+    res.setHeader(
+      'Content-Type',
+      stat?.contentType ?? 'application/octet-stream',
+    );
+    if (stat?.size) {
+      res.setHeader('Content-Length', stat.size);
+    }
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    stream.pipe(res);
   }
 
   /**
@@ -392,6 +688,9 @@ export class UsersService {
       lastName: input.lastName,
       isActive: false,
     });
+    // The person's HR record exists from the invite (PAC-162): pending until
+    // an HR admin completes their onboarding on the People page.
+    await this.profiles.ensureProfile(input.agencyId, user._id);
 
     // The inviter is the actor. Owner protection does not fire on a brand-new
     // user — there is no owner role to strip — but routing through the one
@@ -458,6 +757,8 @@ export class UsersService {
   async revokeInvite(agencyId: string, userId: string): Promise<void> {
     const user = await this.findPendingInvite(agencyId, userId);
     await this.userModel.deleteOne({ _id: user._id });
+    // The profile goes with the row: a pending invite has no HR history.
+    await this.profiles.deleteProfile(agencyId, user._id);
     await this.accessResolver.invalidateUser(userId);
   }
 
@@ -559,6 +860,16 @@ export class UsersService {
     user.passwordResetExpiresAt = undefined;
     await user.save();
 
+    // The HR record (PAC-162): terminated on the removal day, on the agency's
+    // calendar. Policy membership and the leave ledger are left as they are —
+    // the balance stays readable (PAC-123 reads `payOutOnTermination`), and a
+    // removed person already drops out of every picker and member list.
+    await this.profiles.terminate(
+      agencyId,
+      user._id,
+      agencyTodayIso(actor.timeZone),
+    );
+
     // Last, and load-bearing — see the docblock. Their next request re-resolves
     // from Mongo, finds `isActive: false`, and gets nothing.
     await this.accessResolver.invalidateUser(userId);
@@ -598,6 +909,9 @@ export class UsersService {
     user.deactivatedAt = null;
     user.deactivatedByUserId = null;
     await user.save();
+    // Re-joining is an onboarding (PAC-162): back to pending, and Complete
+    // onboarding clears the old termination date.
+    await this.profiles.reopen(agencyId, user._id);
     await this.accessResolver.invalidateUser(userId);
 
     return this.findById(agencyId, userId);

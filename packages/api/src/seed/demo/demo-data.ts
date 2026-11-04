@@ -46,6 +46,50 @@ export interface TeamMemberSpec {
 }
 
 /**
+ * The HR facts of a team member's employee profile (PAC-162), keyed by
+ * `TeamMemberSpec.key`. Everyone listed is onboarded (`active`) with a hire
+ * date spread over the years so an anniversary falls in any demo month; a
+ * member **not** listed stays `pending` so Complete onboarding has a
+ * subject. Dates of birth go on three people, one hidden from the calendar.
+ * Written with `$setOnInsert`, so a demo click is not undone by a reseed.
+ */
+export interface TeamProfileSpec {
+  /** `YYYY-MM-DD`. */
+  hireDate: string;
+  dateOfBirth?: string;
+  showBirthday?: boolean;
+  phone?: string;
+}
+
+export const TEAM_PROFILES: Record<string, TeamProfileSpec> = {
+  owner: { hireDate: '2015-03-02', phone: '(312) 555-0100' },
+  manager: {
+    hireDate: '2018-09-17',
+    dateOfBirth: '1984-06-21',
+    phone: '(312) 555-0101',
+  },
+  producer: {
+    hireDate: '2021-01-11',
+    dateOfBirth: '1992-11-30',
+    phone: '(312) 555-0102',
+  },
+  'producer-alex': { hireDate: '2022-05-09', phone: '(312) 555-0103' },
+  'producer-jordan': {
+    hireDate: '2019-10-28',
+    dateOfBirth: '1988-02-29',
+    showBirthday: false,
+    phone: '(312) 555-0104',
+  },
+  'producer-sam': { hireDate: '2024-02-05', phone: '(312) 555-0105' },
+  // `producer-morgan` is deliberately absent: the pending onboarding.
+  'crm-casey': { hireDate: '2020-07-13', phone: '(312) 555-0106' },
+  'crm-robin': { hireDate: '2023-03-20', phone: '(312) 555-0107' },
+  'crm-priya': { hireDate: '2017-11-06', phone: '(312) 555-0108' },
+  'crm-marcus': { hireDate: '2025-01-06', phone: '(312) 555-0109' },
+  'data-dana': { hireDate: '2022-08-15', phone: '(312) 555-0110' },
+};
+
+/**
  * The demo agency's org chart: one owner, one branch manager, five producers
  * across two branches, two CSRs, two CRMs, and a data-team analyst. Every account uses the
  * shared demo password so you can log in as any role to exercise permission

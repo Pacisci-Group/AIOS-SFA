@@ -1,0 +1,27 @@
+meta {
+  name: Get Person Profile (Other as Producer, 403)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/users/{{peopleOwnerId}}/profile
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleProducerToken}}
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /users/:userId/profile — a colleague's, without the permission (PAC-162)
+
+  A producer holds no `agency:users:read`, so another person's profile is a
+  `403` from the service (the route itself declares no permission).
+}

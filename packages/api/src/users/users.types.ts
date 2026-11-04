@@ -1,4 +1,4 @@
-import type { UserAvailability } from '@sfa/shared';
+import type { PeopleStatus, UserAvailability } from '@sfa/shared';
 
 /**
  * `POST /users/invite` and `POST /users/:userId/invite/resend` response.
@@ -51,10 +51,19 @@ export interface AgencyUserListItem {
   isPlatformAdmin: boolean;
   firstName?: string;
   lastName?: string;
+  phone?: string;
   isActive: boolean;
   /** Taking leads or not (PAC-139 §6). Set by the user, never from here. */
   availability: UserAvailability;
   deactivatedAt?: Date | null;
+  /**
+   * Invited · Pending onboarding · Active · Deactivated (PAC-162), derived
+   * on the server from the account and the employee profile together. The
+   * one value the badge, the row menu and the facet read.
+   */
+  status: PeopleStatus;
+  /** `/users/:id/avatar?v=…`, or null without a photo. */
+  avatarUrl: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }

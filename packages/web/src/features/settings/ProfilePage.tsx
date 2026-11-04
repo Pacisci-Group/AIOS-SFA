@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { KeyRound, Trash2, Upload, UserRound } from 'lucide-react';
+import { ArrowRight, KeyRound, Trash2, Upload, UserRound } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { DataRow, DetailCard } from '@/components/common/DetailCard';
 import { UserAvatar } from '@/components/common/UserAvatar';
@@ -67,16 +68,33 @@ export default function ProfilePage() {
         />
 
         <NameCard
-          key={`${user.firstName ?? ''}|${user.lastName ?? ''}`}
+          key={`${user.firstName ?? ''}|${user.lastName ?? ''}|${user.phone ?? ''}`}
           firstName={user.firstName}
           lastName={user.lastName}
+          phone={user.phone ?? null}
           email={user.email}
           onSaved={refreshUser}
         />
 
         <ChangePasswordCard email={user.email} onChanged={adoptSession} />
 
-        <DetailCard title="Account" icon={UserRound}>
+        <DetailCard
+          title="Account"
+          icon={UserRound}
+          action={
+            // The employee's read-only view of their status, hire date,
+            // policies, balances and week is the People profile (PAC-162);
+            // a platform admin has no agency and no such page.
+            user.agencyId ? (
+              <Button asChild variant="ghost" size="sm">
+                <Link to={`/people/${user.id}`}>
+                  Your employee profile
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+            ) : undefined
+          }
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <DataRow label="Role" value={user.roles.join(', ') || NOT_AVAILABLE} />
             <DataRow label="Agency" value={branding.name} />
@@ -207,11 +225,13 @@ function PhotoCard({
 function NameCard({
   firstName,
   lastName,
+  phone,
   email,
   onSaved,
 }: {
   firstName: string | null;
   lastName: string | null;
+  phone: string | null;
   email: string;
   onSaved: () => Promise<void>;
 }) {
@@ -230,6 +250,7 @@ function NameCard({
     defaultValues: {
       firstName: firstName ?? '',
       lastName: lastName ?? '',
+      phone: phone ?? '',
     } satisfies ProfileFormValues,
     validators: { onBlur: profileFormSchema },
     onSubmit: ({ value }) => {
@@ -271,6 +292,20 @@ function NameCard({
               )}
             </form.AppField>
           </div>
+
+          <form.AppField name="phone">
+            {(f) => (
+              <f.TextField
+                label="Phone"
+                type="tel"
+                autoComplete="tel"
+                placeholder="(312) 555-0100"
+                description="Shown on your People profile to the people who can open it."
+                inputClassName="bg-card border-border"
+                className="sm:max-w-xs"
+              />
+            )}
+          </form.AppField>
 
           <div className="space-y-1.5">
             <Label htmlFor="profile-email" className="text-xs text-muted-foreground">

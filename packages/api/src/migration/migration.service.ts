@@ -121,7 +121,11 @@ import {
   normalizeEmail,
   normalizePhone,
 } from '../leads/intake/intake.normalize';
-import { recentMonthsIn } from '../performance/performance.range';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
+import {
+  agencyTodayIso,
+  recentMonthsIn,
+} from '../performance/performance.range';
 import { DEFAULT_AGENCY_TIME_ZONE } from '../common/dates/time-zones';
 import {
   CollectionStat,
@@ -370,6 +374,7 @@ export class MigrationService {
     private readonly sequences: SequenceService,
     @InjectModel(LeadSource.name)
     private readonly leadSourceModel: Model<LeadSource>,
+    private readonly profiles: EmployeeProfilesService,
     private readonly leadSources: LeadSourcesService,
   ) {}
 
@@ -428,6 +433,16 @@ export class MigrationService {
         this.migrateUsers(ss, ctx, options, report),
       );
       report.producers.mapped = producers.size;
+
+      // Every imported person gets a pending HR record (PAC-162): the legacy
+      // Users table has no hire date, so onboarding is completed per person
+      // from the People page.
+      if (!options.dryRun) {
+        await this.profiles.ensureProfilesForAgency(
+          ctx.agencyId,
+          agencyTodayIso(ctx.timeZone),
+        );
+      }
 
       await this.step(report, 'Agency owner', null, () =>
         this.assignAgencyOwner(ctx, options, report),

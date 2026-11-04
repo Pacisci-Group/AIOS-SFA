@@ -90,6 +90,10 @@ import {
   LeaveLedger,
   LeaveLedgerSchema,
 } from '../../hr/schemas/leave-ledger.schema';
+import {
+  EmployeeProfile,
+  EmployeeProfileSchema,
+} from '../../hr/schemas/employee-profile.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
 import {
   MailerCampaign,
@@ -156,6 +160,8 @@ import { DemoSeedService } from './demo-seed.service';
       // Two time off policies with the team's starting balances (PAC-174).
       { name: TimeOffPolicy.name, schema: TimeOffPolicySchema },
       { name: LeaveLedger.name, schema: LeaveLedgerSchema },
+      // One employee profile per team member, one left pending (PAC-162).
+      { name: EmployeeProfile.name, schema: EmployeeProfileSchema },
       { name: Mailer.name, schema: MailerSchema },
       // `Mailer.campaignId` is required (PAC-71), so the demo mailers need a
       // campaign of their own — marked `source: 'demo'` and purged with them.

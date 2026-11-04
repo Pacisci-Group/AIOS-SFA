@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -26,10 +27,13 @@ import { Access, AgencyId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   createHrPolicySchema,
+  enrolMemberSchema,
   listHrPoliciesQuerySchema,
   policyIdParamSchema,
   updateHrPolicySchema,
+  userIdParamSchema,
   type CreateHrPolicyDto,
+  type EnrolMemberDto,
   type ListHrPoliciesQueryDto,
   type UpdateHrPolicyDto,
 } from './dto/hr-policy.dto';
@@ -107,6 +111,44 @@ export class HrPoliciesController {
     body: UpdateHrPolicyDto,
   ): Promise<HrPolicyView> {
     return this.policies.update(agencyId, policyId, body, access.timeZone);
+  }
+
+  /**
+   * Enrol one person (PAC-162) — the same move / balance rules as a member
+   * list save. Returns the policy. 400 with a balance on a non-time-off
+   * policy or for someone already in it.
+   */
+  @Post(':policyId/members')
+  @RequirePermissions(AgencyPermission.HrAdmin)
+  enrol(
+    @Access() access: AccessContext,
+    @AgencyId() agencyId: string,
+    @Param('policyId', new ZodValidationPipe(policyIdParamSchema))
+    policyId: string,
+    @Body(new ZodValidationPipe(enrolMemberSchema)) body: EnrolMemberDto,
+  ): Promise<HrPolicyView> {
+    return this.policies.enrol(
+      agencyId,
+      policyId,
+      body.userId,
+      body.startingBalanceHours,
+      access.timeZone,
+    );
+  }
+
+  /** Take one person out (PAC-162). 404 when they are not a member. */
+  @Delete(':policyId/members/:userId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermissions(AgencyPermission.HrAdmin)
+  unenrol(
+    @Access() access: AccessContext,
+    @AgencyId() agencyId: string,
+    @Param('policyId', new ZodValidationPipe(policyIdParamSchema))
+    policyId: string,
+    @Param('userId', new ZodValidationPipe(userIdParamSchema))
+    userId: string,
+  ): Promise<void> {
+    return this.policies.unenrol(agencyId, policyId, userId, access.timeZone);
   }
 
   /**

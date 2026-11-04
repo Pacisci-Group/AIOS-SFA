@@ -238,6 +238,15 @@ export const listHrPoliciesQuerySchema = z.object({
 export type ListHrPoliciesQueryDto = z.infer<typeof listHrPoliciesQuerySchema>;
 
 export const policyIdParamSchema = objectId;
+export const userIdParamSchema = objectId;
+
+/** `POST /hr/policies/:policyId/members` — one person (PAC-162). */
+export const enrolMemberSchema = z.object({
+  userId: objectId,
+  /** Time off only; refused for someone who was in the policy before. */
+  startingBalanceHours: hours.optional(),
+});
+export type EnrolMemberDto = z.infer<typeof enrolMemberSchema>;
 
 /** Re-exported for the controller's docs. */
 export { CREATABLE_POLICY_TYPES };

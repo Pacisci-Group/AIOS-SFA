@@ -1,0 +1,35 @@
+meta {
+  name: List Roles (for the invite)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/roles
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const roles = res.getBody();
+    const producer = roles.find((r) => r.slug === "producer") ?? roles[0];
+    if (producer) bru.setVar("peopleRoleId", producer._id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # GET /roles — folder helper
+
+  Captures the Producer role as `peopleRoleId` for **Invite Person**. See
+  `Users/List Roles (for the invite picker)` for the endpoint's docs.
+}

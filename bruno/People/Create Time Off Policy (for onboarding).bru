@@ -1,0 +1,68 @@
+meta {
+  name: Create Time Off Policy (for onboarding)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleHrToken}}
+}
+
+script:pre-request {
+  bru.setVar("peoplePolicyName", `People PTO ${Date.now()}`);
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{peoplePolicyName}}",
+    "timeOff": {
+      "timeOffType": "pto",
+      "description": null,
+      "compensation": "paid",
+      "accrualType": "fixed_amount",
+      "hoursPerYear": 80,
+      "accrualFrequency": "yearly",
+      "resetDateKind": "fixed",
+      "resetMonthDay": "01-01",
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": null,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": null,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": null,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": false,
+      "autoApprove": { "enabled": false, "maxCalendarDays": null, "minNoticeHours": null }
+    },
+    "memberIds": []
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("peoplePolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /hr/policies — folder helper (PAC-174)
+
+  An empty PTO policy, unique per run, for **Complete Onboarding** and the
+  member routes below; archived at the end of the folder. See `HR/Create
+  Time Off Policy` for the endpoint's docs.
+}

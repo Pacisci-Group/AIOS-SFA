@@ -9,6 +9,7 @@ import {
   TimeOffPolicySchema,
 } from '../../hr/schemas/time-off-policy.schema';
 import { Agency, AgencySchema } from '../../platform/schemas/agency.schema';
+import { EmployeeProfilesModule } from '../hr/employee-profiles.module';
 import { HireDatesService } from './hire-dates.service';
 import { LeaveLedgerService } from './leave-ledger.service';
 import { TimeOffAccrualService } from './time-off-accrual.service';
@@ -22,6 +23,8 @@ import { TimeOffAccrualService } from './time-off-accrual.service';
  */
 @Module({
   imports: [
+    // The accrual job's hire dates (PAC-162).
+    EmployeeProfilesModule,
     MongooseModule.forFeature([
       { name: TimeOffPolicy.name, schema: TimeOffPolicySchema },
       { name: LeaveLedger.name, schema: LeaveLedgerSchema },

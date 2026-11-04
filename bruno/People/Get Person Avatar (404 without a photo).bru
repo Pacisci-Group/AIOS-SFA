@@ -1,0 +1,30 @@
+meta {
+  name: Get Person Avatar (404 without a photo)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/users/{{peoplePersonId}}/avatar
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # GET /users/:userId/avatar — a person's photo (PAC-162)
+
+  The same stream as `GET /me/avatar` (`Content-Type` from the stored
+  object, `Cache-Control: private`), for a viewer who may open the profile
+  (self or `agency:users:read`; `403` otherwise). `404` without a photo —
+  the invited person has none. The list's and the profile's `avatarUrl`
+  point here with a `v=` cache-buster derived from the object key.
+}

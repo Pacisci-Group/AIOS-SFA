@@ -47,6 +47,9 @@ export class ProfileService {
     if (dto.lastName !== undefined) {
       user.lastName = dto.lastName ?? undefined;
     }
+    if (dto.phone !== undefined) {
+      user.phone = dto.phone ?? undefined;
+    }
     await user.save();
 
     return this.authService.me(userId);

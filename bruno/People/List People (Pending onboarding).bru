@@ -1,0 +1,41 @@
+meta {
+  name: List People (Pending onboarding)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/users?pageSize=100&status=pending_onboarding
+  auth: bearer
+}
+
+params:query {
+  pageSize: 100
+  status: pending_onboarding
+}
+
+auth:bearer {
+  token: {{peopleOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every row is pending onboarding", function () {
+    for (const row of res.getBody().items) {
+      expect(row.status).to.equal("pending_onboarding");
+      expect(row.isActive).to.equal(true);
+    }
+  });
+}
+
+docs {
+  # GET /users?status=pending_onboarding — the status facet (PAC-162)
+
+  Active accounts whose employee profile is still `pending`: the people HR
+  has not pressed Complete onboarding for. `status=active` is the
+  complement among active accounts. Both read the agency's onboarded user
+  ids once and filter on `_id`.
+}
