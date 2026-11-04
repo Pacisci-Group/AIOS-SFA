@@ -50,14 +50,15 @@ import {
   summarizePolicy,
   todayIso,
 } from "./policy-display";
+import { SuggestedPoliciesStrip } from "./time-off/SuggestedPoliciesStrip";
 
 function isPolicyType(value: string | null): value is HrPolicyType {
   return (HR_POLICY_TYPES as readonly string[]).includes(value ?? "");
 }
 
 /**
- * Workspace Settings → HR policies (PAC-161 v3): every policy the agency has, one card per
- * type with its active count. A card filters the list to its type (again to
+ * Workspace Settings → HR policies (PAC-161 v3, PAC-174): every policy the agency has, one card per
+ * type with its active count, and the suggested time off policies underneath. A card filters the list to its type (again to
  * clear), instantly and in the URL (`?type=holiday`) so the filter survives a
  * reload and a back from the wizard. Each card also creates its type.
  *
@@ -137,6 +138,10 @@ export default function HrPoliciesPage() {
             <PolicyTable policies={policies} today={today} />
           )}
         </section>
+
+        {(!filter || filter === "time_off") && (
+          <SuggestedPoliciesStrip policies={query.data?.policies ?? []} />
+        )}
       </div>
     </SettingsPage>
   );
@@ -245,7 +250,7 @@ function EmptyList({ filter }: { filter: HrPolicyType | null }) {
       </p>
       <p className="text-sm text-muted-foreground">
         {meta && !meta.createPath
-          ? "Time off policies arrive in a later release."
+          ? "This kind of policy cannot be created yet."
           : "Create one from the cards above. A policy is a set of rules and the people it applies to."}
       </p>
     </div>
