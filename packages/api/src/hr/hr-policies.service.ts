@@ -7,18 +7,30 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import {
   CREATABLE_POLICY_TYPES,
+  defaultStartingBalance,
+  LOCKED_TIME_OFF_FIELDS,
+  normalizeTimeOffPolicyRules,
+  timeOffPolicyRulesError,
   type CreatablePolicyType,
   type HolidayKey,
-  type PolicyMemberView,
-  type PolicyPeopleResponse,
-  type PolicyPersonView,
   type HrPoliciesResponse,
   type HrPolicySummary,
   type HrPolicyType,
   type HrPolicyView,
+  type PolicyMemberView,
+  type PolicyPeopleResponse,
+  type PolicyPersonView,
+  type TimeOffPolicyRules,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Branch } from '../branches/schemas/branch.schema';
+import { businessDateInstant } from '../common/dates/business-dates';
+import {
+  LeaveLedgerService,
+  type NewLedgerRow,
+} from '../common/time-off/leave-ledger.service';
+import { agencyTodayIso } from '../performance/performance.range';
+import { TimeOffRequest } from '../time-off-requests/schemas/time-off-request.schema';
 import { User } from '../users/schemas/user.schema';
 import type { CreateHrPolicyDto, UpdateHrPolicyDto } from './dto/hr-policy.dto';
 import {
@@ -28,12 +40,21 @@ import {
 } from './schemas/holiday-policy.schema';
 import type { MemberListPolicyRecord } from './schemas/policy-record.schema';
 import {
+  TimeOffPolicy,
+  type TimeOffPolicyDocument,
+} from './schemas/time-off-policy.schema';
+import {
   WorkWeekPolicy,
   type WorkWeekDayRow,
   type WorkWeekPolicyDocument,
 } from './schemas/work-week-policy.schema';
 
-/** A lean row of either collection; only its own type's rules are set. */
+/** The time off fields as stored (every rule field; `autoApprove` may be absent on `.lean()`). */
+type TimeOffFields = Omit<TimeOffPolicyRules, 'autoApprove'> & {
+  autoApprove?: Partial<TimeOffPolicyRules['autoApprove']>;
+};
+
+/** A lean row of any collection; only its own type's rules are set. */
 type StoredRow = {
   _id: Types.ObjectId;
   name: string;
@@ -43,16 +64,12 @@ type StoredRow = {
   holidays?: HolidayKey[];
   customHolidays?: CustomHolidayRow[];
   days?: WorkWeekDayRow[];
-};
+} & Partial<TimeOffFields>;
 
 /** A row tagged with the collection it came from. */
 type PolicyLean = StoredRow & { type: CreatablePolicyType };
 
-/**
- * The operations the member-list collections share (Holiday, Work week).
- * PAC-174's time off policies enrol through their own collection and get a
- * branch of their own here.
- */
+/** The operations every collection shares: list, find, members, archive. */
 type PolicyModel = Model<MemberListPolicyRecord>;
 
 type UserLean = {
@@ -67,26 +84,38 @@ type UserLean = {
 /** Spelled out on every read: archived policies stay as rows (PAC-155). */
 const ACTIVE = { archivedAt: null } as const;
 
+/** PAC-165's "waiting for a decision" status; migrated rows carry it too. */
+const SUBMITTED = 'Submitted';
+
 /**
- * HR policies (PAC-161 v3): list, read, create, edit and archive, and
- * the people they can enrol. Every method is agency-wide — a policy belongs
- * to no branch — and every caller holds `agency:hr:admin`.
+ * HR policies (PAC-161 v3, PAC-174): list, read, create, edit and archive,
+ * and the people they can enrol. Every method is agency-wide — a policy
+ * belongs to no branch — and every caller holds `agency:hr:admin`.
  *
  * ## One collection per type
  *
- * `holidayPolicies` and `workWeekPolicies` (PAC-174 adds leave). The page
- * still shows them as one list, so {@link list} reads every collection and
- * merges; a policy id is looked up in each ({@link find}) — ObjectIds do not
- * collide, so the first hit is the policy.
+ * `holidayPolicies`, `workWeekPolicies`, `timeOffPolicies`. The page shows
+ * them as one list, so {@link list} reads every collection and merges; a
+ * policy id is looked up in each ({@link find}) — ObjectIds do not collide,
+ * so the first hit is the policy.
  *
  * ## Enrolment moves people
  *
- * A person is in at most one active policy of each creatable type. Saving a
- * policy's members takes those people out of every other active policy of
- * the same type in the same write path ({@link releaseFromOthers}); the
- * wizard warns before it happens. Not a transaction: the two writes are both
+ * A person is in at most one active Holiday policy, one Work week policy,
+ * and one time off policy *per kind* (PTO, Sick, …; Custom excepted). Saving
+ * a policy's members takes those people out of every other active policy of
+ * the same kind in the same write path ({@link releaseFromOthers}); the
+ * wizard warns before it happens. Not a transaction: the writes are all
  * idempotent, and a crash between them leaves a person briefly in two
  * policies, which the next save of either one settles.
+ *
+ * ## Time off: the balance is the ledger
+ *
+ * A time off policy stores no balance. Activation and enrolment post one
+ * `allocation` row per person (the starting balance — a 0-hour row is still
+ * the "joined" event); removal posts a `removed_from_policy` row; re-adding
+ * posts nothing, so the old balance resumes. The accrual job (worker) posts
+ * the rest. Paid/unpaid and Unlimited are locked after creation.
  */
 @Injectable()
 export class HrPoliciesService {
@@ -95,14 +124,23 @@ export class HrPoliciesService {
     private readonly holidayPolicies: Model<HolidayPolicyDocument>,
     @InjectModel(WorkWeekPolicy.name)
     private readonly workWeekPolicies: Model<WorkWeekPolicyDocument>,
+    @InjectModel(TimeOffPolicy.name)
+    private readonly timeOffPolicies: Model<TimeOffPolicyDocument>,
+    @InjectModel(TimeOffRequest.name)
+    private readonly timeOffRequests: Model<TimeOffRequest>,
     @InjectModel(User.name) private readonly users: Model<User>,
     @InjectModel(Branch.name) private readonly branches: Model<Branch>,
+    private readonly ledger: LeaveLedgerService,
   ) {}
 
-  /** The collection of each creatable type, for the operations they share. */
+  /** The collection of each type, for the operations they share. */
   private store(type: CreatablePolicyType): PolicyModel {
     const model =
-      type === 'holiday' ? this.holidayPolicies : this.workWeekPolicies;
+      type === 'holiday'
+        ? this.holidayPolicies
+        : type === 'work_week'
+          ? this.workWeekPolicies
+          : this.timeOffPolicies;
     return model as unknown as PolicyModel;
   }
 
@@ -134,7 +172,6 @@ export class HrPoliciesService {
       this.activeRows(agencyId),
       this.enrollable(agencyId),
     ]);
-    // `time_off` has no collection until PAC-174; it counts zero.
     const counts: Record<HrPolicyType, number> = {
       holiday: 0,
       work_week: 0,
@@ -154,18 +191,53 @@ export class HrPoliciesService {
       this.find(agencyId, policyId),
       this.enrollable(agencyId),
     ]);
-    return toView(row, people);
+    return this.toView(row, people);
   }
 
   async create(
     agencyId: string,
     dto: CreateHrPolicyDto,
+    timeZone: string,
   ): Promise<HrPolicyView> {
     const people = await this.enrollable(agencyId);
     assertMembers(dto.memberIds, people);
     await this.assertNameFree(agencyId, dto.type, dto.name);
 
     const memberIds = dto.memberIds.map((id) => new Types.ObjectId(id));
+    if (dto.type === 'time_off') {
+      const balances = dto.startingBalanceHours ?? {};
+      assertBalancesForMembers(balances, dto.memberIds);
+      const created = await this.timeOffPolicies.create({
+        agencyId,
+        name: dto.name,
+        memberIds,
+        ...dto.timeOff,
+      });
+      const effectiveAt = todayInstant(timeZone);
+      await this.releaseFromOthers(
+        agencyId,
+        'time_off',
+        created._id,
+        memberIds,
+        {
+          timeOffType: dto.timeOff.timeOffType,
+          effectiveAt,
+        },
+      );
+      await this.ledger.post(
+        allocationRows(
+          agencyId,
+          created._id,
+          memberIds,
+          dto.timeOff,
+          balances,
+          effectiveAt,
+          'activation',
+        ),
+      );
+      return this.get(agencyId, created._id.toString());
+    }
+
     const created =
       dto.type === 'holiday'
         ? await this.holidayPolicies.create({
@@ -189,6 +261,7 @@ export class HrPoliciesService {
     agencyId: string,
     policyId: string,
     dto: UpdateHrPolicyDto,
+    timeZone: string,
   ): Promise<HrPolicyView> {
     const row = await this.find(agencyId, policyId);
     if (dto.holiday && row.type !== 'holiday') {
@@ -196,6 +269,14 @@ export class HrPoliciesService {
     }
     if (dto.workWeek && row.type !== 'work_week') {
       throw new BadRequestException('Only a Work week policy has a schedule.');
+    }
+    if (dto.timeOff && row.type !== 'time_off') {
+      throw new BadRequestException(
+        'Only a Time off policy has accrual rules.',
+      );
+    }
+    if (dto.startingBalanceHours && row.type !== 'time_off') {
+      throw new BadRequestException('Only a Time off policy has balances.');
     }
     if (dto.name !== undefined && dto.name !== row.name) {
       await this.assertNameFree(agencyId, row.type, dto.name, row._id);
@@ -208,6 +289,25 @@ export class HrPoliciesService {
       $set.customHolidays = dto.holiday.customHolidays;
     }
     if (dto.workWeek) $set.days = dto.workWeek.days;
+
+    let rules = row.type === 'time_off' ? timeOffRulesOf(row) : null;
+    if (dto.timeOff && rules) {
+      const merged = { ...rules, ...dto.timeOff };
+      merged.autoApprove = { ...rules.autoApprove, ...dto.timeOff.autoApprove };
+      const error = timeOffPolicyRulesError(merged);
+      if (error) throw new BadRequestException(error);
+      const next = normalizeTimeOffPolicyRules(merged);
+      for (const field of LOCKED_TIME_OFF_FIELDS) {
+        if (next[field] !== rules[field]) {
+          throw new BadRequestException(
+            'Paid / unpaid and Unlimited are locked once a policy is active. Delete it and create a new one.',
+          );
+        }
+      }
+      Object.assign($set, next);
+      rules = next;
+    }
+
     let memberIds: Types.ObjectId[] | null = null;
     if (dto.memberIds) {
       assertMembers(dto.memberIds, await this.enrollable(agencyId));
@@ -219,19 +319,47 @@ export class HrPoliciesService {
       { _id: row._id, agencyId, ...ACTIVE },
       { $set },
     );
+
     if (memberIds) {
-      await this.releaseFromOthers(agencyId, row.type, row._id, memberIds);
+      if (row.type === 'time_off' && rules) {
+        await this.recordEnrolmentChange(
+          agencyId,
+          row,
+          rules,
+          memberIds,
+          dto.startingBalanceHours ?? {},
+          timeZone,
+        );
+      } else {
+        await this.releaseFromOthers(agencyId, row.type, row._id, memberIds);
+      }
     }
     return this.get(agencyId, policyId);
   }
 
-  /** Soft: the row stays, its people are free to join another policy. */
+  /**
+   * Soft: the row stays, its people are free to join another policy. A time
+   * off policy keeps its ledger and history, and cannot go while a request
+   * against it is waiting for a decision.
+   */
   async archive(
     agencyId: string,
     policyId: string,
     actorId: string,
   ): Promise<void> {
     const row = await this.find(agencyId, policyId);
+    if (row.type === 'time_off') {
+      const waiting = await this.timeOffRequests.countDocuments({
+        agencyId,
+        policyId: row._id,
+        status: SUBMITTED,
+      });
+      if (waiting > 0) {
+        throw new ConflictException(
+          `${waiting} request${waiting === 1 ? ' is' : 's are'} waiting for a decision. Decide ${waiting === 1 ? 'it' : 'them'} first.`,
+        );
+      }
+    }
     await this.store(row.type).updateOne(
       { _id: row._id, agencyId, ...ACTIVE },
       {
@@ -243,25 +371,36 @@ export class HrPoliciesService {
     );
   }
 
-  /** Everyone who can be enrolled, with their current policy of each type. */
+  /** Everyone who can be enrolled, with their current policy of each kind. */
   async people(agencyId: string): Promise<PolicyPeopleResponse> {
     const [people, rows] = await Promise.all([
       this.enrollable(agencyId),
-      this.activeRows(agencyId, 'name memberIds createdAt'),
+      this.activeRows(agencyId, 'name memberIds createdAt timeOffType'),
     ]);
     const current = new Map<string, PolicyPersonView['policies']>();
+    const timeOff = new Map<string, PolicyPersonView['timeOffPolicies']>();
     for (const row of rows) {
+      const ref = { id: row._id.toString(), name: row.name };
       for (const memberId of row.memberIds ?? []) {
         const key = memberId.toString();
-        const entry = current.get(key) ?? {};
-        entry[row.type] = { id: row._id.toString(), name: row.name };
-        current.set(key, entry);
+        if (row.type === 'time_off') {
+          // Custom never moves anyone, so it is nobody's "current" policy.
+          if (!row.timeOffType || row.timeOffType === 'custom') continue;
+          const entry = timeOff.get(key) ?? {};
+          entry[row.timeOffType] = ref;
+          timeOff.set(key, entry);
+        } else {
+          const entry = current.get(key) ?? {};
+          entry[row.type] = ref;
+          current.set(key, entry);
+        }
       }
     }
     return {
       people: [...people.values()].map((person) => ({
         ...person,
         policies: current.get(person.id) ?? {},
+        timeOffPolicies: timeOff.get(person.id) ?? {},
       })),
     };
   }
@@ -283,6 +422,30 @@ export class HrPoliciesService {
     return row;
   }
 
+  private async toView(
+    row: PolicyLean,
+    people: ReadonlyMap<string, PolicyMemberView>,
+  ): Promise<HrPolicyView> {
+    const members = liveMembers(row, people);
+    if (row.type !== 'time_off') {
+      return { ...toSummary(row, people), members };
+    }
+    const unlimited = row.accrualType === 'unlimited';
+    const balances = unlimited
+      ? new Map<string, number>()
+      : await this.ledger.balances(
+          row._id,
+          members.map((member) => new Types.ObjectId(member.id)),
+        );
+    return {
+      ...toSummary(row, people),
+      members: members.map((member) => ({
+        ...member,
+        balanceHours: unlimited ? null : (balances.get(member.id) ?? 0),
+      })),
+    };
+  }
+
   private async assertNameFree(
     agencyId: string,
     type: CreatablePolicyType,
@@ -302,22 +465,116 @@ export class HrPoliciesService {
     }
   }
 
+  /**
+   * Take `memberIds` out of every other active policy of the same kind. For
+   * time off the kind is the `timeOffType`, Custom moves nobody, and each
+   * person leaving another policy gets a `removed_from_policy` row there.
+   */
   private async releaseFromOthers(
     agencyId: string,
     type: CreatablePolicyType,
     keepId: Types.ObjectId,
     memberIds: Types.ObjectId[],
+    timeOff?: {
+      timeOffType: TimeOffPolicyRules['timeOffType'];
+      effectiveAt: Date;
+    },
   ): Promise<void> {
     if (!memberIds.length) return;
-    await this.store(type).updateMany(
-      {
-        agencyId,
-        ...ACTIVE,
-        _id: { $ne: keepId },
-        memberIds: { $in: memberIds },
-      },
-      { $pull: { memberIds: { $in: memberIds } } },
+    if (type !== 'time_off') {
+      await this.store(type).updateMany(
+        {
+          agencyId,
+          ...ACTIVE,
+          _id: { $ne: keepId },
+          memberIds: { $in: memberIds },
+        },
+        { $pull: { memberIds: { $in: memberIds } } },
+      );
+      return;
+    }
+    if (!timeOff || timeOff.timeOffType === 'custom') return;
+    const filter = {
+      agencyId,
+      ...ACTIVE,
+      _id: { $ne: keepId },
+      timeOffType: timeOff.timeOffType,
+      memberIds: { $in: memberIds },
+    };
+    const others = await this.timeOffPolicies
+      .find(filter)
+      .select('memberIds')
+      .lean<{ _id: Types.ObjectId; memberIds?: Types.ObjectId[] }[]>();
+    if (!others.length) return;
+    await this.timeOffPolicies.updateMany(filter, {
+      $pull: { memberIds: { $in: memberIds } },
+    });
+    const moving = new Set(memberIds.map((id) => id.toString()));
+    await this.ledger.post(
+      others.flatMap((other) =>
+        (other.memberIds ?? [])
+          .filter((id) => moving.has(id.toString()))
+          .map((userId) =>
+            removalRow(agencyId, other._id, userId, timeOff.effectiveAt),
+          ),
+      ),
     );
+  }
+
+  /**
+   * A time off policy's member list changed: who joined gets a starting
+   * balance (unless they were here before — then it resumes), who left gets
+   * a removal row, and whoever joined leaves their other policy of the kind.
+   */
+  private async recordEnrolmentChange(
+    agencyId: string,
+    row: PolicyLean,
+    rules: TimeOffPolicyRules,
+    memberIds: Types.ObjectId[],
+    startingBalanceHours: Record<string, number>,
+    timeZone: string,
+  ): Promise<void> {
+    const before = new Set((row.memberIds ?? []).map((id) => id.toString()));
+    const after = new Set(memberIds.map((id) => id.toString()));
+    const added = memberIds.filter((id) => !before.has(id.toString()));
+    const removed = (row.memberIds ?? []).filter(
+      (id) => !after.has(id.toString()),
+    );
+    const effectiveAt = todayInstant(timeZone);
+
+    assertBalancesForMembers(
+      startingBalanceHours,
+      added.map((id) => id.toString()),
+      'Starting balances are for people being added.',
+    );
+    const resuming = await this.ledger.enrolledBefore(row._id, added);
+    const returning = Object.keys(startingBalanceHours).filter((id) =>
+      resuming.has(id),
+    );
+    if (returning.length) {
+      throw new BadRequestException(
+        `${returning.length === 1 ? 'One person was' : `${returning.length} people were`} in this policy before; their balance resumes and cannot be set.`,
+      );
+    }
+
+    await this.releaseFromOthers(agencyId, 'time_off', row._id, added, {
+      timeOffType: rules.timeOffType,
+      effectiveAt,
+    });
+    await this.ledger.post([
+      ...allocationRows(
+        agencyId,
+        row._id,
+        added.filter((id) => !resuming.has(id.toString())),
+        rules,
+        startingBalanceHours,
+        effectiveAt,
+        'enrollment',
+      ),
+      ...removed.map((userId) =>
+        removalRow(agencyId, row._id, userId, effectiveAt),
+      ),
+    ]);
   }
 
   /**
@@ -390,6 +647,70 @@ function assertMembers(
   }
 }
 
+/** A starting balance must belong to someone on the list it came with. */
+function assertBalancesForMembers(
+  balances: Record<string, number>,
+  memberIds: readonly string[],
+  message = 'Starting balances must belong to people being enrolled.',
+): void {
+  const members = new Set(memberIds);
+  if (Object.keys(balances).some((id) => !members.has(id))) {
+    throw new BadRequestException(message);
+  }
+}
+
+/** Today's first instant on the agency's calendar — when a row "happened". */
+function todayInstant(timeZone: string): Date {
+  return businessDateInstant(agencyTodayIso(timeZone), timeZone);
+}
+
+/**
+ * One `allocation` row per person joining: the balance the admin set, or
+ * the policy's default; none at all on Unlimited. A 0-hour row is still the
+ * "joined" event.
+ */
+function allocationRows(
+  agencyId: string,
+  policyId: Types.ObjectId,
+  userIds: readonly Types.ObjectId[],
+  rules: Pick<
+    TimeOffPolicyRules,
+    'accrualType' | 'accrualFrequency' | 'hoursPerYear'
+  >,
+  startingBalanceHours: Record<string, number>,
+  effectiveAt: Date,
+  sourceKind: 'activation' | 'enrollment',
+): NewLedgerRow[] {
+  const fallback = defaultStartingBalance(rules);
+  if (fallback === null) return [];
+  return userIds.map((userId) => ({
+    agencyId,
+    policyId,
+    userId,
+    kind: 'allocation',
+    hours: startingBalanceHours[userId.toString()] ?? fallback,
+    effectiveAt,
+    source: { kind: sourceKind, id: policyId },
+  }));
+}
+
+function removalRow(
+  agencyId: string,
+  policyId: Types.ObjectId,
+  userId: Types.ObjectId,
+  effectiveAt: Date,
+): NewLedgerRow {
+  return {
+    agencyId,
+    policyId,
+    userId,
+    kind: 'removed_from_policy',
+    hours: 0,
+    effectiveAt,
+    source: { kind: 'enrollment', id: policyId },
+  };
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -402,6 +723,35 @@ function liveMembers(
     const person = people.get(id.toString());
     return person ? [person] : [];
   });
+}
+
+/** The stored time off fields as the wire rules; `.lean()` fills no defaults. */
+function timeOffRulesOf(row: StoredRow): TimeOffPolicyRules {
+  return {
+    timeOffType: row.timeOffType ?? 'custom',
+    description: row.description ?? null,
+    compensation: row.compensation ?? 'paid',
+    accrualType: row.accrualType ?? 'fixed_amount',
+    hoursPerYear: row.hoursPerYear ?? null,
+    accrualFrequency: row.accrualFrequency ?? null,
+    resetDateKind: row.resetDateKind ?? null,
+    resetMonthDay: row.resetMonthDay ?? null,
+    accrualRate: row.accrualRate ?? null,
+    accrualRateUnit: row.accrualRateUnit ?? null,
+    maxBalanceHours: row.maxBalanceHours ?? null,
+    maxAccruedPerYearHours: row.maxAccruedPerYearHours ?? null,
+    carryoverCapHours: row.carryoverCapHours ?? null,
+    annualUsageCapHours: row.annualUsageCapHours ?? null,
+    waitingPeriodDays: row.waitingPeriodDays ?? null,
+    accrualWaitingPeriodDays: row.accrualWaitingPeriodDays ?? null,
+    allowNegativeBalance: row.allowNegativeBalance ?? false,
+    payOutOnTermination: row.payOutOnTermination ?? false,
+    autoApprove: {
+      enabled: row.autoApprove?.enabled ?? false,
+      maxCalendarDays: row.autoApprove?.maxCalendarDays ?? null,
+      minNoticeHours: row.autoApprove?.minNoticeHours ?? null,
+    },
+  };
 }
 
 function toSummary(
@@ -428,6 +778,9 @@ function toSummary(
       },
     };
   }
+  if (row.type === 'time_off') {
+    return { ...base, type: 'time_off', timeOff: timeOffRulesOf(row) };
+  }
   return {
     ...base,
     type: 'holiday',
@@ -444,11 +797,4 @@ function toSummary(
       ),
     },
   };
-}
-
-function toView(
-  row: PolicyLean,
-  people: ReadonlyMap<string, PolicyMemberView>,
-): HrPolicyView {
-  return { ...toSummary(row, people), members: liveMembers(row, people) };
 }

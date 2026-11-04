@@ -36,7 +36,7 @@ import {
 import { HrPoliciesService } from './hr-policies.service';
 
 /**
- * HR policies (PAC-161 v3) — Workspace Settings → HR policies.
+ * HR policies (PAC-161 v3, PAC-174) — Workspace Settings → HR policies.
  *
  * Every route is `agency:hr:admin`: an admin capability, not the module's
  * `:write`, which is the *reviewer* capability over other people's requests
@@ -79,30 +79,40 @@ export class HrPoliciesController {
     return this.policies.get(agencyId, policyId);
   }
 
-  /** Enrolling someone moves them out of their other policy of the type. */
+  /**
+   * Enrolling someone moves them out of their other policy of the kind. A
+   * time off policy is active from here: its starting balances are posted,
+   * dated today on the agency's calendar (`access.timeZone`).
+   */
   @Post()
   @RequirePermissions(AgencyPermission.HrAdmin)
   create(
+    @Access() access: AccessContext,
     @AgencyId() agencyId: string,
     @Body(new ZodValidationPipe(createHrPolicySchema))
     body: CreateHrPolicyDto,
   ): Promise<HrPolicyView> {
-    return this.policies.create(agencyId, body);
+    return this.policies.create(agencyId, body, access.timeZone);
   }
 
+  /** Time off: paid/unpaid and Unlimited are locked — 400 on a change. */
   @Patch(':policyId')
   @RequirePermissions(AgencyPermission.HrAdmin)
   update(
+    @Access() access: AccessContext,
     @AgencyId() agencyId: string,
     @Param('policyId', new ZodValidationPipe(policyIdParamSchema))
     policyId: string,
     @Body(new ZodValidationPipe(updateHrPolicySchema))
     body: UpdateHrPolicyDto,
   ): Promise<HrPolicyView> {
-    return this.policies.update(agencyId, policyId, body);
+    return this.policies.update(agencyId, policyId, body, access.timeZone);
   }
 
-  /** Soft archive; a second call is a 404. */
+  /**
+   * Soft archive; a second call is a 404. A time off policy with a request
+   * waiting for a decision is a 409 — decide it first.
+   */
   @Post(':policyId/archive')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions(AgencyPermission.HrAdmin)
