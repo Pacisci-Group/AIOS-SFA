@@ -1,0 +1,202 @@
+meta {
+  name: List Review Queue
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/queue?status=pending&page=1&pageSize=25
+  body: none
+  auth: bearer
+}
+
+params:query {
+  status: pending
+  page: 1
+  pageSize: 25
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+script:post-response {
+  // A seller and a client for the filtered requests later in the folder.
+  // Encoded here: the search term goes into the URL as it is.
+  if (res.getStatus() === 200) {
+    const row = (res.getBody().items || []).find((entry) => entry.producerId);
+    if (row) {
+      bru.setVar("queueProducerId", row.producerId);
+      bru.setVar("queueClientName", row.clientName);
+      bru.setVar("queueClientSearch", encodeURIComponent(row.clientName));
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns a paginated envelope of deals", function () {
+    const body = res.getBody();
+    expect(body.page).to.equal(1);
+    expect(body.pageSize).to.equal(25);
+    expect(body).to.have.property("total");
+    expect(body).to.have.property("totalPages");
+    expect(body.items).to.be.an("array");
+  });
+
+  test("every row is awaiting review", function () {
+    for (const row of res.getBody().items) {
+      expect(row.auditStatus).to.equal("Pending");
+    }
+  });
+
+  test("rows carry the days-sitting clock and the running tally", function () {
+    for (const row of res.getBody().items) {
+      expect(row.businessDaysOpen).to.be.a("number");
+      expect(row.aging).to.equal(row.businessDaysOpen > 5);
+      const { passed, failed, remaining } = row.counts;
+      expect(passed + failed + remaining).to.equal(row.itemCount);
+      expect(row.canReview).to.be.a("boolean");
+    }
+  });
+
+  test("longest-waiting deal first", function () {
+    const days = res.getBody().items.map((row) => row.businessDaysOpen);
+    for (let i = 1; i < days.length; i += 1) {
+      expect(days[i - 1]).to.be.at.least(days[i]);
+    }
+  });
+
+  test("the audit the producer just submitted is waiting here", function () {
+    // Submit Audit For Review ran just before; on a busy branch it may be
+    // past the first page, so this only checks it when it is on this one.
+    const row = res.getBody().items.find(
+      (entry) => entry.dealId === bru.getVar("auditDealId"),
+    );
+    if (row) {
+      expect(row.canReview).to.equal(true);
+      expect(row.sentBack).to.equal(null);
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits/queue — the Deal Audits queue (PAC-106)
+
+  The manager's list of sold deals and where each one's audit sits — the page
+  behind the **Deal Audits** nav link. One row per **deal** (its newest audit),
+  longest-waiting first.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read` **and** `management:read` — an AND-set.
+    "Management roles only" is the capability, never a role name: the Branch
+    Manager and Agency Owner templates hold both, a Producer or CSR is `403`.
+  - **Data scope:**
+    - `branch` → deals in the manager's branch (or `X-Branch-Id`)
+    - `agency` → every deal in the agency
+    - `own` (a custom role holding `management:read`) → audits whose
+      **reviewer** is the caller or a role they hold — the audit-side meaning
+      of "mine", not the deals they sold.
+
+  New business only: a company transfer is not a sale and has nothing to
+  audit. Test records are excluded.
+
+  ## Query params
+  | param    | type | default | rules |
+  |----------|------|---------|-------|
+  | status   | enum | `open`  | `open` (everything not approved) \| `not_submitted` \| `pending` (ready for review) \| `fail` (sent back) \| `pass` (approved) \| `all` |
+  | q        | string | —     | ≤ 120 chars; a client name, a producer name or a policy number — see *Search* |
+  | producerIds | id[] | —    | ≤ 50; repeated or comma-separated — the deal's **seller** |
+  | policyTypes | enum[] | —  | the dashboards' lines of business (`Auto`, `Home`, …); a bundle matches either line |
+  | aging    | `true` \| `false` | `false` | only deals past the five-business-day SLA — never an approved one |
+  | range    | enum | `all`   | `all` (no window) or the dashboards' periods: `today` \| `yesterday` \| `mtd` \| `lastMonth` \| `last3Months` \| `ytd` \| `lastYear` \| `last12Months` \| `custom` — on the **sold date** |
+  | from / to | `YYYY-MM-DD` | — | required with `custom`, inclusive, agency calendar, ≤ 366 days apart |
+  | sort     | enum | `waiting` | `waiting` (oldest sale first) \| `client` (A–Z, case-insensitive) \| `producer` (seller's name A–Z) \| `submitted` (newest submission first, never-submitted last) |
+  | page     | int  | 1       | min 1 |
+  | pageSize | int  | 25      | min 1, max 100 |
+
+  Every filter **narrows** the caller's scope, never widens it. There is no
+  `branchId` param: `BranchGuard` reads one, and the scope already decides the
+  branch. Every order ends on `_id`, so paging is stable on a tie.
+
+  ### Search (20 Oct 2026)
+  The repo's one rule (`buildSearchFilter`): **AND across words, OR across
+  what each word may be** — the deal's client name, or the first name, last
+  name or email of the user who sold it. `pat smith` finds Smith sold by Pat.
+  A **policy number** is read as the whole term, never word by word (the
+  tokenizer would split `AS-1234567`): normalised to letters and digits, at
+  least four, matched as a prefix — the Clients page's rule. So `as-12345`
+  finds the deal that bound `AS1234567`; a mixed `smith AS-123` does not reach
+  the policy branch. A blank `q` is no search.
+
+  ### Aging only
+  The Aging Audits card's predicate (PAC-139): sold before the business-day
+  cutoff (`soldDate` earlier than five business days ago, agency calendar)
+  **and** not approved. With `status=pass` the two cannot both hold, so the
+  answer is an empty page. Combined with a period, the tighter end wins.
+
+  The queue lists audits in **every** state, not just `Pending`: an audit the
+  producer has not submitted is still ageing, and the manager needs to see it.
+  Only `Pending` rows can be acted on (`canReview`).
+
+  ## Days sitting
+  `businessDaysOpen` is **business days since the sold date** (weekends and US
+  federal holidays excluded) on the agency's calendar — the clock the Manager
+  view's Aging Audits card uses (PAC-139), so the two agree. `aging` is
+  `businessDaysOpen > 5` (`MANAGEMENT_AUDIT_SLA_BUSINESS_DAYS`), and always
+  `false` once approved. Sorted oldest sale first.
+
+  ## Response `200`
+  ```json
+  {
+    "page": 1,
+    "pageSize": 25,
+    "total": 3,
+    "totalPages": 1,
+    "items": [
+      {
+        "dealAuditId": "665f...9c1",
+        "dealId": "665f...a03",
+        "householdId": "665f...b20",
+        "clientName": "Jane Homeowner",
+        "producerId": "665f...b11",
+        "producerName": "Pat Producer",
+        "assigneeId": "665f...b11",
+        "assigneeName": "Pat Producer",
+        "auditStatus": "Pending",
+        "soldDate": "2026-10-09T17:00:00.000Z",
+        "businessDaysOpen": 6,
+        "aging": true,
+        "itemCount": 7,
+        "counts": { "passed": 2, "failed": 0, "remaining": 5 },
+        "producerOpenCount": 0,
+        "submittedAt": "2026-10-15T14:20:00.000Z",
+        "sentBack": null,
+        "canReview": true
+      }
+    ]
+  }
+  ```
+
+  - `counts` are the manager's verdicts over **every** item (manager-only
+    included); `producerOpenCount` is what is still outstanding on the
+    producer's side.
+  - `assigneeId` / `assigneeName` are `null` when the audit is assigned to a
+    role.
+  - `sentBack` is `{ at, byName, note, failedItemCount }` on a sent-back
+    (`Fail`) audit.
+  - `canReview` is `Pending` and not submitted by the caller.
+
+  ## Errors
+  - `400 Bad Request` — unknown `status`, `pageSize` > 100.
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — `deal_audits` module disabled, or missing
+    `deal_audits:read` or `management:read`.
+}

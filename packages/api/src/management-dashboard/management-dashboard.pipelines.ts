@@ -3,6 +3,7 @@ import {
   terminalLeadStatusValues,
 } from '@sfa/shared';
 import { FilterQuery, PipelineStage, Types } from 'mongoose';
+import { latestDealAuditLookup } from '../common/deal-audits/latest-audit';
 import { HOUSEHOLD_KEY_EXPR } from '../common/sales-metrics/household-key';
 import {
   leadCreatedYmdExpr,
@@ -134,34 +135,12 @@ export function agingAuditsPrefix(
       ? [...sourceStages(true), ...sourceMatch(filter.leadSourceIds)]
       : []),
     ...lobMatch('policyTypes', filter.policyTypes),
-    {
-      $lookup: {
-        from: 'dealAudits',
-        localField: '_id',
-        foreignField: 'dealId',
-        pipeline: [
-          // `$ne: 'Pass'` keeps Not Submitted, Pending and Fail — and a legacy
-          // row with no status, which the schema defaults to Not Submitted.
-          {
-            $match: {
-              isTestRecord: { $ne: true },
-              auditStatus: { $ne: 'Pass' },
-            },
-          },
-          { $sort: { createdAt: -1 } },
-          { $limit: 1 },
-          {
-            $project: {
-              _id: 1,
-              auditStatus: 1,
-              openFailedCount: 1,
-              auditAssignee: 1,
-            },
-          },
-        ],
-        as: '_audit',
-      },
-    },
+    // `$ne: 'Pass'` keeps Not Submitted, Pending and Fail — and a legacy row
+    // with no status, which the schema defaults to Not Submitted.
+    latestDealAuditLookup(
+      { auditStatus: { $ne: 'Pass' } },
+      { _id: 1, auditStatus: 1, openFailedCount: 1, auditAssignee: 1 },
+    ),
     { $match: { '_audit.0': { $exists: true } } },
     // Two stages: a field cannot read a sibling set in the same `$addFields`.
     { $addFields: { _agingAudit: { $arrayElemAt: ['$_audit', 0] } } },

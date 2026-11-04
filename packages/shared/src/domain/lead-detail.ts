@@ -178,6 +178,13 @@ export interface LeadDetailDeal {
    * Empty on a migrated deal whose policies were never linked back to it.
    */
   policies: LeadDetailPolicy[];
+  /**
+   * The sale's audit has passed, or a person submitted it and it is with the
+   * reviewer, so its policies cannot be corrected from the Sold card until it
+   * is sent back (PAC-106 review — `SoldDealEditView.auditLocked`, the same
+   * rule).
+   */
+  auditLocked: boolean;
 }
 
 export interface LeadDetailPriorPolicy {

@@ -235,7 +235,7 @@ export function SidebarBody({
   onNavigate,
 }: SidebarBodyProps) {
   const { user, logout, isAuthenticated } = useAuth();
-  const { canRead, can, canAny } = usePermissions();
+  const { canRead, can, canAny, canAll } = usePermissions();
   const navigate = useNavigate();
   // The one badge in the sidebar (PAC-154), on the footer's notifications
   // row. The stream invalidates the same query on each event.
@@ -246,6 +246,7 @@ export function SidebarBody({
     if (item.permission) return can(item.permission);
     // A hub entry is visible when *any* of the pages behind it is.
     if (item.anyOf) return canAny(item.anyOf);
+    if (item.allOf) return canAll(item.allOf);
     if (item.module) return canRead(item.module);
     return true;
   };

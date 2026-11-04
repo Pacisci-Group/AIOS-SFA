@@ -1,7 +1,7 @@
 meta {
   name: Review Audit
   type: http
-  seq: 9
+  seq: 16
 }
 
 post {
@@ -22,9 +22,7 @@ headers {
 body:json {
   {
     "decision": "request_changes",
-    "reasonCodes": ["Missing Docs"],
-    "notes": "Declarations page still outstanding.",
-    "score": 70
+    "notes": "The Good Student transcript is from 2019 — please upload this year's."
   }
 }
 
@@ -33,63 +31,103 @@ tests {
     expect(res.getStatus()).to.equal(201);
   });
 
-  test("lands on a state matching the decision", function () {
+  test("sends the audit back to the producer", function () {
+    // `request_changes` is the Deal Audit page's Send back (PAC-106): `Fail`
+    // is what the producer's board paints red with a Fix it action.
     const body = res.getBody();
-    expect(["Pass", "Fail", "Not Submitted"]).to.include(body.auditStatus);
+    expect(body.auditStatus).to.equal("Fail");
     expect(body).to.have.property("reviewedAt");
+  });
+
+  test("stamps the sent-back marker the producer sees", function () {
+    const sentBack = res.getBody().sentBack;
+    expect(sentBack).to.be.an("object");
+    expect(sentBack.note).to.be.a("string").and.not.be.empty;
+    expect(sentBack.failedItemCount).to.be.at.least(1);
+    expect(sentBack).to.have.property("byName");
   });
 }
 
 docs {
-  # POST /deal-audits/deals/:dealId/review — the reviewer's verdict (PAC-72)
+  # POST /deal-audits/deals/:dealId/review — the manager's decision (PAC-72, PAC-106)
+
+  Approve or Send back on the Deal Audit page.
 
   - **Module:** `deal_audits`
-  - **Permission:** `deal_audits:write`
-  - **Data scope:** assignee **or** reviewer (see **Set Audit Assignment**).
+  - **Permission:** `deal_audits:write` **and** `management:read` — an AND-set
+    (PAC-106). Reviewing is the manager's job; the Producer template holds
+    `deal_audits:write` and is now refused here.
+  - **Data scope:** the audit must be in the caller's reach — branch for a
+    branch manager, agency for the owner, assignee/reviewer under `own`.
 
   Only an audit in **Pending** can be reviewed — anything else is `409`.
 
+  > 🔴 **The submitter cannot review their own audit** — `403`. An audit
+  > submitted automatically (`submittedById: null`, nothing for the producer to
+  > provide) has no submitter, so any manager may review it.
+
   ## Decisions
-  | decision          | lands on      | meaning |
-  |-------------------|---------------|---------|
-  | `approve`         | `Pass`        | signed off |
-  | `request_changes` | `Fail`        | this failed review; here is what is wrong |
-  | `send_back`       | `Not Submitted` | not ready / not mine — take it back |
+  | decision          | lands on        | rule |
+  |-------------------|-----------------|------|
+  | `approve`         | `Pass`          | **every item's verdict is `pass`** (PAC-106) — else `409 audit_items_not_passed` |
+  | `request_changes` | `Fail`          | **Send back**: at least one item `fail` (else `409 audit_nothing_failed`) **and** a `notes` (else `400`) |
+  | `send_back`       | `Not Submitted` | unchanged from PAC-72; not offered by the Deal Audit page |
 
-  The last two both return the audit to its assignee and differ only in
-  meaning. They stay separate so the timeline can say which happened
-  (`audit_changes_requested` vs `audit_sent_back`).
+  Verdicts are set item by item with **Set Item Verdict** first. An item that
+  does not apply is passed with a note, not skipped.
 
-  > 🔴 **The submitter cannot review their own audit** — `403`. Both actions are
-  > `deal_audits:write` and the Producer role template holds it, so nothing else
-  > in the guard chain expresses "a different person". This is the rule that
-  > makes the two-role split mean anything.
+  ### What Send back does
+  1. Every item with verdict `fail` is **reopened** — `isFailed: true`,
+     `isResolved: false`, back to *In Progress* — so it is back on the
+     producer's board with the manager's note (`review.note`). A failed
+     manager-only item joins the board too (`managerOnly: true`).
+  2. Stamps `sentBack: { at, byId, note, failedItemCount }`, which the
+     producer's red card and drawer show as "Sent back by … — note".
+  3. Writes `audit_changes_requested` to the thread ("Sent back: <note>").
+  4. Requests an **`audit.sent_back`** notification (email + push) for the
+     audit's assignee — a role assignee notifies every active holder of the
+     role — never the manager who sent it. Its link opens the producer's
+     drawer: `/dashboard/producer?audit=<dealId>`. Best-effort: a failed
+     dispatch is logged and the send-back still succeeds.
+
+  The producer fixes, resubmits (**Submit Audit For Review**), and the failed
+  verdicts are cleared for a fresh ruling; the passed ones stand.
+
+  Steps 1–2, the recomputed counters and the mirror on `Deal.dealAuditStatus`
+  are **one transaction** (PAC-106 review) — they used to be separate writes,
+  and a failure between them could leave a `Fail` audit with no reopened items
+  that the producer's board then hid. Steps 3–4 run after it commits.
 
   ## Body
   | field       | type     | rules |
   |-------------|----------|-------|
   | decision    | enum     | required — `approve` \| `request_changes` \| `send_back` |
-  | reasonCodes | string[] | **required (≥1) when `request_changes`**; ignored on approve |
-  | notes       | string   | ≤ 2000 chars |
+  | notes       | string   | ≤ 2000 chars; **required when `request_changes`** — it is the marker text and the notification body |
+  | reasonCodes | string[] | optional since PAC-106 (the failed items and the note say what is wrong); ignored on approve |
   | score       | number   | integer 0–100 |
 
   `reasonCodes` vocabulary (SmartSuite's own): `Missing Docs`,
   `Coverage Not Offered`, `Incorrect Named Insured`, `Incorrect Address`,
-  `Underwriting Issue`, `Other`.
-
-  Requiring a reason on a failure is the point of the field: "it failed" with
-  nothing stated gives the assignee nothing to act on and the correction loop
-  just bounces.
-
-  **Reason codes are cleared on any non-failure outcome** — stale codes on a
-  passed audit would read as "passed, but here's what was wrong with it".
+  `Underwriting Issue`, `Other`. **Cleared on any non-failure outcome**.
 
   ## Response `201`
-  The full audit — same shape as **Set Audit Assignment**.
+  The full audit — same shape as **Get Audit Workflow**, including `sentBack`.
 
   ## Errors
-  - `400 Bad Request` — unknown decision, or `request_changes` with no reason code.
-  - `403 Forbidden` — missing permission, or the caller submitted this audit.
+  - `400 Bad Request` — unknown decision, or `request_changes` with no `notes`.
+  - `403 Forbidden` — missing `deal_audits:write` or `management:read`, or the
+    caller submitted this audit.
   - `404 Not Found` — no audit for that deal, or out of reach.
-  - `409 Conflict` — the audit is not awaiting review.
+  - `409 Conflict` — the audit is not awaiting review (including a second
+    approve, or another manager ruling first); or
+    ```json
+    {
+      "statusCode": 409,
+      "error": "Conflict",
+      "code": "audit_items_not_passed",
+      "message": "Every item must pass before the audit can be approved.",
+      "unmet": [{ "id": "665f...ac1", "itemName": "Good Student" }]
+    }
+    ```
+    or `code: "audit_nothing_failed"` for a Send back with no failed item.
 }
