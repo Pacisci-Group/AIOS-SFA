@@ -8,7 +8,6 @@ import { withForm } from "@/hooks/form";
 import { MODULE_CATALOG } from "../module-catalog";
 import { EMPTY_ONBOARD } from "../onboard-schema";
 import { getPlatformCarriers, platformCarriersKey } from "@/lib/carriers-api";
-import { timeZoneLabel } from "@/lib/time-zones";
 import { ONBOARD_STEPS, type OnboardStepId } from "../onboard-steps";
 
 /**
@@ -72,10 +71,6 @@ export const ReviewStep = withForm({
               value={values.agency.npn || "Not set"}
               mono={!!values.agency.npn}
               muted={!values.agency.npn}
-            />
-            <Row
-              label="Time zone"
-              value={timeZoneLabel(values.agency.timezone)}
             />
             <AppointmentRows
               appointments={values.agency.carrierAppointments}

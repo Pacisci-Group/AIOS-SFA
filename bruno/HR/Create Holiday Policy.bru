@@ -1,0 +1,89 @@
+meta {
+  name: Create Holiday Policy
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "holiday",
+    "name": "{{hrPolicyName}}",
+    "holiday": {
+      "holidays": ["new_years_day", "memorial_day", "independence_day", "labor_day", "thanksgiving", "day_after_thanksgiving", "christmas_day"],
+      "customHolidays": [
+        {
+          "id": "winter",
+          "name": "Winter closure",
+          "start": "2026-12-28",
+          "end": "2026-12-31",
+          "repeatsYearly": true
+        }
+      ]
+    },
+    "memberIds": []
+  }
+}
+
+script:pre-request {
+  // Unique per run: a name is unique per type among active policies.
+  bru.setVar("hrPolicyName", `Bruno holidays ${Date.now()}`);
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("echoes the rules, members and counts", function () {
+    const body = res.getBody();
+    expect(body.type).to.equal("holiday");
+    expect(body.holiday.holidays).to.include("thanksgiving");
+    expect(body.holiday.customHolidays[0].repeatsYearly).to.equal(true);
+    expect(body.memberCount).to.equal(0);
+    expect(body.members).to.eql([]);
+  });
+}
+
+docs {
+  # POST /hr/policies — create a Holiday policy (PAC-161 v3)
+
+  Module `hr`, permission `agency:hr:admin`, agency-wide.
+
+  A Holiday policy stores **which** holidays it observes, never dates: every
+  year's dates are computed from the rule (`shared/domain/us-holidays.ts`),
+  federal fixed-date holidays observed on the nearest weekday.
+
+  Body (`type` discriminates):
+  - `name` — 1–80, unique per type among active policies (case-insensitive).
+  - `holiday.holidays` — keys from `HOLIDAY_KEYS`: the eleven federal
+    (`new_years_day`, `mlk_day`, `presidents_day`, `memorial_day`,
+    `juneteenth`, `independence_day`, `labor_day`, `columbus_day`,
+    `veterans_day`, `thanksgiving`, `christmas_day`) and the extras
+    (`good_friday`, `day_after_thanksgiving`, `christmas_eve`, `new_years_eve`).
+  - `holiday.customHolidays[]` — `{ id, name ≤120, start, end?, repeatsYearly }`,
+    all-day, `end` blank = one day, at most 31 days, at most 50 rows.
+  - `memberIds[]` — users of this agency, not removed. **Enrolling someone
+    moves them** out of any other active Holiday policy.
+
+  Response `201`: the policy view (`id, type, name, holiday, memberCount,
+  members[], createdAt, updatedAt`).
+
+  Errors: `400` bad rules / unknown key / a person outside the agency;
+  `409` name taken; `403` without `agency:hr:admin`.
+}

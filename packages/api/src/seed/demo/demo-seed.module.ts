@@ -74,6 +74,14 @@ import {
   AuditTemplate,
   AuditTemplateSchema,
 } from '../../audit-templates/schemas/audit-template.schema';
+import {
+  HolidayPolicy,
+  HolidayPolicySchema,
+} from '../../hr/schemas/holiday-policy.schema';
+import {
+  WorkWeekPolicy,
+  WorkWeekPolicySchema,
+} from '../../hr/schemas/work-week-policy.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
 import {
   MailerCampaign,
@@ -134,6 +142,9 @@ import { DemoSeedService } from './demo-seed.service';
       { name: CrmRotation.name, schema: CrmRotationSchema },
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
       { name: AuditTemplate.name, schema: AuditTemplateSchema },
+      // A Holiday and a Work week policy holding the whole team (PAC-161).
+      { name: HolidayPolicy.name, schema: HolidayPolicySchema },
+      { name: WorkWeekPolicy.name, schema: WorkWeekPolicySchema },
       { name: Mailer.name, schema: MailerSchema },
       // `Mailer.campaignId` is required (PAC-71), so the demo mailers need a
       // campaign of their own — marked `source: 'demo'` and purged with them.

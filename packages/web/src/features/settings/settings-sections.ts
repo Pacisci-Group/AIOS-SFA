@@ -6,6 +6,7 @@ import {
   Globe,
   KeyRound,
   Palette,
+  ScrollText,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -91,6 +92,16 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "The agency code each carrier that appointed you issued.",
     icon: BadgeCheck,
     permission: AgencyPermission.CarrierAppointmentsRead,
+  },
+  {
+    // PAC-161. An admin capability rather than a module pair: the Branch
+    // Manager (the Office Manager) and the owner hold it by default.
+    to: "/settings/hr-policies",
+    label: "HR policies",
+    description:
+      "Holiday and work week policies, and who each one applies to.",
+    icon: ScrollText,
+    permission: AgencyPermission.HrAdmin,
   },
 ];
 

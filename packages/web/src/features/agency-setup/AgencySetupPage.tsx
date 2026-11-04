@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { StepProgress } from "@/components/common/StepProgress";
@@ -9,10 +9,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/auth-context";
 import { getBranding } from "@/lib/agency-branding-api";
 import { ApiError } from "@/lib/api-client";
-import { completeAgencySetup, getAgencySetup } from "@/lib/agency-setup-api";
+import {
+  completeAgencySetup,
+  getAgencySetup,
+  type CompleteAgencySetupInput,
+} from "@/lib/agency-setup-api";
 import {
   AGENCY_SETUP_STEPS,
   AgencySetupStepContent,
+  AgencySetupStepHost,
+  SKIP_FLAG_BY_STEP,
+  type StepContinueHandler,
 } from "./AgencySetupSteps";
 
 /**
@@ -35,7 +42,21 @@ export default function AgencySetupPage() {
   const [stepIndex, setStepIndex] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [skippedBranding, setSkippedBranding] = useState(false);
+  // Which steps were skipped, keyed by the flag `complete` records (PAC-161).
+  const [skips, setSkips] = useState<CompleteAgencySetupInput>({});
+  // The current step's Continue handler and whether it is mid-save
+  // (`useStepContinue`); the time zone step reports a save in flight.
+  const continueRef = useRef<StepContinueHandler | null>(null);
+  const [stepBusy, setStepBusy] = useState(false);
+  const stepControls = useMemo(
+    () => ({
+      register: (handler: StepContinueHandler | null) => {
+        continueRef.current = handler;
+      },
+      setBusy: setStepBusy,
+    }),
+    [],
+  );
 
   const setupQuery = useQuery({
     queryKey: ["agency-setup"],
@@ -68,11 +89,18 @@ export default function AgencySetupPage() {
     window.scrollTo({ top: 0 });
   };
 
-  async function finish(skipped: boolean) {
+  /** Run the step's own save, if it has one, then advance. */
+  async function advance() {
+    const run = continueRef.current;
+    if (run && !(await run())) return;
+    goToStep(stepIndex + 1);
+  }
+
+  async function finish(input: CompleteAgencySetupInput) {
     setFinishing(true);
     setError(null);
     try {
-      await completeAgencySetup({ skipped });
+      await completeAgencySetup(input);
       // Re-read the session before navigating, so `RoleLanding` stops sending
       // them back here. See the same call in `InviteWizard` for why this is
       // `refreshUser` and not a query invalidation.
@@ -104,8 +132,8 @@ export default function AgencySetupPage() {
           {agencyName} is already set up
         </h1>
         <p className="text-sm text-muted-foreground">
-          Your branding and email settings live under Settings, and can be
-          changed whenever you like.
+          Your branding, email and time zone live under Settings,
+          and can be changed whenever you like.
         </p>
         <Button variant="brand" onClick={() => navigate("/", { replace: true })}>
           Go to my dashboard
@@ -121,7 +149,7 @@ export default function AgencySetupPage() {
           Welcome to {agencyName}
         </h1>
         <p className="text-sm text-muted-foreground">
-          A couple of things to make the app yours. You can skip any of them.
+          A few things to make the app yours. Most of them can be skipped.
         </p>
       </div>
 
@@ -133,21 +161,24 @@ export default function AgencySetupPage() {
         sticky={false}
       />
 
-      <AgencySetupStepContent id={step.id} agencyName={agencyName} />
+      <AgencySetupStepHost value={stepControls}>
+        <AgencySetupStepContent id={step.id} agencyName={agencyName} />
+      </AgencySetupStepHost>
 
       <FormError>{error}</FormError>
 
       <WizardFooter
         onBack={stepIndex > 0 ? () => goToStep(stepIndex - 1) : undefined}
-        disabled={finishing}
+        disabled={finishing || stepBusy}
         secondary={
           step.skippable ? (
             <Button
               type="button"
               variant="ghost"
-              disabled={finishing}
+              disabled={finishing || stepBusy}
               onClick={() => {
-                if (step.id === "brand") setSkippedBranding(true);
+                const flag = SKIP_FLAG_BY_STEP[step.id];
+                if (flag) setSkips((current) => ({ ...current, [flag]: true }));
                 goToStep(stepIndex + 1);
               }}
             >
@@ -159,13 +190,13 @@ export default function AgencySetupPage() {
         <Button
           type="button"
           variant="brand"
-          disabled={finishing}
+          disabled={finishing || stepBusy}
           className="active:scale-95"
           onClick={() => {
             if (step.id === "finish") {
-              void finish(skippedBranding);
+              void finish(skips);
             } else {
-              goToStep(stepIndex + 1);
+              void advance();
             }
           }}
         >

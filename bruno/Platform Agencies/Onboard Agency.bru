@@ -22,8 +22,7 @@ body:json {
   {
     "agency": {
       "name": "PAC-69 Test Agency",
-      "slug": "{{onboardSlug}}",
-      "timezone": "America/Chicago"
+      "slug": "{{onboardSlug}}"
     },
     "branch": {
       "name": "Main",
@@ -113,7 +112,6 @@ docs {
   {
     "agency": { "name": "Acme Insurance", "slug": "acme-insurance",
                 "ticker": "ACM", "npn": "8675309",
-                "timezone": "America/Chicago",
                 "carrierAppointments": [
                   { "carrierId": "<global carrier _id>",
                     "carrierAgencyCode": "A0B9049" }
@@ -142,14 +140,10 @@ docs {
   Availability**. ⚠ Deactivating an appointment does *not* release its code —
   only removing it does.
 
-  `agency.timezone` (PAC-141) is the IANA zone the agency keeps its working
-  day in — every dashboard date window, the 8 PM end-of-day Away sweep and the
-  day a quote recap is filed on follow it. Optional; omitted, the schema
-  default `America/Chicago` applies, which is what the wizard pre-selects.
-  Validated against the runtime *and* probed against MongoDB (whose zone table
-  is its own) before anything is written, so a name only one side knows is a
-  `400` here, not a `500` on the Owner dashboard later. The owner can change
-  it afterwards under **Update Agency Profile**.
+  There is no `agency.timezone` (PAC-161): the agency is created on the
+  schema default `America/Chicago` and the **owner** picks the zone in their
+  own setup wizard (saved through **Update Agency Profile**). A `timezone`
+  an older client still sends is stripped and ignored, never a `400`.
 
   `branch.name` defaults to `Main` and its address is optional.
   `modules` is the enabled set — anything omitted is created disabled, not
@@ -188,7 +182,7 @@ docs {
 
   ## Errors
   - `400 Bad Request` — malformed slug, missing owner name, invalid email,
-    unknown module key, or a `timezone` the runtime or MongoDB does not know.
+    unknown module key.
   - `409 Conflict` — the slug or ticker belongs to another agency, or the owner
     address already belongs to an account (the message distinguishes an existing
     member from a pending invite).

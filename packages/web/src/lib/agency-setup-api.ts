@@ -12,6 +12,12 @@ export function getAgencySetup(): Promise<AgencySetupView> {
   return apiFetch<AgencySetupView>('/agency/setup');
 }
 
+/** Which steps the owner pressed "Skip for now" on. */
+export interface CompleteAgencySetupInput {
+  /** The white-label step. */
+  skipped?: boolean;
+}
+
 /**
  * Mark setup finished.
  *
@@ -22,7 +28,7 @@ export function getAgencySetup(): Promise<AgencySetupView> {
  * Idempotent server-side, so a double submit is safe.
  */
 export function completeAgencySetup(
-  input: { skipped?: boolean } = {},
+  input: CompleteAgencySetupInput = {},
 ): Promise<AgencySetupView> {
   return apiFetch<AgencySetupView>('/agency/setup/complete', {
     method: 'POST',

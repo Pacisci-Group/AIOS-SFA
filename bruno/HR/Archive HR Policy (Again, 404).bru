@@ -1,0 +1,24 @@
+meta {
+  name: Archive HR Policy (Again, 404)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{hrPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("an archived policy is a 404", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — already archived, 404
+}

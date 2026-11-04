@@ -41,6 +41,14 @@ export interface TestSeedContext {
   csrEmail: string;
   readOnlyEmail: string;
   /**
+   * The Branch Manager — the Office Manager of the HR epic (PAC-161): holds
+   * `hr:write` and both `agency:hr:*` keys by template, and none of the
+   * owner's other `agency:*` capabilities, so a suite can tell "an HR admin"
+   * from "the owner".
+   */
+  managerEmail: string;
+  managerUserId: string;
+  /**
    * User ids for the two non-producer personas, for tests that assign work to
    * a specific person rather than logging in as them (PAC-72 audit ownership).
    */
@@ -136,6 +144,10 @@ export async function seedTestData(
     agencyId: agency._id,
     slug: 'csr',
   });
+  const managerRole = await roleModel.findOne({
+    agencyId: agency._id,
+    slug: 'branch_manager',
+  });
 
   // A role with read-only access to every page (no write anywhere). Used to
   // assert that mutating endpoints require `{module}:write` on every page.
@@ -175,6 +187,7 @@ export async function seedTestData(
   const producerEmail = 'test-producer@sfa.local';
   const csrEmail = 'test-csr@sfa.local';
   const readOnlyEmail = 'test-read-only@sfa.local';
+  const managerEmail = 'test-manager@sfa.local';
   const passwordHash = await bcrypt.hash(TEST_PASSWORD, 12);
 
   await userModel.create({
@@ -225,6 +238,16 @@ export async function seedTestData(
     isActive: true,
   });
 
+  const managerUser = await userModel.create({
+    agencyId: agency._id,
+    branchId: branch._id,
+    email: managerEmail,
+    passwordHash,
+    firstName: 'Test',
+    lastName: 'Manager',
+    isActive: true,
+  });
+
   // Roles go through `RoleAssignmentsService`, the only writer of `userRoles`.
   // Creating the join rows by hand here would leave every fixture user with no
   // roles and therefore no permissions — which fails essentially the whole
@@ -236,6 +259,7 @@ export async function seedTestData(
     [producerUser, producerRole],
     [csrUser, csrRole],
     [readOnlyUser, readOnlyRole],
+    [managerUser, managerRole],
   ];
   for (const [user, role] of assignments) {
     await roleAssignments.setUserRoles(
@@ -484,6 +508,8 @@ export async function seedTestData(
     producerEmail,
     csrEmail,
     readOnlyEmail,
+    managerEmail,
+    managerUserId: managerUser._id.toString(),
     csrUserId: csrUser._id.toString(),
     readOnlyUserId: readOnlyUser._id.toString(),
     leadSourceIds,

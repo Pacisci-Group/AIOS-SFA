@@ -202,7 +202,7 @@ describe('Agency onboarding (e2e)', () => {
       // "unknown" to anything iterating the entitlements.
       expect(agency?.modules[ModuleKey.CrmService].enabled).toBe(false);
       expect(agency?.setup?.status).toBe('pending');
-      // No zone sent: the schema default, which the wizard pre-selects.
+      // The schema default; the owner's wizard sets the real zone (PAC-161).
       expect(agency?.timezone).toBe('America/Chicago');
     });
 
@@ -357,8 +357,8 @@ describe('Agency onboarding (e2e)', () => {
     });
   });
 
-  describe('time zone (PAC-141)', () => {
-    it('stores the zone the operator chose', async () => {
+  describe('time zone (PAC-161)', () => {
+    it('ignores a zone the operator sends: the owner picks it in their own wizard', async () => {
       const slug = freshSlug();
       const input = body(slug);
       const res = await onboard({
@@ -368,20 +368,7 @@ describe('Agency onboarding (e2e)', () => {
       const agency = await agencies
         .findById((res.body as OnboardResponseBody).agency.id)
         .lean();
-      expect(agency?.timezone).toBe('Asia/Kolkata');
-    });
-
-    it.each([
-      ['a made-up zone', 'Mars/Olympus'],
-      ['a raw offset', '+05:30'],
-    ])('refuses %s before writing anything', async (_label, timezone) => {
-      const slug = freshSlug();
-      const input = body(slug);
-      await onboard({
-        ...input,
-        agency: { ...input.agency, timezone },
-      }).expect(400);
-      expect(await agencies.countDocuments({ slug })).toBe(0);
+      expect(agency?.timezone).toBe('America/Chicago');
     });
   });
 
