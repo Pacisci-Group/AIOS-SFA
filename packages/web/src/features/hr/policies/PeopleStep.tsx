@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
-import type { CreatablePolicyType } from "@sfa/shared";
+import {
+  TIME_OFF_TYPE_LABELS,
+  type HrPolicyType,
+  type PolicyPersonView,
+  type PolicyRef,
+  type TimeOffTypeKey,
+} from "@sfa/shared";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -14,16 +20,20 @@ import { NOT_AVAILABLE } from "@/lib/not-available";
  * in the agency who has not been removed — invitees included, so a policy
  * can be ready before someone's first day.
  *
- * A person is in one policy of a type at most; ticking someone who is in
+ * A person is in one policy of a type at most — per *kind* for time off
+ * (PTO, Sick, …; a Custom policy moves nobody); ticking someone who is in
  * another says so on the row, and saving moves them.
  */
 export function PeopleStep({
   type,
+  timeOffType,
   policyId,
   value,
   onChange,
 }: {
-  type: CreatablePolicyType;
+  type: HrPolicyType;
+  /** With `type: "time_off"`: the kind the one-per-person rule is keyed on. */
+  timeOffType?: TimeOffTypeKey;
   /** The policy being edited, so its own members are not "moving". */
   policyId: string | null;
   value: readonly string[];
@@ -33,6 +43,19 @@ export function PeopleStep({
   const query = useQuery({ queryKey: hrKeys.people, queryFn: listPolicyPeople });
   const people = query.data?.people ?? [];
   const chosen = new Set(value);
+
+  /** The person's current policy of this kind, if any. */
+  const currentOf = (person: PolicyPersonView): PolicyRef | undefined => {
+    if (type !== "time_off") return person.policies[type];
+    if (!timeOffType || timeOffType === "custom") return undefined;
+    return person.timeOffPolicies[timeOffType];
+  };
+  const kindLabel =
+    type === "holiday"
+      ? "holiday"
+      : type === "work_week"
+        ? "work week"
+        : `${timeOffType ? TIME_OFF_TYPE_LABELS[timeOffType] : "time off"}`;
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -46,7 +69,7 @@ export function PeopleStep({
 
   const allVisibleOn = visible.length > 0 && visible.every((p) => chosen.has(p.id));
   const moving = people.filter((person) => {
-    const current = person.policies[type];
+    const current = currentOf(person);
     return chosen.has(person.id) && current && current.id !== policyId;
   }).length;
 
@@ -67,7 +90,7 @@ export function PeopleStep({
           <p className="text-sm text-muted-foreground">
             {value.length} selected
             {moving > 0 &&
-              ` · ${moving} will move here from another ${type === "holiday" ? "holiday" : "work week"} policy`}
+              ` · ${moving} will move here from another ${kindLabel} policy`}
           </p>
         </div>
         <div className="relative w-full sm:w-64">
@@ -101,7 +124,7 @@ export function PeopleStep({
           </label>
           <ul className="max-h-[28rem] divide-y divide-border overflow-y-auto">
             {visible.map((person) => {
-              const current = person.policies[type];
+              const current = currentOf(person);
               const elsewhere = current && current.id !== policyId ? current : null;
               const id = `person-${person.id}`;
               return (

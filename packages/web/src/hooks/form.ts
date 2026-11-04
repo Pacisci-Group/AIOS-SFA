@@ -4,7 +4,9 @@ import {
   CheckboxField,
   ComboboxField,
   NumberField,
+  RadioGroupField,
   SelectField,
+  SwitchField,
   TextField,
   TextareaField,
 } from "@/components/form/fields";
@@ -37,6 +39,8 @@ export const { useAppForm, withForm, withFieldGroup } = createFormHook({
     CheckboxField,
     TextareaField,
     AddressAutocompleteField,
+    SwitchField,
+    RadioGroupField,
   },
   formComponents: {},
   fieldContext,
