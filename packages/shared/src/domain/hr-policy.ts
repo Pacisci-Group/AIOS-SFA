@@ -2,8 +2,8 @@ import type { CustomHoliday, HolidayKey } from './us-holidays';
 import type { Weekday } from './work-week';
 
 /**
- * Time off policies (PAC-161 v3, PAC-174) — the wire contract between
- * `/hr/policies/*` and Settings → Time off.
+ * HR policies (PAC-161 v3, PAC-174) — the wire contract between
+ * `/hr/policies/*` and Workspace Settings → HR policies.
  *
  * ## One shape for every kind of rule
  *
@@ -26,14 +26,14 @@ import type { Weekday } from './work-week';
  * no holidays.
  */
 
-export const TIME_OFF_POLICY_TYPES = ['holiday', 'work_week', 'time_off'] as const;
-export type TimeOffPolicyType = (typeof TIME_OFF_POLICY_TYPES)[number];
+export const HR_POLICY_TYPES = ['holiday', 'work_week', 'time_off'] as const;
+export type HrPolicyType = (typeof HR_POLICY_TYPES)[number];
 
 /** The types that can be created today; `time_off` arrives with PAC-174. */
 export const CREATABLE_POLICY_TYPES = ['holiday', 'work_week'] as const;
 export type CreatablePolicyType = (typeof CREATABLE_POLICY_TYPES)[number];
 
-export const TIME_OFF_POLICY_TYPE_LABELS: Record<TimeOffPolicyType, string> = {
+export const HR_POLICY_TYPE_LABELS: Record<HrPolicyType, string> = {
   holiday: 'Holiday',
   work_week: 'Work week',
   time_off: 'Time off',
@@ -88,21 +88,21 @@ interface PolicyBase {
   updatedAt: string;
 }
 
-export type TimeOffPolicySummary = PolicyBase &
+export type HrPolicySummary = PolicyBase &
   (
     | { type: 'holiday'; holiday: HolidayPolicyRules }
     | { type: 'work_week'; workWeek: WorkWeekPolicyRules }
   );
 
-export type TimeOffPolicyView = TimeOffPolicySummary & {
+export type HrPolicyView = HrPolicySummary & {
   members: PolicyMemberView[];
 };
 
-export interface TimeOffPoliciesResponse {
+export interface HrPoliciesResponse {
   /** Active policies, newest first. */
-  policies: TimeOffPolicySummary[];
+  policies: HrPolicySummary[];
   /** Active policies per type, whatever `type` filter was asked for. */
-  counts: Record<TimeOffPolicyType, number>;
+  counts: Record<HrPolicyType, number>;
 }
 
 /** Who can be enrolled, and where each person is today. */
@@ -117,7 +117,7 @@ export interface PolicyPeopleResponse {
 
 // ── Inputs ──────────────────────────────────────────────────────────────
 
-export type CreateTimeOffPolicyInput =
+export type CreateHrPolicyInput =
   | {
       type: 'holiday';
       name: string;
@@ -132,7 +132,7 @@ export type CreateTimeOffPolicyInput =
     };
 
 /** Every field optional; `holiday` / `workWeek` must match the policy's type. */
-export interface UpdateTimeOffPolicyInput {
+export interface UpdateHrPolicyInput {
   name?: string;
   holiday?: HolidayPolicyRules;
   workWeek?: WorkWeekPolicyRules;

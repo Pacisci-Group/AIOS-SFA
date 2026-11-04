@@ -1,5 +1,5 @@
 /**
- * PAC-161 v3: holidays and the working week moved into time off policies
+ * PAC-161 v3: holidays and the working week moved into HR policies
  * (`holidayPolicies`, `workWeekPolicies`), so the agency calendar is gone.
  *
  * `20261022120000-hr_module` step (d) created an `agencyCalendars` document

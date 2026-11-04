@@ -4,7 +4,7 @@ import {
   customHolidayError,
   HOLIDAY_KEYS,
   POLICY_NAME_MAX_LENGTH,
-  TIME_OFF_POLICY_TYPES,
+  HR_POLICY_TYPES,
   type Weekday,
 } from '@sfa/shared';
 import { z } from 'zod';
@@ -88,7 +88,7 @@ const memberIds = z
   .transform((ids) => [...new Set(ids.map((id) => id.toLowerCase()))]);
 
 /** `POST /hr/policies` — the body's shape follows its `type`. */
-export const createTimeOffPolicySchema = z.discriminatedUnion('type', [
+export const createHrPolicySchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('holiday'),
     name,
@@ -102,13 +102,13 @@ export const createTimeOffPolicySchema = z.discriminatedUnion('type', [
     memberIds,
   }),
 ]);
-export type CreateTimeOffPolicyDto = z.infer<typeof createTimeOffPolicySchema>;
+export type CreateHrPolicyDto = z.infer<typeof createHrPolicySchema>;
 
 /**
  * `PATCH /hr/policies/:policyId` — at least one field. Whether `holiday` or
  * `workWeek` fits the stored policy is the service's check (it needs the row).
  */
-export const updateTimeOffPolicySchema = z
+export const updateHrPolicySchema = z
   .object({
     name: name.optional(),
     holiday: holidayRules.optional(),
@@ -118,15 +118,13 @@ export const updateTimeOffPolicySchema = z
   .refine((body) => Object.values(body).some((value) => value !== undefined), {
     message: 'Send a name, rules, members, or several.',
   });
-export type UpdateTimeOffPolicyDto = z.infer<typeof updateTimeOffPolicySchema>;
+export type UpdateHrPolicyDto = z.infer<typeof updateHrPolicySchema>;
 
 /** `GET /hr/policies?type=`. */
-export const listTimeOffPoliciesQuerySchema = z.object({
-  type: z.enum(TIME_OFF_POLICY_TYPES).optional(),
+export const listHrPoliciesQuerySchema = z.object({
+  type: z.enum(HR_POLICY_TYPES).optional(),
 });
-export type ListTimeOffPoliciesQueryDto = z.infer<
-  typeof listTimeOffPoliciesQuerySchema
->;
+export type ListHrPoliciesQueryDto = z.infer<typeof listHrPoliciesQuerySchema>;
 
 export const policyIdParamSchema = objectId;
 

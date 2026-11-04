@@ -9,8 +9,8 @@ Chakra, etc.).
 FullCalendar v7 React with its shadcn theme — free standard plugins only (day
 grid, time grid, list, interaction), never the premium scheduler.** It renders
 inside our tokens and must stay light + dark clean. Do not remove it as a stray
-dependency, and do not reach for it anywhere else — Settings → Time off
-(`features/hr/time-off/`) lists holidays as plain rows on purpose.
+dependency, and do not reach for it anywhere else — Settings → HR policies
+(`features/hr/policies/`) lists holidays as plain rows on purpose.
 
 - **Primitives live in `src/components/ui/`** and are managed by the shadcn CLI —
   add new ones with `npx shadcn@latest add <component>` (from `packages/web`),

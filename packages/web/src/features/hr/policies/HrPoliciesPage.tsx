@@ -2,12 +2,12 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronDown, MoreHorizontal, Plane, Plus, X } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Plus, ScrollText, X } from "lucide-react";
 import {
-  TIME_OFF_POLICY_TYPE_LABELS,
-  TIME_OFF_POLICY_TYPES,
-  type TimeOffPolicySummary,
-  type TimeOffPolicyType,
+  HR_POLICY_TYPE_LABELS,
+  HR_POLICY_TYPES,
+  type HrPolicySummary,
+  type HrPolicyType,
 } from "@sfa/shared";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import {
@@ -39,9 +39,9 @@ import {
 } from "@/components/ui/table";
 import { ApiError } from "@/lib/api-client";
 import {
-  archiveTimeOffPolicy,
+  archiveHrPolicy,
   hrKeys,
-  listTimeOffPolicies,
+  listHrPolicies,
 } from "@/lib/hr-api";
 import { cn } from "@/lib/utils";
 import {
@@ -51,12 +51,12 @@ import {
   todayIso,
 } from "./policy-display";
 
-function isPolicyType(value: string | null): value is TimeOffPolicyType {
-  return (TIME_OFF_POLICY_TYPES as readonly string[]).includes(value ?? "");
+function isPolicyType(value: string | null): value is HrPolicyType {
+  return (HR_POLICY_TYPES as readonly string[]).includes(value ?? "");
 }
 
 /**
- * Settings → Time off (PAC-161 v3): every policy the agency has, one card per
+ * Workspace Settings → HR policies (PAC-161 v3): every policy the agency has, one card per
  * type with its active count. A card filters the list to its type (again to
  * clear), instantly and in the URL (`?type=holiday`) so the filter survives a
  * reload and a back from the wizard. Each card also creates its type.
@@ -64,7 +64,7 @@ function isPolicyType(value: string | null): value is TimeOffPolicyType {
  * Replaces the v2 HR page — a workweek card over a whole-year calendar grid —
  * which David found far too much for "which days are we closed".
  */
-export default function TimeOffPage() {
+export default function HrPoliciesPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("type");
   const filter = isPolicyType(raw) ? raw : null;
@@ -74,10 +74,10 @@ export default function TimeOffPage() {
   // card click never waits on the network.
   const query = useQuery({
     queryKey: hrKeys.policies(null),
-    queryFn: () => listTimeOffPolicies(null),
+    queryFn: () => listHrPolicies(null),
   });
 
-  const setFilter = (type: TimeOffPolicyType | null) => {
+  const setFilter = (type: HrPolicyType | null) => {
     const next = new URLSearchParams(params);
     if (type) next.set("type", type);
     else next.delete("type");
@@ -90,9 +90,9 @@ export default function TimeOffPage() {
 
   return (
     <SettingsPage
-      title="Time off"
-      caption="Holidays, work weeks and leave"
-      icon={Plane}
+      title="HR policies"
+      caption="Holidays, work weeks and time off"
+      icon={ScrollText}
       width="wide"
       action={<CreatePolicyMenu />}
     >
@@ -182,7 +182,7 @@ function PolicyTypeCard({
   selected,
   onSelect,
 }: {
-  type: TimeOffPolicyType;
+  type: HrPolicyType;
   count: number | undefined;
   selected: boolean;
   onSelect: () => void;
@@ -236,7 +236,7 @@ function PolicyTypeCard({
   );
 }
 
-function EmptyList({ filter }: { filter: TimeOffPolicyType | null }) {
+function EmptyList({ filter }: { filter: HrPolicyType | null }) {
   const meta = filter ? POLICY_TYPE_META[filter] : null;
   return (
     <div className="space-y-1 px-5 py-10 text-center">
@@ -256,14 +256,14 @@ function PolicyTable({
   policies,
   today,
 }: {
-  policies: TimeOffPolicySummary[];
+  policies: HrPolicySummary[];
   today: string;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [archiving, setArchiving] = useState<TimeOffPolicySummary | null>(null);
+  const [archiving, setArchiving] = useState<HrPolicySummary | null>(null);
   const archive = useMutation({
-    mutationFn: (id: string) => archiveTimeOffPolicy(id),
+    mutationFn: (id: string) => archiveHrPolicy(id),
     onSuccess: async () => {
       toast.success(`Archived ${archiving?.name ?? "the policy"}.`);
       setArchiving(null);
@@ -293,11 +293,11 @@ function PolicyTable({
             <TableRow
               key={policy.id}
               className="cursor-pointer"
-              onClick={() => navigate(`/settings/time-off/${policy.id}`)}
+              onClick={() => navigate(`/settings/hr-policies/${policy.id}`)}
             >
               <TableCell className="pl-5 font-medium">
                 <Link
-                  to={`/settings/time-off/${policy.id}`}
+                  to={`/settings/hr-policies/${policy.id}`}
                   className="hover:underline"
                   onClick={(event) => event.stopPropagation()}
                 >
@@ -309,7 +309,7 @@ function PolicyTable({
               </TableCell>
               <TableCell>
                 <Badge variant="outline">
-                  {TIME_OFF_POLICY_TYPE_LABELS[policy.type]}
+                  {HR_POLICY_TYPE_LABELS[policy.type]}
                 </Badge>
               </TableCell>
               <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
@@ -327,7 +327,7 @@ function PolicyTable({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem asChild>
-                      <Link to={`/settings/time-off/${policy.id}`}>Edit</Link>
+                      <Link to={`/settings/hr-policies/${policy.id}`}>Edit</Link>
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="text-destructive focus:text-destructive"

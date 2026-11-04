@@ -119,16 +119,16 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
 | HR | Login as Manager | `POST /auth/login` | **PAC-161** — the Branch Manager is the Office Manager and holds `agency:hr:admin` by template + migration; the folder asserts the four HR permissions and captures `hrAdminAccessToken`. |
-| HR | List Time Off Policies (as Producer, 403) | `GET /hr/policies` | **PAC-161 v3** — every policy route is `agency:hr:admin`; a producer sees none of it. |
+| HR | List HR Policies (as Producer, 403) | `GET /hr/policies` | **PAC-161 v3** — every policy route is `agency:hr:admin`; a producer sees none of it. |
 | HR | List Policy People | `GET /hr/policies/people` | **PAC-161 v3** — who a policy can enrol (active + invited, never a platform admin) and each person's current Holiday / Work week policy. |
 | HR | Create Holiday Policy | `POST /hr/policies` | **PAC-161 v3** — holidays by key (recurring every year, observed on the nearest weekday) plus custom all-day ranges; captures `hrPolicyId`. Unique name per run. |
 | HR | Create Holiday Policy (Duplicate name, 409) | `POST /hr/policies` | **PAC-161 v3** — a name is unique per type among active policies. |
-| HR | Get Time Off Policy | `GET /hr/policies/:policyId` | **PAC-161 v3** — one policy with its members; `404` once archived. |
-| HR | Update Time Off Policy | `PATCH /hr/policies/:policyId` | **PAC-161 v3** — replaces name / rules / members; rules of the wrong type are a `400`. |
+| HR | Get HR Policy | `GET /hr/policies/:policyId` | **PAC-161 v3** — one policy with its members; `404` once archived. |
+| HR | Update HR Policy | `PATCH /hr/policies/:policyId` | **PAC-161 v3** — replaces name / rules / members; rules of the wrong type are a `400`. |
 | HR | Create Work Week Policy | `POST /hr/policies` | **PAC-161 v3** — working weekdays with `HH:mm` hours; captures `hrWorkWeekPolicyId`. |
-| HR | List Time Off Policies | `GET /hr/policies?type=` | **PAC-161 v3** — the Time off page: active policies (filtered by `type`) and every type's count for the three cards. |
-| HR | Archive Time Off Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — soft archive (`204`); the people are freed. |
-| HR | Archive Time Off Policy (Again, 404) | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — an archived policy is a `404`. |
+| HR | List HR Policies | `GET /hr/policies?type=` | **PAC-161 v3** — the HR policies page: active policies (filtered by `type`) and every type's count for the three cards. |
+| HR | Archive HR Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — soft archive (`204`); the people are freed. |
+| HR | Archive HR Policy (Again, 404) | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — an archived policy is a `404`. |
 | HR | Archive Work Week Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — tidies up the run's Work week policy. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
 | Platform Agencies | Login as Super Admin | `POST /auth/login` | **PAC-69** — the platform operator. Each folder is self-contained, so this is duplicated rather than shared with **Platform Mailers**. |

@@ -2,18 +2,18 @@ import {
   holidaysInYear,
   WEEKDAY_LABELS,
   type HolidayPolicyRules,
-  type TimeOffPolicySummary,
-  type TimeOffPolicyType,
+  type HrPolicySummary,
+  type HrPolicyType,
   type WorkWeekDay,
 } from "@sfa/shared";
 import { CalendarHeart, Clock, Plane, type LucideIcon } from "lucide-react";
 
 /**
- * What each policy type looks like on Settings → Time off (PAC-161 v3): the
+ * What each policy type looks like on Settings → HR policies (PAC-161 v3): the
  * card, the create route, and the one-line summary of a policy's rules.
  */
 export interface PolicyTypeMeta {
-  type: TimeOffPolicyType;
+  type: HrPolicyType;
   /** Plural, for the card and the filtered list's heading. */
   label: string;
   /** Singular, for buttons and the wizard title. */
@@ -24,14 +24,14 @@ export interface PolicyTypeMeta {
   createPath: string | null;
 }
 
-export const POLICY_TYPE_META: Record<TimeOffPolicyType, PolicyTypeMeta> = {
+export const POLICY_TYPE_META: Record<HrPolicyType, PolicyTypeMeta> = {
   holiday: {
     type: "holiday",
     label: "Holiday policies",
     singular: "holiday policy",
     description: "The days the office closes, every year.",
     icon: CalendarHeart,
-    createPath: "/settings/time-off/new/holiday",
+    createPath: "/settings/hr-policies/new/holiday",
   },
   work_week: {
     type: "work_week",
@@ -39,7 +39,7 @@ export const POLICY_TYPE_META: Record<TimeOffPolicyType, PolicyTypeMeta> = {
     singular: "work week policy",
     description: "The days and hours people work.",
     icon: Clock,
-    createPath: "/settings/time-off/new/work-week",
+    createPath: "/settings/hr-policies/new/work-week",
   },
   time_off: {
     type: "time_off",
@@ -52,7 +52,7 @@ export const POLICY_TYPE_META: Record<TimeOffPolicyType, PolicyTypeMeta> = {
   },
 };
 
-export const POLICY_TYPE_ORDER: readonly TimeOffPolicyType[] = [
+export const POLICY_TYPE_ORDER: readonly HrPolicyType[] = [
   "holiday",
   "work_week",
   "time_off",
@@ -147,7 +147,7 @@ export function formatClock(value: string): string {
 }
 
 /** The rules column on the list. */
-export function summarizePolicy(policy: TimeOffPolicySummary, today: string): string {
+export function summarizePolicy(policy: HrPolicySummary, today: string): string {
   if (policy.type === "holiday") {
     const year = Number(today.slice(0, 4));
     const count = holidaysInYear(policy.holiday, year).length;

@@ -12,18 +12,15 @@ import {
   type PolicyMemberView,
   type PolicyPeopleResponse,
   type PolicyPersonView,
-  type TimeOffPoliciesResponse,
-  type TimeOffPolicySummary,
-  type TimeOffPolicyType,
-  type TimeOffPolicyView,
+  type HrPoliciesResponse,
+  type HrPolicySummary,
+  type HrPolicyType,
+  type HrPolicyView,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import { Branch } from '../branches/schemas/branch.schema';
 import { User } from '../users/schemas/user.schema';
-import type {
-  CreateTimeOffPolicyDto,
-  UpdateTimeOffPolicyDto,
-} from './dto/time-off-policy.dto';
+import type { CreateHrPolicyDto, UpdateHrPolicyDto } from './dto/hr-policy.dto';
 import {
   type CustomHolidayRow,
   HolidayPolicy,
@@ -71,7 +68,7 @@ type UserLean = {
 const ACTIVE = { archivedAt: null } as const;
 
 /**
- * Time off policies (PAC-161 v3): list, read, create, edit and archive, and
+ * HR policies (PAC-161 v3): list, read, create, edit and archive, and
  * the people they can enrol. Every method is agency-wide — a policy belongs
  * to no branch — and every caller holds `agency:hr:admin`.
  *
@@ -92,7 +89,7 @@ const ACTIVE = { archivedAt: null } as const;
  * policies, which the next save of either one settles.
  */
 @Injectable()
-export class TimeOffPoliciesService {
+export class HrPoliciesService {
   constructor(
     @InjectModel(HolidayPolicy.name)
     private readonly holidayPolicies: Model<HolidayPolicyDocument>,
@@ -131,14 +128,14 @@ export class TimeOffPoliciesService {
 
   async list(
     agencyId: string,
-    type?: TimeOffPolicyType,
-  ): Promise<TimeOffPoliciesResponse> {
+    type?: HrPolicyType,
+  ): Promise<HrPoliciesResponse> {
     const [rows, people] = await Promise.all([
       this.activeRows(agencyId),
       this.enrollable(agencyId),
     ]);
     // `time_off` has no collection until PAC-174; it counts zero.
-    const counts: Record<TimeOffPolicyType, number> = {
+    const counts: Record<HrPolicyType, number> = {
       holiday: 0,
       work_week: 0,
       time_off: 0,
@@ -152,7 +149,7 @@ export class TimeOffPoliciesService {
     };
   }
 
-  async get(agencyId: string, policyId: string): Promise<TimeOffPolicyView> {
+  async get(agencyId: string, policyId: string): Promise<HrPolicyView> {
     const [row, people] = await Promise.all([
       this.find(agencyId, policyId),
       this.enrollable(agencyId),
@@ -162,8 +159,8 @@ export class TimeOffPoliciesService {
 
   async create(
     agencyId: string,
-    dto: CreateTimeOffPolicyDto,
-  ): Promise<TimeOffPolicyView> {
+    dto: CreateHrPolicyDto,
+  ): Promise<HrPolicyView> {
     const people = await this.enrollable(agencyId);
     assertMembers(dto.memberIds, people);
     await this.assertNameFree(agencyId, dto.type, dto.name);
@@ -191,8 +188,8 @@ export class TimeOffPoliciesService {
   async update(
     agencyId: string,
     policyId: string,
-    dto: UpdateTimeOffPolicyDto,
-  ): Promise<TimeOffPolicyView> {
+    dto: UpdateHrPolicyDto,
+  ): Promise<HrPolicyView> {
     const row = await this.find(agencyId, policyId);
     if (dto.holiday && row.type !== 'holiday') {
       throw new BadRequestException('Only a Holiday policy has holidays.');
@@ -410,7 +407,7 @@ function liveMembers(
 function toSummary(
   row: PolicyLean,
   people: ReadonlyMap<string, PolicyMemberView>,
-): TimeOffPolicySummary {
+): HrPolicySummary {
   const base = {
     id: row._id.toString(),
     name: row.name,
@@ -452,6 +449,6 @@ function toSummary(
 function toView(
   row: PolicyLean,
   people: ReadonlyMap<string, PolicyMemberView>,
-): TimeOffPolicyView {
+): HrPolicyView {
   return { ...toSummary(row, people), members: liveMembers(row, people) };
 }

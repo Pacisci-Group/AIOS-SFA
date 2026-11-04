@@ -6,8 +6,8 @@ import { App } from 'supertest/types';
 import {
   FEDERAL_HOLIDAY_KEYS,
   type PolicyPeopleResponse,
-  type TimeOffPoliciesResponse,
-  type TimeOffPolicyView,
+  type HrPoliciesResponse,
+  type HrPolicyView,
 } from '@sfa/shared';
 import { WorkingDaysService } from '../src/common/working-days/working-days.service';
 import { HolidayPolicy } from '../src/hr/schemas/holiday-policy.schema';
@@ -26,13 +26,13 @@ import {
 } from './helpers/seed-test-data';
 
 /**
- * Time off policies (PAC-161 v3): Holiday and Work week policies with their
+ * HR policies (PAC-161 v3): Holiday and Work week policies with their
  * enrolment, and who may touch them. The holiday dates are unit-tested in
  * `shared/domain/us-holidays.spec.ts`; what only a running app can answer is
  * the gating, the validation, the "one policy of a type per person" move,
  * the soft archive, and that the working-day service reads what was saved.
  */
-describe('Time off policies (e2e)', () => {
+describe('HR policies (e2e)', () => {
   let app: INestApplication<App>;
   let ctx: TestSeedContext;
   let managerToken: string;
@@ -102,7 +102,7 @@ describe('Time off policies (e2e)', () => {
         .get('/api/v1/hr/policies')
         .set(auth(managerToken))
         .expect(200);
-      expect(res.body as TimeOffPoliciesResponse).toEqual({
+      expect(res.body as HrPoliciesResponse).toEqual({
         policies: [],
         counts: { holiday: 0, work_week: 0, time_off: 0 },
       });
@@ -118,7 +118,7 @@ describe('Time off policies (e2e)', () => {
         .set(auth(managerToken))
         .send(holidayBody('Office holidays', [producerUserId, ctx.csrUserId]))
         .expect(201);
-      const body = res.body as TimeOffPolicyView;
+      const body = res.body as HrPolicyView;
       firstId = body.id;
       expect(body).toMatchObject({
         type: 'holiday',
@@ -179,15 +179,15 @@ describe('Time off policies (e2e)', () => {
           memberIds: [producerUserId],
         })
         .expect(201);
-      const second = res.body as TimeOffPolicyView;
+      const second = res.body as HrPolicyView;
 
       const first = await api()
         .get(`/api/v1/hr/policies/${firstId}`)
         .set(auth(managerToken))
         .expect(200);
-      expect(
-        (first.body as TimeOffPolicyView).members.map((m) => m.id),
-      ).toEqual([ctx.csrUserId]);
+      expect((first.body as HrPolicyView).members.map((m) => m.id)).toEqual([
+        ctx.csrUserId,
+      ]);
 
       const people = await api()
         .get('/api/v1/hr/policies/people')
@@ -222,7 +222,7 @@ describe('Time off policies (e2e)', () => {
           holiday: { holidays: ['thanksgiving'], customHolidays: [] },
         })
         .expect(200);
-      expect(res.body as TimeOffPolicyView).toMatchObject({
+      expect(res.body as HrPolicyView).toMatchObject({
         name: 'Office holidays 2',
         holiday: { holidays: ['thanksgiving'], customHolidays: [] },
       });
@@ -264,7 +264,7 @@ describe('Time off policies (e2e)', () => {
         .get('/api/v1/hr/policies?type=work_week')
         .set(auth(managerToken))
         .expect(200);
-      const body = res.body as TimeOffPoliciesResponse;
+      const body = res.body as HrPoliciesResponse;
       expect(body.counts).toEqual({ holiday: 2, work_week: 1, time_off: 0 });
       expect(body.policies).toHaveLength(1);
       expect(body.policies[0]).toMatchObject({
@@ -354,7 +354,7 @@ describe('Time off policies (e2e)', () => {
         .get('/api/v1/hr/policies?type=work_week')
         .set(auth(managerToken))
         .expect(200);
-      const id = (list.body as TimeOffPoliciesResponse).policies[0].id;
+      const id = (list.body as HrPoliciesResponse).policies[0].id;
 
       await api()
         .post(`/api/v1/hr/policies/${id}/archive`)
@@ -373,7 +373,7 @@ describe('Time off policies (e2e)', () => {
         .get('/api/v1/hr/policies')
         .set(auth(managerToken))
         .expect(200);
-      expect((after.body as TimeOffPoliciesResponse).counts.work_week).toBe(0);
+      expect((after.body as HrPoliciesResponse).counts.work_week).toBe(0);
 
       const person = await workingDays.forPerson(ctx.agencyId, producerUserId, {
         from: '2026-11-23',

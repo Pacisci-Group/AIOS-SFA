@@ -9,7 +9,7 @@ import {
   type CreatablePolicyType,
   type CustomHoliday,
   type HolidayKey,
-  type TimeOffPolicyView,
+  type HrPolicyView,
   type WorkWeekDay,
 } from "@sfa/shared";
 import { FormError } from "@/components/form";
@@ -21,10 +21,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { ApiError } from "@/lib/api-client";
 import {
-  createTimeOffPolicy,
-  getTimeOffPolicy,
+  createHrPolicy,
+  getHrPolicy,
   hrKeys,
-  updateTimeOffPolicy,
+  updateHrPolicy,
 } from "@/lib/hr-api";
 import {
   CustomHolidaysEditor,
@@ -75,7 +75,7 @@ function newDraft(type: CreatablePolicyType): Draft {
   };
 }
 
-function draftFrom(policy: TimeOffPolicyView): Draft {
+function draftFrom(policy: HrPolicyView): Draft {
   return {
     name: policy.name,
     holidays: policy.type === "holiday" ? [...policy.holiday.holidays] : [],
@@ -86,8 +86,8 @@ function draftFrom(policy: TimeOffPolicyView): Draft {
 }
 
 /**
- * Create a Holiday or Work week policy at `/settings/time-off/new/:type`, or
- * edit one at `/settings/time-off/:policyId` (PAC-161 v3).
+ * Create a Holiday or Work week policy at `/settings/hr-policies/new/:type`, or
+ * edit one at `/settings/hr-policies/:policyId` (PAC-161 v3).
  *
  * Stepped the way Gusto does it — a bar per step, the rules first and the
  * people last — and nothing is written until the last step's Save. Editing
@@ -100,7 +100,7 @@ export default function PolicyWizardPage() {
 
   const existing = useQuery({
     queryKey: hrKeys.policy(policyId ?? ""),
-    queryFn: () => getTimeOffPolicy(policyId as string),
+    queryFn: () => getHrPolicy(policyId as string),
     enabled: Boolean(policyId),
   });
 
@@ -153,14 +153,14 @@ function Shell({
   return (
     <SettingsPage
       title={title.charAt(0).toUpperCase() + title.slice(1)}
-      caption="Time off"
+      caption="HR policies"
       icon={meta?.icon ?? POLICY_TYPE_META.holiday.icon}
-      backTo={type ? `/settings/time-off?type=${type}` : "/settings/time-off"}
+      backTo={type ? `/settings/hr-policies?type=${type}` : "/settings/hr-policies"}
     >
       <div className="space-y-6">
         <nav aria-label="Breadcrumb" className="text-sm text-muted-foreground">
-          <Link to="/settings/time-off" className="text-primary underline-offset-4 hover:underline">
-            Time off
+          <Link to="/settings/hr-policies" className="text-primary underline-offset-4 hover:underline">
+            HR policies
           </Link>
           {meta && (
             <>
@@ -207,16 +207,16 @@ function Wizard({
           ? { holiday: { holidays: draft.holidays, customHolidays: draft.customHolidays } }
           : { workWeek: { days: draft.days } };
       if (policyId) {
-        return updateTimeOffPolicy(policyId, { name, ...rules, memberIds: draft.memberIds });
+        return updateHrPolicy(policyId, { name, ...rules, memberIds: draft.memberIds });
       }
       return type === "holiday"
-        ? createTimeOffPolicy({
+        ? createHrPolicy({
             type,
             name,
             holiday: { holidays: draft.holidays, customHolidays: draft.customHolidays },
             memberIds: draft.memberIds,
           })
-        : createTimeOffPolicy({
+        : createHrPolicy({
             type,
             name,
             workWeek: { days: draft.days },
@@ -226,7 +226,7 @@ function Wizard({
     onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: hrKeys.all });
       toast.success(`${editing ? "Saved" : "Created"} ${saved.name}.`);
-      navigate(`/settings/time-off?type=${type}`);
+      navigate(`/settings/hr-policies?type=${type}`);
     },
     onError: (failure) => {
       setError(

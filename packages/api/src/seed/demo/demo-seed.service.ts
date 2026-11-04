@@ -326,7 +326,7 @@ export class DemoSeedService {
     const policies = await this.seedPolicies(ctx, deals, rng);
 
     await this.seedAuditTemplates(ctx);
-    await this.seedTimeOffPolicies(ctx, team);
+    await this.seedHrPolicies(ctx, team);
     /*
      * Roll-ups **before** items (PAC-72): the board pages over `dealAudits`,
      * and an item needs its parent's `_id` to be loadable from a card. The
@@ -1252,14 +1252,11 @@ export class DemoSeedService {
    */
   /**
    * A Holiday and a Work week policy with the whole demo team enrolled
-   * (PAC-161 v3), so Settings → Time off has something to show. Keyed on
+   * (PAC-161 v3), so Settings → HR policies has something to show. Keyed on
    * `{ agencyId, name }` in each collection: a reseed refreshes the members
    * and leaves rules a demo user has edited alone.
    */
-  private async seedTimeOffPolicies(
-    ctx: Ctx,
-    team: TeamMember[],
-  ): Promise<void> {
+  private async seedHrPolicies(ctx: Ctx, team: TeamMember[]): Promise<void> {
     const memberIds = team.map((member) => member.userId);
     await this.holidayPolicyModel.updateOne(
       { agencyId: ctx.agencyId, name: 'Paid holidays', archivedAt: null },

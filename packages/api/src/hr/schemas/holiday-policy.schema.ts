@@ -46,7 +46,7 @@ export class HolidayPolicy extends MemberListPolicyRecord {
 
 export const HolidayPolicySchema = SchemaFactory.createForClass(HolidayPolicy);
 
-/** The Time off page's list and counts. */
+/** The HR policies page's list and counts. */
 HolidayPolicySchema.index({ agencyId: 1, archivedAt: 1 });
 
 /** "Which Holiday policy is this person in" — enrolment moves and working days. */

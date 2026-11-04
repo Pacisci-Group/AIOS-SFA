@@ -14,8 +14,8 @@ import {
   AgencyPermission,
   ModuleKey,
   type PolicyPeopleResponse,
-  type TimeOffPoliciesResponse,
-  type TimeOffPolicyView,
+  type HrPoliciesResponse,
+  type HrPolicyView,
 } from '@sfa/shared';
 import {
   RequireModule,
@@ -25,18 +25,18 @@ import {
 import { Access, AgencyId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
-  createTimeOffPolicySchema,
-  listTimeOffPoliciesQuerySchema,
+  createHrPolicySchema,
+  listHrPoliciesQuerySchema,
   policyIdParamSchema,
-  updateTimeOffPolicySchema,
-  type CreateTimeOffPolicyDto,
-  type ListTimeOffPoliciesQueryDto,
-  type UpdateTimeOffPolicyDto,
-} from './dto/time-off-policy.dto';
-import { TimeOffPoliciesService } from './time-off-policies.service';
+  updateHrPolicySchema,
+  type CreateHrPolicyDto,
+  type ListHrPoliciesQueryDto,
+  type UpdateHrPolicyDto,
+} from './dto/hr-policy.dto';
+import { HrPoliciesService } from './hr-policies.service';
 
 /**
- * Time off policies (PAC-161 v3) — Settings → Time off.
+ * HR policies (PAC-161 v3) — Workspace Settings → HR policies.
  *
  * Every route is `agency:hr:admin`: an admin capability, not the module's
  * `:write`, which is the *reviewer* capability over other people's requests
@@ -48,17 +48,17 @@ import { TimeOffPoliciesService } from './time-off-policies.service';
 @Controller('hr/policies')
 @RequireModule(ModuleKey.Hr)
 @SkipBranch()
-export class TimeOffPoliciesController {
-  constructor(private readonly policies: TimeOffPoliciesService) {}
+export class HrPoliciesController {
+  constructor(private readonly policies: HrPoliciesService) {}
 
   /** Active policies, optionally of one type, plus the count of each type. */
   @Get()
   @RequirePermissions(AgencyPermission.HrAdmin)
   list(
     @AgencyId() agencyId: string,
-    @Query(new ZodValidationPipe(listTimeOffPoliciesQuerySchema))
-    query: ListTimeOffPoliciesQueryDto,
-  ): Promise<TimeOffPoliciesResponse> {
+    @Query(new ZodValidationPipe(listHrPoliciesQuerySchema))
+    query: ListHrPoliciesQueryDto,
+  ): Promise<HrPoliciesResponse> {
     return this.policies.list(agencyId, query.type);
   }
 
@@ -75,7 +75,7 @@ export class TimeOffPoliciesController {
     @AgencyId() agencyId: string,
     @Param('policyId', new ZodValidationPipe(policyIdParamSchema))
     policyId: string,
-  ): Promise<TimeOffPolicyView> {
+  ): Promise<HrPolicyView> {
     return this.policies.get(agencyId, policyId);
   }
 
@@ -84,9 +84,9 @@ export class TimeOffPoliciesController {
   @RequirePermissions(AgencyPermission.HrAdmin)
   create(
     @AgencyId() agencyId: string,
-    @Body(new ZodValidationPipe(createTimeOffPolicySchema))
-    body: CreateTimeOffPolicyDto,
-  ): Promise<TimeOffPolicyView> {
+    @Body(new ZodValidationPipe(createHrPolicySchema))
+    body: CreateHrPolicyDto,
+  ): Promise<HrPolicyView> {
     return this.policies.create(agencyId, body);
   }
 
@@ -96,9 +96,9 @@ export class TimeOffPoliciesController {
     @AgencyId() agencyId: string,
     @Param('policyId', new ZodValidationPipe(policyIdParamSchema))
     policyId: string,
-    @Body(new ZodValidationPipe(updateTimeOffPolicySchema))
-    body: UpdateTimeOffPolicyDto,
-  ): Promise<TimeOffPolicyView> {
+    @Body(new ZodValidationPipe(updateHrPolicySchema))
+    body: UpdateHrPolicyDto,
+  ): Promise<HrPolicyView> {
     return this.policies.update(agencyId, policyId, body);
   }
 

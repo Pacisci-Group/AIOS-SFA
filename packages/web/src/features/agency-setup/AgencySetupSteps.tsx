@@ -8,7 +8,7 @@ import { TimeZoneStep } from "./TimeZoneStep";
 /**
  * Phase 2 of onboarding: making the app look and sound like the agency (PAC-69),
  * then its working day (PAC-161). Holidays and work weeks are policies, set
- * up later under Settings → Time off.
+ * up later under Settings → HR policies.
  *
  * Shared by the invite wizard (where it follows the name and password steps) and
  * by `/welcome/agency` (where it stands alone, for an owner who left partway

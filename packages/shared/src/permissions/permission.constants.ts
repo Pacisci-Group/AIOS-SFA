@@ -178,9 +178,9 @@ export const AgencyPermission = {
   SettingsRead: 'agency:settings:read',
   SettingsWrite: 'agency:settings:write',
   /**
-   * HR administration (PAC-161): time off policies (holidays, work weeks,
-   * leave) and their enrolment, and — in later sub-stories — employee
-   * onboardings and balance adjustments. Gates `/settings/time-off`.
+   * HR administration (PAC-161): HR policies (holidays, work weeks,
+   * time off) and their enrolment, and — in later sub-stories — employee
+   * onboardings and balance adjustments. Gates `/settings/hr-policies`.
    *
    * The ticket sketched four actions on the module (`hr:read / review / admin
    * / export`). The page model tolerates only `read` / `write` as a module's

@@ -6,7 +6,7 @@ import {
   Globe,
   KeyRound,
   Palette,
-  Plane,
+  ScrollText,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -96,11 +96,11 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     // PAC-161. An admin capability rather than a module pair: the Branch
     // Manager (the Office Manager) and the owner hold it by default.
-    to: "/settings/time-off",
-    label: "Time off",
+    to: "/settings/hr-policies",
+    label: "HR policies",
     description:
       "Holiday and work week policies, and who each one applies to.",
-    icon: Plane,
+    icon: ScrollText,
     permission: AgencyPermission.HrAdmin,
   },
 ];

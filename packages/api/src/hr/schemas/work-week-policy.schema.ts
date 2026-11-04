@@ -38,7 +38,7 @@ export class WorkWeekPolicy extends MemberListPolicyRecord {
 export const WorkWeekPolicySchema =
   SchemaFactory.createForClass(WorkWeekPolicy);
 
-/** The Time off page's list and counts. */
+/** The HR policies page's list and counts. */
 WorkWeekPolicySchema.index({ agencyId: 1, archivedAt: 1 });
 
 /** "Which Work week policy is this person in" — enrolment moves and working days. */

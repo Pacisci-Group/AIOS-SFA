@@ -13,7 +13,7 @@ export * from './domain/contact';
 export * from './domain/deal-audit';
 export * from './domain/google-address';
 export * from './domain/hot-lead';
-export * from './domain/time-off-policy';
+export * from './domain/hr-policy';
 export * from './domain/us-holidays';
 export * from './domain/work-week';
 export * from './domain/household-membership';

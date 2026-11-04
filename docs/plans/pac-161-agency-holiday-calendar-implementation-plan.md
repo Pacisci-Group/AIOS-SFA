@@ -9,7 +9,7 @@ closed branch (`git show asad/pac-161-hr-foundation:docs/plans/pac-161-hr-founda
 > **Superseded in part by v3 (2026-11-03) — see the last section.** Asad
 > reviewed the PR and found the calendar page too much for what it does:
 > holidays and the working week are now **time off policies** with enrolled
-> people, on a Settings → Time off page. §1–§8 below are the v2 record; the
+> people, on a Workspace Settings → HR policies page. §1–§8 below are the v2 record; the
 > agency calendar, the import dialog, the Q4 proposal job and the owner's
 > Holiday step no longer exist.
 
@@ -545,6 +545,23 @@ holidays should not be agency-wide. Decided in session:
   and schedule from that person's two policies; the pure `working-days.ts`
   arithmetic is unchanged.
 
+### Naming (Asad, 2026-11-04)
+
+"HR policies" is the umbrella: the Workspace Settings page
+(`/settings/hr-policies`), the shared types (`HR_POLICY_TYPES`,
+`HrPolicySummary`, `HrPolicyView`, `HrPoliciesResponse`,
+`Create/UpdateHrPolicyInput`), the API files (`hr-policies.controller.ts`,
+`hr-policies.service.ts`, `dto/hr-policy.dto.ts`, `HrPoliciesController`,
+`HrPoliciesService`), the web folder (`features/hr/policies/`,
+`HrPoliciesPage`) and the client (`listHrPolicies` …). **"Time off" is only the
+third type** (`time_off`, the PAC-174 card, its future `timeOffPolicies`
+collection). Before this the umbrella was also called "time off", so
+`TimeOffPolicyView` could mean any policy.
+
+⚠ v1 (PR #154) had an unrelated "HR Policy" *container* (`GET /hr/policy`,
+`getHrPolicy`, `HrPolicySlots`) that David rejected; nothing of it survives.
+Today's `getHrPolicy(id)` reads one policy of any type.
+
 ### HTTP (`agency:hr:admin`, module `hr`, `@SkipBranch`)
 
 `GET /hr/policies?type=` (list + every type's count) · `GET /hr/policies/people` ·
@@ -553,14 +570,14 @@ holidays should not be agency-wide. Decided in session:
 
 ### Web
 
-- `/settings/time-off` (hub card "Time off"; `/settings/hr` redirects): three
+- `/settings/hr-policies` (hub card "HR policies"; `/settings/hr` redirects): three
   cards with active counts — clicking one filters the list (`?type=`, again to
   clear) — each with its own Create button, plus a "Create policy" menu.
   Table: name, type, a one-line rules summary ("12 days off in 2026 · next
   Thanksgiving Day, Nov 26" / "Mon–Fri · 9:00 AM – 5:00 PM · 40h a week"),
   people, ⋯ Edit / Archive.
-- Stepped wizard (`/settings/time-off/new/holiday|work-week`,
-  `/settings/time-off/:id`) with Gusto's bar-per-step header. Holiday:
+- Stepped wizard (`/settings/hr-policies/new/holiday|work-week`,
+  `/settings/hr-policies/:id`) with Gusto's bar-per-step header. Holiday:
   1 Select federal holidays (all ticked for a new policy, next date beside
   each) · 2 Add custom holidays (the common extras, your own, and the year as
   a list) · 3 Add employees. Work week: 1 Set the work week (a switch and
@@ -585,7 +602,7 @@ immutable). The demo seed now enrols the whole team in "Paid holidays"
 ### Verification (2026-11-03)
 
 shared jest 325 (13 new holiday cases); api unit 1436; api e2e
-`time-off-policies` (14) + `agency-onboarding` + `agency-profile` (60 in
+`time-off-policies` (14, now `hr-policies`) + `agency-onboarding` + `agency-profile` (60 in
 all); Bruno `HR/` 13 requests / 21 tests against a demo-seeded database; web
 `tsc` + build; browser walk on a branch API as the demo Branch Manager: cards
 and filter, create a holiday policy with extras and a Dec 28–31 closure,
