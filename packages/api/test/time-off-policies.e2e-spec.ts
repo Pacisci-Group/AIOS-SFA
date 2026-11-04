@@ -10,6 +10,8 @@ import {
   type TimeOffPolicyView,
 } from '@sfa/shared';
 import { WorkingDaysService } from '../src/common/working-days/working-days.service';
+import { HolidayPolicy } from '../src/hr/schemas/holiday-policy.schema';
+import { WorkWeekPolicy } from '../src/hr/schemas/work-week-policy.schema';
 import { parseIsoDate } from '../src/performance/performance.range';
 import { User } from '../src/users/schemas/user.schema';
 import {
@@ -279,6 +281,32 @@ describe('Time off policies (e2e)', () => {
           ],
         },
       });
+    });
+
+    it('stores each type in its own collection, with only its own rules', async () => {
+      const holidays = app.get<Model<HolidayPolicy>>(
+        getModelToken(HolidayPolicy.name),
+      );
+      const weeks = app.get<Model<WorkWeekPolicy>>(
+        getModelToken(WorkWeekPolicy.name),
+      );
+      const week = await weeks
+        .findOne({ agencyId: ctx.agencyId, name: 'Four tens' })
+        .lean<Record<string, unknown>>();
+      expect(week).toBeTruthy();
+      expect(week).not.toHaveProperty('holidays');
+      expect(week).not.toHaveProperty('type');
+      expect(
+        await holidays.countDocuments({
+          agencyId: ctx.agencyId,
+          name: 'Four tens',
+        }),
+      ).toBe(0);
+      const holiday = await holidays
+        .findOne({ agencyId: ctx.agencyId, name: 'Federal only' })
+        .lean<Record<string, unknown>>();
+      expect(holiday).not.toHaveProperty('days');
+      expect(holiday?.holidays).toHaveLength(11);
     });
   });
 

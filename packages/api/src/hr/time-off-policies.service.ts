@@ -7,8 +7,8 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import {
   CREATABLE_POLICY_TYPES,
-  TIME_OFF_POLICY_TYPES,
   type CreatablePolicyType,
+  type HolidayKey,
   type PolicyMemberView,
   type PolicyPeopleResponse,
   type PolicyPersonView,
@@ -25,20 +25,34 @@ import type {
   UpdateTimeOffPolicyDto,
 } from './dto/time-off-policy.dto';
 import {
-  TimeOffPolicy,
-  type TimeOffPolicyDocument,
-} from './schemas/time-off-policy.schema';
+  type CustomHolidayRow,
+  HolidayPolicy,
+  type HolidayPolicyDocument,
+} from './schemas/holiday-policy.schema';
+import type { PolicyRecord } from './schemas/policy-record.schema';
+import {
+  WorkWeekPolicy,
+  type WorkWeekDayRow,
+  type WorkWeekPolicyDocument,
+} from './schemas/work-week-policy.schema';
 
-type PolicyLean = {
+/** A lean row of either collection; only its own type's rules are set. */
+type StoredRow = {
   _id: Types.ObjectId;
-  type: TimeOffPolicyType;
   name: string;
-  holiday?: TimeOffPolicy['holiday'];
-  workWeek?: TimeOffPolicy['workWeek'];
   memberIds?: Types.ObjectId[];
   createdAt?: Date;
   updatedAt?: Date;
+  holidays?: HolidayKey[];
+  customHolidays?: CustomHolidayRow[];
+  days?: WorkWeekDayRow[];
 };
+
+/** A row tagged with the collection it came from. */
+type PolicyLean = StoredRow & { type: CreatablePolicyType };
+
+/** The operations every policy collection shares (`PolicyRecord`'s fields). */
+type PolicyModel = Model<PolicyRecord>;
 
 type UserLean = {
   _id: Types.ObjectId;
@@ -57,6 +71,13 @@ const ACTIVE = { archivedAt: null } as const;
  * the people they can enrol. Every method is agency-wide — a policy belongs
  * to no branch — and every caller holds `agency:hr:admin`.
  *
+ * ## One collection per type
+ *
+ * `holidayPolicies` and `workWeekPolicies` (PAC-174 adds leave). The page
+ * still shows them as one list, so {@link list} reads every collection and
+ * merges; a policy id is looked up in each ({@link find}) — ObjectIds do not
+ * collide, so the first hit is the policy.
+ *
  * ## Enrolment moves people
  *
  * A person is in at most one active policy of each creatable type. Saving a
@@ -69,26 +90,55 @@ const ACTIVE = { archivedAt: null } as const;
 @Injectable()
 export class TimeOffPoliciesService {
   constructor(
-    @InjectModel(TimeOffPolicy.name)
-    private readonly policies: Model<TimeOffPolicyDocument>,
+    @InjectModel(HolidayPolicy.name)
+    private readonly holidayPolicies: Model<HolidayPolicyDocument>,
+    @InjectModel(WorkWeekPolicy.name)
+    private readonly workWeekPolicies: Model<WorkWeekPolicyDocument>,
     @InjectModel(User.name) private readonly users: Model<User>,
     @InjectModel(Branch.name) private readonly branches: Model<Branch>,
   ) {}
+
+  /** The collection of each creatable type, for the operations they share. */
+  private store(type: CreatablePolicyType): PolicyModel {
+    const model =
+      type === 'holiday' ? this.holidayPolicies : this.workWeekPolicies;
+    return model as unknown as PolicyModel;
+  }
+
+  /** Every active policy of the agency, tagged with its type, newest first. */
+  private async activeRows(
+    agencyId: string,
+    select?: string,
+  ): Promise<PolicyLean[]> {
+    const perType = await Promise.all(
+      CREATABLE_POLICY_TYPES.map(async (type) => {
+        const query = this.store(type).find({ agencyId, ...ACTIVE });
+        if (select) query.select(select);
+        const rows = await query.lean<StoredRow[]>();
+        return rows.map((row) => ({ ...row, type }));
+      }),
+    );
+    return perType
+      .flat()
+      .sort(
+        (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0),
+      );
+  }
 
   async list(
     agencyId: string,
     type?: TimeOffPolicyType,
   ): Promise<TimeOffPoliciesResponse> {
     const [rows, people] = await Promise.all([
-      this.policies
-        .find({ agencyId, ...ACTIVE })
-        .sort({ createdAt: -1 })
-        .lean<PolicyLean[]>(),
+      this.activeRows(agencyId),
       this.enrollable(agencyId),
     ]);
-    const counts = Object.fromEntries(
-      TIME_OFF_POLICY_TYPES.map((key) => [key, 0]),
-    ) as Record<TimeOffPolicyType, number>;
+    // `time_off` has no collection until PAC-174; it counts zero.
+    const counts: Record<TimeOffPolicyType, number> = {
+      holiday: 0,
+      work_week: 0,
+      time_off: 0,
+    };
     for (const row of rows) counts[row.type] += 1;
     return {
       policies: rows
@@ -115,15 +165,21 @@ export class TimeOffPoliciesService {
     await this.assertNameFree(agencyId, dto.type, dto.name);
 
     const memberIds = dto.memberIds.map((id) => new Types.ObjectId(id));
-    const created = await this.policies.create({
-      agencyId,
-      type: dto.type,
-      name: dto.name,
-      ...(dto.type === 'holiday'
-        ? { holiday: dto.holiday }
-        : { workWeek: dto.workWeek }),
-      memberIds,
-    });
+    const created =
+      dto.type === 'holiday'
+        ? await this.holidayPolicies.create({
+            agencyId,
+            name: dto.name,
+            holidays: dto.holiday.holidays,
+            customHolidays: dto.holiday.customHolidays,
+            memberIds,
+          })
+        : await this.workWeekPolicies.create({
+            agencyId,
+            name: dto.name,
+            days: dto.workWeek.days,
+            memberIds,
+          });
     await this.releaseFromOthers(agencyId, dto.type, created._id, memberIds);
     return this.get(agencyId, created._id.toString());
   }
@@ -146,8 +202,11 @@ export class TimeOffPoliciesService {
 
     const $set: Record<string, unknown> = {};
     if (dto.name !== undefined) $set.name = dto.name;
-    if (dto.holiday) $set.holiday = dto.holiday;
-    if (dto.workWeek) $set.workWeek = dto.workWeek;
+    if (dto.holiday) {
+      $set.holidays = dto.holiday.holidays;
+      $set.customHolidays = dto.holiday.customHolidays;
+    }
+    if (dto.workWeek) $set.days = dto.workWeek.days;
     let memberIds: Types.ObjectId[] | null = null;
     if (dto.memberIds) {
       assertMembers(dto.memberIds, await this.enrollable(agencyId));
@@ -155,11 +214,11 @@ export class TimeOffPoliciesService {
       $set.memberIds = memberIds;
     }
 
-    await this.policies.updateOne(
+    await this.store(row.type).updateOne(
       { _id: row._id, agencyId, ...ACTIVE },
       { $set },
     );
-    if (memberIds && isCreatable(row.type)) {
+    if (memberIds) {
       await this.releaseFromOthers(agencyId, row.type, row._id, memberIds);
     }
     return this.get(agencyId, policyId);
@@ -172,7 +231,7 @@ export class TimeOffPoliciesService {
     actorId: string,
   ): Promise<void> {
     const row = await this.find(agencyId, policyId);
-    await this.policies.updateOne(
+    await this.store(row.type).updateOne(
       { _id: row._id, agencyId, ...ACTIVE },
       {
         $set: {
@@ -187,14 +246,10 @@ export class TimeOffPoliciesService {
   async people(agencyId: string): Promise<PolicyPeopleResponse> {
     const [people, rows] = await Promise.all([
       this.enrollable(agencyId),
-      this.policies
-        .find({ agencyId, ...ACTIVE, type: { $in: CREATABLE_POLICY_TYPES } })
-        .select('type name memberIds')
-        .lean<PolicyLean[]>(),
+      this.activeRows(agencyId, 'name memberIds createdAt'),
     ]);
     const current = new Map<string, PolicyPersonView['policies']>();
     for (const row of rows) {
-      if (!isCreatable(row.type)) continue;
       for (const memberId of row.memberIds ?? []) {
         const key = memberId.toString();
         const entry = current.get(key) ?? {};
@@ -213,22 +268,28 @@ export class TimeOffPoliciesService {
   // ── internals ─────────────────────────────────────────────────────────
 
   private async find(agencyId: string, policyId: string): Promise<PolicyLean> {
-    const row = await this.policies
-      .findOne({ _id: new Types.ObjectId(policyId), agencyId, ...ACTIVE })
-      .lean<PolicyLean | null>();
+    const _id = new Types.ObjectId(policyId);
+    const hits = await Promise.all(
+      CREATABLE_POLICY_TYPES.map(async (type) => {
+        const row = await this.store(type)
+          .findOne({ _id, agencyId, ...ACTIVE })
+          .lean<StoredRow | null>();
+        return row ? { ...row, type } : null;
+      }),
+    );
+    const row = hits.find((hit) => hit !== null);
     if (!row) throw new NotFoundException('That policy does not exist.');
     return row;
   }
 
   private async assertNameFree(
     agencyId: string,
-    type: TimeOffPolicyType,
+    type: CreatablePolicyType,
     name: string,
     exceptId?: Types.ObjectId,
   ): Promise<void> {
-    const taken = await this.policies.exists({
+    const taken = await this.store(type).exists({
       agencyId,
-      type,
       ...ACTIVE,
       name: { $regex: `^${escapeRegex(name.trim())}$`, $options: 'i' },
       ...(exceptId ? { _id: { $ne: exceptId } } : {}),
@@ -242,15 +303,14 @@ export class TimeOffPoliciesService {
 
   private async releaseFromOthers(
     agencyId: string,
-    type: TimeOffPolicyType,
+    type: CreatablePolicyType,
     keepId: Types.ObjectId,
     memberIds: Types.ObjectId[],
   ): Promise<void> {
     if (!memberIds.length) return;
-    await this.policies.updateMany(
+    await this.store(type).updateMany(
       {
         agencyId,
-        type,
         ...ACTIVE,
         _id: { $ne: keepId },
         memberIds: { $in: memberIds },
@@ -315,10 +375,6 @@ export class TimeOffPoliciesService {
   }
 }
 
-function isCreatable(type: TimeOffPolicyType): type is CreatablePolicyType {
-  return (CREATABLE_POLICY_TYPES as readonly string[]).includes(type);
-}
-
 function assertMembers(
   ids: readonly string[],
   people: ReadonlyMap<string, PolicyMemberView>,
@@ -363,7 +419,7 @@ function toSummary(
       ...base,
       type: 'work_week',
       workWeek: {
-        days: (row.workWeek?.days ?? []).map(({ weekday, start, end }) => ({
+        days: (row.days ?? []).map(({ weekday, start, end }) => ({
           weekday,
           start,
           end,
@@ -371,13 +427,12 @@ function toSummary(
       },
     };
   }
-  // `time_off` cannot be created yet (PAC-174); only `holiday` reaches here.
   return {
     ...base,
     type: 'holiday',
     holiday: {
-      holidays: [...(row.holiday?.holidays ?? [])],
-      customHolidays: (row.holiday?.customHolidays ?? []).map(
+      holidays: [...(row.holidays ?? [])],
+      customHolidays: (row.customHolidays ?? []).map(
         ({ id, name, start, end, repeatsYearly }) => ({
           id,
           name,

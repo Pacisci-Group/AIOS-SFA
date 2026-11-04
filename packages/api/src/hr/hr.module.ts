@@ -8,8 +8,9 @@ import { TimeOffPoliciesService } from './time-off-policies.service';
 
 /**
  * The HR module's HTTP surface (PAC-161 v3): time off policies. The policy
- * schema is registered by `WorkingDaysModule`, which the worker imports too —
- * a job counting someone's working days reads the same rows.
+ * schemas (`holidayPolicies`, `workWeekPolicies`) are registered by
+ * `WorkingDaysModule`, which the worker imports too — a job counting
+ * someone's working days reads the same rows.
  */
 @Module({
   imports: [

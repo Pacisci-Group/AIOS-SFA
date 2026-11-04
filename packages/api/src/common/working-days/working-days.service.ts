@@ -3,16 +3,19 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   DEFAULT_WORK_WEEK_DAYS,
   holidaysBetween,
-  type HolidayPolicyRules,
   type ScheduledDay,
   type WorkSchedule,
   type WorkWeekDay,
 } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
 import {
-  TimeOffPolicy,
-  type TimeOffPolicyDocument,
-} from '../../hr/schemas/time-off-policy.schema';
+  HolidayPolicy,
+  type HolidayPolicyDocument,
+} from '../../hr/schemas/holiday-policy.schema';
+import {
+  WorkWeekPolicy,
+  type WorkWeekPolicyDocument,
+} from '../../hr/schemas/work-week-policy.schema';
 import {
   type CalendarDate,
   toIsoDate,
@@ -51,8 +54,10 @@ export interface PersonCalendar {
 @Injectable()
 export class WorkingDaysService {
   constructor(
-    @InjectModel(TimeOffPolicy.name)
-    private readonly policies: Model<TimeOffPolicyDocument>,
+    @InjectModel(HolidayPolicy.name)
+    private readonly holidayPolicies: Model<HolidayPolicyDocument>,
+    @InjectModel(WorkWeekPolicy.name)
+    private readonly workWeekPolicies: Model<WorkWeekPolicyDocument>,
   ) {}
 
   /**
@@ -65,33 +70,35 @@ export class WorkingDaysService {
     userId: string,
     range: { from: string; to: string },
   ): Promise<PersonCalendar> {
-    const rows = await this.policies
-      .find({
-        agencyId,
-        archivedAt: null,
-        type: { $in: ['holiday', 'work_week'] },
-        memberIds: new Types.ObjectId(userId),
-      })
-      .select('type holiday workWeek')
-      .lean<
-        {
-          _id: Types.ObjectId;
-          type: 'holiday' | 'work_week';
-          holiday?: HolidayPolicyRules;
-          workWeek?: { days: WorkWeekDay[] };
-        }[]
-      >();
-    const holidayPolicy = rows.find((row) => row.type === 'holiday') ?? null;
-    const workWeekPolicy = rows.find((row) => row.type === 'work_week') ?? null;
+    // At most one active policy of each kind holds the person.
+    const member = {
+      agencyId,
+      archivedAt: null,
+      memberIds: new Types.ObjectId(userId),
+    };
+    const [holidayPolicy, workWeekPolicy] = await Promise.all([
+      this.holidayPolicies
+        .findOne(member)
+        .select('holidays customHolidays')
+        .lean<
+          Pick<HolidayPolicy, 'holidays' | 'customHolidays'> & {
+            _id: Types.ObjectId;
+          }
+        >(),
+      this.workWeekPolicies
+        .findOne(member)
+        .select('days')
+        .lean<{ _id: Types.ObjectId; days?: WorkWeekDay[] }>(),
+    ]);
 
-    const days = workWeekPolicy?.workWeek?.days?.length
-      ? workWeekPolicy.workWeek.days
+    const days = workWeekPolicy?.days?.length
+      ? workWeekPolicy.days
       : DEFAULT_WORK_WEEK_DAYS;
-    const holidays = holidayPolicy?.holiday
+    const holidays = holidayPolicy
       ? holidaysBetween(
           {
-            holidays: holidayPolicy.holiday.holidays ?? [],
-            customHolidays: holidayPolicy.holiday.customHolidays ?? [],
+            holidays: holidayPolicy.holidays ?? [],
+            customHolidays: holidayPolicy.customHolidays ?? [],
           },
           range.from,
           range.to,

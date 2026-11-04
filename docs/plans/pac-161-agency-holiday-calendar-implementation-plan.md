@@ -513,11 +513,19 @@ holidays should not be agency-wide. Decided in session:
 
 ### Model
 
-- **`timeOffPolicies`** (one collection, `type: holiday | work_week | time_off`):
-  `agencyId` (string), `name`, `holiday: { holidays: HolidayKey[], customHolidays[] }`
-  or `workWeek: { days: [{ weekday, start, end }] }`, `memberIds: ObjectId[]`,
-  `archivedAt/By` (soft archive, PAC-155). Indexes `{agencyId, archivedAt, type}`
-  and `{agencyId, type, memberIds}`.
+- **One collection per policy type** (Asad, 2026-11-04 — first built as a
+  single `timeOffPolicies` collection with a `type` field, split before merge
+  so a document can only carry its own type's rules):
+  - `holidayPolicies` — `agencyId` (string), `name`, `holidays: HolidayKey[]`,
+    `customHolidays: [{ id, name, start, end, repeatsYearly }]`, `memberIds`.
+  - `workWeekPolicies` — `agencyId`, `name`, `days: [{ weekday, start, end }]`,
+    `memberIds`.
+  - Both extend `PolicyRecord` (`hr/schemas/policy-record.schema.ts`):
+    `name`, `memberIds`, `archivedAt/By` (soft archive, PAC-155), timestamps
+    and authorship. Indexes on each: `{agencyId, archivedAt}` and
+    `{agencyId, memberIds}`. PAC-174 adds its own collection for leave.
+  - The wire contract is unchanged: `GET /hr/policies` reads both and merges,
+    and a policy id is looked up in each.
 - **A person is in at most one active Holiday and one Work week policy.**
   Enrolling someone in another policy of the type *moves* them (the save
   `$pull`s them elsewhere); the wizard says "Moves from X" first. No Work week

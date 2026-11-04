@@ -33,7 +33,8 @@ import { Policy } from '../../policies/schemas/policy.schema';
 import { DealAuditItem } from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
-import { TimeOffPolicy } from '../../hr/schemas/time-off-policy.schema';
+import { HolidayPolicy } from '../../hr/schemas/holiday-policy.schema';
+import { WorkWeekPolicy } from '../../hr/schemas/work-week-policy.schema';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
@@ -251,8 +252,10 @@ export class DemoSeedService {
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
-    @InjectModel(TimeOffPolicy.name)
-    private readonly timeOffPolicyModel: Model<TimeOffPolicy>,
+    @InjectModel(HolidayPolicy.name)
+    private readonly holidayPolicyModel: Model<HolidayPolicy>,
+    @InjectModel(WorkWeekPolicy.name)
+    private readonly workWeekPolicyModel: Model<WorkWeekPolicy>,
     @InjectModel(InterestedParty.name)
     private readonly interestedPartyModel: Model<InterestedParty>,
     @InjectModel(PriorInsurance.name)
@@ -1250,39 +1253,33 @@ export class DemoSeedService {
   /**
    * A Holiday and a Work week policy with the whole demo team enrolled
    * (PAC-161 v3), so Settings → Time off has something to show. Keyed on
-   * `{ agencyId, type, name }`: a reseed refreshes the members and leaves
-   * rules a demo user has edited alone.
+   * `{ agencyId, name }` in each collection: a reseed refreshes the members
+   * and leaves rules a demo user has edited alone.
    */
   private async seedTimeOffPolicies(
     ctx: Ctx,
     team: TeamMember[],
   ): Promise<void> {
     const memberIds = team.map((member) => member.userId);
-    const seeds = [
+    await this.holidayPolicyModel.updateOne(
+      { agencyId: ctx.agencyId, name: 'Paid holidays', archivedAt: null },
       {
-        type: 'holiday' as const,
-        name: 'Paid holidays',
-        holiday: {
-          holidays: [
-            ...FEDERAL_HOLIDAY_KEYS,
-            'day_after_thanksgiving' as const,
-          ],
+        $set: { memberIds },
+        $setOnInsert: {
+          holidays: [...FEDERAL_HOLIDAY_KEYS, 'day_after_thanksgiving'],
           customHolidays: [],
         },
       },
+      { upsert: true },
+    );
+    await this.workWeekPolicyModel.updateOne(
+      { agencyId: ctx.agencyId, name: 'Standard week', archivedAt: null },
       {
-        type: 'work_week' as const,
-        name: 'Standard week',
-        workWeek: { days: [...DEFAULT_WORK_WEEK_DAYS] },
+        $set: { memberIds },
+        $setOnInsert: { days: [...DEFAULT_WORK_WEEK_DAYS] },
       },
-    ];
-    for (const { type, name, ...rules } of seeds) {
-      await this.timeOffPolicyModel.updateOne(
-        { agencyId: ctx.agencyId, type, name, archivedAt: null },
-        { $set: { memberIds }, $setOnInsert: rules },
-        { upsert: true },
-      );
-    }
+      { upsert: true },
+    );
   }
 
   private async seedDealAuditItems(
