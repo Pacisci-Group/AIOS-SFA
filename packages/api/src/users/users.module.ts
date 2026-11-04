@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
+import { EmployeeProfilesModule } from '../common/hr/employee-profiles.module';
 import { MailModule } from '../mail/mail.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
@@ -62,6 +63,9 @@ import { UsersService } from './users.service';
   imports: [
     PermissionsModule,
     MailModule,
+    // Invite / revoke / remove / reactivate keep the person's HR record in
+    // step, and the profile read assembles from it (PAC-162).
+    EmployeeProfilesModule,
     // For the agency logo + display name on the invite email, so it matches
     // the dashboard the invitee is being sent to.
     TenantBrandingModule,

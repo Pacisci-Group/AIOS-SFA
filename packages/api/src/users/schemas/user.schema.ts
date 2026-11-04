@@ -50,6 +50,14 @@ export class User {
   lastName?: string;
 
   /**
+   * Free text (PAC-162): `(312) 555-0100` as the agency types it. Nothing
+   * dials or normalises it. Edited by the person at `/settings/profile` and
+   * by an HR admin on their People profile — two routes, one field.
+   */
+  @Prop({ trim: true })
+  phone?: string;
+
+  /**
    * Object key of the user's profile photo (PAC-81). A pointer only — the
    * bytes live in object storage and are streamed by `GET /me/avatar`. Keys
    * are per-user (`agencies/<scope>/avatars/<userId>/…`), so ownership checks

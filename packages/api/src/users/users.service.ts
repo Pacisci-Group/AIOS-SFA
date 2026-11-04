@@ -73,6 +73,8 @@ import {
 } from './dto/list-users.dto';
 import { type ListUserOptionsDto } from './dto/list-user-options.dto';
 import { buildSearchFilter, tokenRegex } from '../common/mongo/search-filter';
+import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
+import { agencyTodayIso } from '../performance/performance.range';
 import { USER_SEARCH_FIELDS, idsMatching } from './user-search';
 
 /**
@@ -125,6 +127,7 @@ export class UsersService {
     private tenantUrls: TenantUrlService,
     private tenantBranding: TenantBrandingService,
     private hostResolver: HostTenantResolver,
+    private profiles: EmployeeProfilesService,
   ) {}
 
   /**
@@ -392,6 +395,9 @@ export class UsersService {
       lastName: input.lastName,
       isActive: false,
     });
+    // The person's HR record exists from the invite (PAC-162): pending until
+    // an HR admin completes their onboarding on the People page.
+    await this.profiles.ensureProfile(input.agencyId, user._id);
 
     // The inviter is the actor. Owner protection does not fire on a brand-new
     // user — there is no owner role to strip — but routing through the one
@@ -458,6 +464,8 @@ export class UsersService {
   async revokeInvite(agencyId: string, userId: string): Promise<void> {
     const user = await this.findPendingInvite(agencyId, userId);
     await this.userModel.deleteOne({ _id: user._id });
+    // The profile goes with the row: a pending invite has no HR history.
+    await this.profiles.deleteProfile(agencyId, user._id);
     await this.accessResolver.invalidateUser(userId);
   }
 
@@ -559,6 +567,16 @@ export class UsersService {
     user.passwordResetExpiresAt = undefined;
     await user.save();
 
+    // The HR record (PAC-162): terminated on the removal day, on the agency's
+    // calendar. Policy membership and the leave ledger are left as they are —
+    // the balance stays readable (PAC-123 reads `payOutOnTermination`), and a
+    // removed person already drops out of every picker and member list.
+    await this.profiles.terminate(
+      agencyId,
+      user._id,
+      agencyTodayIso(actor.timeZone),
+    );
+
     // Last, and load-bearing — see the docblock. Their next request re-resolves
     // from Mongo, finds `isActive: false`, and gets nothing.
     await this.accessResolver.invalidateUser(userId);
@@ -598,6 +616,9 @@ export class UsersService {
     user.deactivatedAt = null;
     user.deactivatedByUserId = null;
     await user.save();
+    // Re-joining is an onboarding (PAC-162): back to pending, and Complete
+    // onboarding clears the old termination date.
+    await this.profiles.reopen(agencyId, user._id);
     await this.accessResolver.invalidateUser(userId);
 
     return this.findById(agencyId, userId);
