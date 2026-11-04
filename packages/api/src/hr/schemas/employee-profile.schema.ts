@@ -22,8 +22,9 @@ export class EmployeeOnboardingRow {
   @Prop({ type: ObjectIdType, ref: 'User', default: null })
   completedBy: Types.ObjectId | null;
 }
-export const EmployeeOnboardingRowSchema =
-  SchemaFactory.createForClass(EmployeeOnboardingRow);
+export const EmployeeOnboardingRowSchema = SchemaFactory.createForClass(
+  EmployeeOnboardingRow,
+);
 
 /**
  * The per-person HR record (PAC-162) — one per user per agency, created the

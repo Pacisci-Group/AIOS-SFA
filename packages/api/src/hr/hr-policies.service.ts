@@ -29,6 +29,10 @@ import {
   LeaveLedgerService,
   type NewLedgerRow,
 } from '../common/time-off/leave-ledger.service';
+import {
+  timeOffRulesOf,
+  type TimeOffFieldsLean,
+} from '../common/time-off/time-off-policy.lean';
 import { agencyTodayIso } from '../performance/performance.range';
 import { TimeOffRequest } from '../time-off-requests/schemas/time-off-request.schema';
 import { User } from '../users/schemas/user.schema';
@@ -49,11 +53,6 @@ import {
   type WorkWeekPolicyDocument,
 } from './schemas/work-week-policy.schema';
 
-/** The time off fields as stored (every rule field; `autoApprove` may be absent on `.lean()`). */
-type TimeOffFields = Omit<TimeOffPolicyRules, 'autoApprove'> & {
-  autoApprove?: Partial<TimeOffPolicyRules['autoApprove']>;
-};
-
 /** A lean row of any collection; only its own type's rules are set. */
 type StoredRow = {
   _id: Types.ObjectId;
@@ -64,7 +63,7 @@ type StoredRow = {
   holidays?: HolidayKey[];
   customHolidays?: CustomHolidayRow[];
   days?: WorkWeekDayRow[];
-} & Partial<TimeOffFields>;
+} & TimeOffFieldsLean;
 
 /** A row tagged with the collection it came from. */
 type PolicyLean = StoredRow & { type: CreatablePolicyType };
@@ -335,6 +334,86 @@ export class HrPoliciesService {
       }
     }
     return this.get(agencyId, policyId);
+  }
+
+  /**
+   * Enrol one person (PAC-162: the profile's "Add to policy" and Complete
+   * onboarding). The same rules as a member-list save — a time off policy
+   * posts the starting balance (or resumes an old one, refusing a balance
+   * for a returning person) and moves them out of their other policy of the
+   * kind; Holiday / Work week move them too. Already a member: a no-op,
+   * unless a balance was sent, which is then a 400.
+   */
+  async enrol(
+    agencyId: string,
+    policyId: string,
+    userId: string,
+    startingBalanceHours: number | undefined,
+    timeZone: string,
+  ): Promise<HrPolicyView> {
+    const row = await this.find(agencyId, policyId);
+    if (startingBalanceHours !== undefined && row.type !== 'time_off') {
+      throw new BadRequestException('Only a Time off policy has balances.');
+    }
+    assertMembers([userId], await this.enrollable(agencyId));
+    const userObjectId = new Types.ObjectId(userId);
+    const before = row.memberIds ?? [];
+    if (before.some((id) => id.equals(userObjectId))) {
+      if (startingBalanceHours !== undefined) {
+        throw new BadRequestException(
+          'That person is already in this policy; their balance cannot be set.',
+        );
+      }
+      return this.get(agencyId, policyId);
+    }
+    const memberIds = [...before, userObjectId];
+    await this.store(row.type).updateOne(
+      { _id: row._id, agencyId, ...ACTIVE },
+      { $addToSet: { memberIds: userObjectId } },
+    );
+    if (row.type === 'time_off') {
+      await this.recordEnrolmentChange(
+        agencyId,
+        row,
+        timeOffRulesOf(row),
+        memberIds,
+        startingBalanceHours === undefined
+          ? {}
+          : { [userId]: startingBalanceHours },
+        timeZone,
+      );
+    } else {
+      await this.releaseFromOthers(agencyId, row.type, row._id, [userObjectId]);
+    }
+    return this.get(agencyId, policyId);
+  }
+
+  /**
+   * Take one person out (PAC-162: the profile's "Remove from policy"). A
+   * time off policy posts the `removed_from_policy` row and keeps the
+   * ledger — the balance resumes if they are ever re-added. 404 when they
+   * are not a member.
+   */
+  async unenrol(
+    agencyId: string,
+    policyId: string,
+    userId: string,
+    timeZone: string,
+  ): Promise<void> {
+    const row = await this.find(agencyId, policyId);
+    const userObjectId = new Types.ObjectId(userId);
+    if (!(row.memberIds ?? []).some((id) => id.equals(userObjectId))) {
+      throw new NotFoundException('That person is not in this policy.');
+    }
+    await this.store(row.type).updateOne(
+      { _id: row._id, agencyId, ...ACTIVE },
+      { $pull: { memberIds: userObjectId } },
+    );
+    if (row.type === 'time_off') {
+      await this.ledger.post([
+        removalRow(agencyId, row._id, userObjectId, todayInstant(timeZone)),
+      ]);
+    }
   }
 
   /**
@@ -723,35 +802,6 @@ function liveMembers(
     const person = people.get(id.toString());
     return person ? [person] : [];
   });
-}
-
-/** The stored time off fields as the wire rules; `.lean()` fills no defaults. */
-function timeOffRulesOf(row: StoredRow): TimeOffPolicyRules {
-  return {
-    timeOffType: row.timeOffType ?? 'custom',
-    description: row.description ?? null,
-    compensation: row.compensation ?? 'paid',
-    accrualType: row.accrualType ?? 'fixed_amount',
-    hoursPerYear: row.hoursPerYear ?? null,
-    accrualFrequency: row.accrualFrequency ?? null,
-    resetDateKind: row.resetDateKind ?? null,
-    resetMonthDay: row.resetMonthDay ?? null,
-    accrualRate: row.accrualRate ?? null,
-    accrualRateUnit: row.accrualRateUnit ?? null,
-    maxBalanceHours: row.maxBalanceHours ?? null,
-    maxAccruedPerYearHours: row.maxAccruedPerYearHours ?? null,
-    carryoverCapHours: row.carryoverCapHours ?? null,
-    annualUsageCapHours: row.annualUsageCapHours ?? null,
-    waitingPeriodDays: row.waitingPeriodDays ?? null,
-    accrualWaitingPeriodDays: row.accrualWaitingPeriodDays ?? null,
-    allowNegativeBalance: row.allowNegativeBalance ?? false,
-    payOutOnTermination: row.payOutOnTermination ?? false,
-    autoApprove: {
-      enabled: row.autoApprove?.enabled ?? false,
-      maxCalendarDays: row.autoApprove?.maxCalendarDays ?? null,
-      minNoticeHours: row.autoApprove?.minNoticeHours ?? null,
-    },
-  };
 }
 
 function toSummary(

@@ -260,7 +260,8 @@ export class EmployeeProfilesService {
       }
       $set.dateOfBirth = facts.dateOfBirth;
     }
-    if (facts.showBirthday !== undefined) $set.showBirthday = facts.showBirthday;
+    if (facts.showBirthday !== undefined)
+      $set.showBirthday = facts.showBirthday;
 
     if (Object.keys($set).length) {
       await this.profiles.updateOne({ _id: profile._id }, { $set });
@@ -305,16 +306,24 @@ export class EmployeeProfilesService {
       },
     };
     if (facts.dateOfBirth !== undefined) $set.dateOfBirth = facts.dateOfBirth;
-    if (facts.showBirthday !== undefined) $set.showBirthday = facts.showBirthday;
+    if (facts.showBirthday !== undefined)
+      $set.showBirthday = facts.showBirthday;
 
     await this.profiles.updateOne({ _id: profile._id }, { $set });
     return this.requireProfile(agencyId, userId);
   }
 
+  /**
+   * The profile for an HR write. A user row that predates the seams (a test
+   * fixture, a database the migration has not reached) gets its pending row
+   * here rather than a 404 — the write is the HR admin saying the person
+   * exists.
+   */
   private async requireProfile(
     agencyId: string,
     userId: string | Types.ObjectId,
   ): Promise<ProfileLean> {
+    await this.ensureProfile(agencyId, userId);
     const profile = await this.profileFor(agencyId, userId);
     if (!profile) throw new NotFoundException('Employee profile not found');
     return profile;

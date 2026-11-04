@@ -10,9 +10,11 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import type { AccessContext } from '@sfa/shared';
 import { AgencyPermission, JwtPayload, PageLevelOverride } from '@sfa/shared';
 import {
@@ -159,6 +161,33 @@ export class UsersController {
     @Body(new ZodValidationPipe(workTransferSchema)) body: WorkTransferDto,
   ) {
     return this.workTransfer.transfer(access, agencyId, userId, body.toUserId);
+  }
+
+  /**
+   * The People profile (PAC-162). **No `@RequirePermissions`**, on purpose:
+   * anyone may read their own profile, and `agency:users:read` opens
+   * everyone's — the service decides, and omits the sections the viewer
+   * may not see (date of birth, time off, schedule). The only such route in
+   * this controller; see `UsersService.personProfile`.
+   */
+  @Get(':userId/profile')
+  personProfile(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Param('userId') userId: string,
+  ) {
+    return this.usersService.personProfile(access, agencyId, userId);
+  }
+
+  /** A person's photo bytes (PAC-162); self or `agency:users:read`. `404` without one. */
+  @Get(':userId/avatar')
+  streamAvatar(
+    @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
+    @Param('userId') userId: string,
+    @Res() res: Response,
+  ) {
+    return this.usersService.streamAvatar(access, agencyId, userId, res);
   }
 
   @Get(':userId')

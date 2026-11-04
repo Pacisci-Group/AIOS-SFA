@@ -10,8 +10,8 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { createHash } from 'crypto';
 import { Model } from 'mongoose';
+import { avatarUrlFor } from '../common/avatar-url';
 import {
   AccessContext,
   AgencyPermission,
@@ -431,16 +431,13 @@ export class AuthService {
         null,
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
+      /** Free text (PAC-162); edited on `/settings/profile` and by HR. */
+      phone: user.phone ?? null,
       /**
-       * A stable relative path, not a presigned URL (PAC-81). The blob sits in
-       * the client's `localStorage` indefinitely, so anything that expires
-       * would rot there; the client fetches this path with its own auth
-       * header. `v` is a cache-buster derived from the key — same convention
-       * as the tenant logo — so replacing the photo changes the URL.
+       * A stable relative path, not a presigned URL (PAC-81) — see
+       * `avatarUrlFor` for why; the People pages build the per-user form.
        */
-      avatarUrl: user.avatarKey
-        ? `/me/avatar?v=${createHash('sha1').update(user.avatarKey).digest('hex').slice(0, 8)}`
-        : null,
+      avatarUrl: avatarUrlFor('/me/avatar', user.avatarKey),
       /**
        * Taking leads or not (PAC-139 §6). The schema default covers a row
        * created before the field existed, but this blob is the contract the

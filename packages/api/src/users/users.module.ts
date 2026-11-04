@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
 import { EmployeeProfilesModule } from '../common/hr/employee-profiles.module';
+import { TimeOffModule } from '../common/time-off/time-off.module';
+import { WorkingDaysModule } from '../common/working-days/working-days.module';
 import { MailModule } from '../mail/mail.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
@@ -66,6 +68,11 @@ import { UsersService } from './users.service';
     // Invite / revoke / remove / reactivate keep the person's HR record in
     // step, and the profile read assembles from it (PAC-162).
     EmployeeProfilesModule,
+    // The profile read's Time off (policies + ledger balances) and Schedule
+    // (Work week / Holiday policy) sections (PAC-162). Schemas and the two
+    // `common/` services only — no HR feature service is imported.
+    TimeOffModule,
+    WorkingDaysModule,
     // For the agency logo + display name on the invite email, so it matches
     // the dashboard the invitee is being sent to.
     TenantBrandingModule,
