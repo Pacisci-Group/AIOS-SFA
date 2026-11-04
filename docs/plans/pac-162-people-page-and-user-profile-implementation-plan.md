@@ -699,3 +699,72 @@ run writes nothing.
 - TanStack: never read `validateField`'s return on a mounted field, never
   `validateAllFields` across unmounted steps; array fields ignore
   `form.reset` — the policy ticks are an object keyed by id.
+
+## As built (2026-11-04, branch `asad/pac-162-people-page`)
+
+Six commits over `asad/pac-174-time-off-policies` in the order of §4
+(plan · shared + model + seams + migration · routes + e2e · Bruno + seed ·
+web · an email-wrap fix), each green on its own.
+
+| Topic | Plan | Built | Why |
+|---|---|---|---|
+| `timeOffRulesOf` (§2.10) | read from the policies service | Moved to `api/common/time-off/time-off-policy.lean.ts`; the policies service and the profile read import the same mapper | `users/` must not import a feature service of `hr/` |
+| Profile read's dependencies | `WorkingDaysService.forPerson` | The two policy models queried directly (`WorkingDaysModule` exports them) | `forPerson` returns no policy *names*; one `findOne` each is simpler than widening its return |
+| `requireProfile` on the HR writes (§2.4) | 404 without a row | Ensures the pending row first, then reads it | A user row that predates the seams (e2e fixtures, a database the migration has not reached) is the HR admin saying the person exists |
+| Complete onboarding's policy ticks (§2.14) | an object-keyed form field | Component state keyed by policy id, merged into the body at submit; the Details step alone is TanStack + zod | The ticks interact (one per kind) with no validation of their own; a form field bought nothing |
+| Review step (§2.14) | `withForm` fragment | Inline in the sheet, two `FormSection`s with Edit → step | One form, one file |
+| Members routes' e2e (§5) | in `hr-policies.e2e-spec.ts` | In `people.e2e-spec.ts`, which is where the policy they need is created | Self-contained |
+| Accrual e2e (§5) | the anniversary case | Added, with `maxBalanceHours: null` spelled out like the other fixtures | The fixture base omits it; the job reads `undefined` as a cap of nothing |
+| Row menu on a reader's row (§2.12) | — | Always renders, with View profile first; the profile page passes `onProfile` to drop that item | A directory-only reader used to get no menu at all |
+| `/people` shell (§2.12) | — | `SettingsPage` with `backTo="/"` and `width="wide"`; the profile's back arrow goes to `/people` for a directory reader and `/` for the person themself | One header idiom; the arrow on a top-level page is the same trade `/settings/profile` makes |
+| Status badge colours (§2.12) | pending amber, invited muted | Pending onboarding amber (`destructive`), Invited sky (`primary`), Active emerald, Removed muted | Invited is informational — the ball is in the invitee's court |
+
+Verification runs: shared jest (work-week spec, 4); api unit `common/hr` +
+`hr/dto` 22 (new: rules 4, status 3, people DTO 5); api e2e `people` (12),
+`hr-policies`, `profile`, `users-deactivate`, `invite-event`,
+`accrue-time-off` (4, one new) — all green; Bruno `People/` 22/22 requests
+34/34 tests, `Users/` 21/21 (58/58), `Profile/` 8/8, `HR/` 23/24 (the
+folder's pre-existing standalone "producer 403" case, which needs the Auth
+folder's token); api `nest build` + eslint on the touched files; web `tsc`
++ build on every commit. The `employee_profiles` migration applied to the
+local dev database on the watch server's restart (changelog
+`20261104160000-employee_profiles.js`; the v1 `20261023100000` stamp was
+already there) and the demo seed ran after it.
+
+Browser, on `localhost:5174` (Vite's second port; the watch API on 4000
+served the branch) as the demo Branch Manager: People in the Workspace
+section → the list with the four statuses and the Pending onboarding ·
+Invited · Active · Removed chips, filtering live (2 pending) →
+`/settings/users` lands on `/people` → the pending producer's ⋯ shows View
+profile and Complete onboarding… → the profile opens with the drawer:
+Details pre-filled (hire date from the pending profile, phone, DOB) →
+Policies grouped Holiday / Work week / Time off with "Already in" ticked
+and disabled, a ticked policy reveals its balance box → Review → Complete
+→ the page re-reads **Active**, the termination date gone, "Onboarded Wed,
+Nov 4, 2026 by Taylor Nguyen", the new policy at 4 h; Edit details with a
+future hire date blocks on the field ("A hire date cannot be in the
+future."); Add to policy says "They are already in every active time off
+policy"; Remove (confirm names the 4 h that stays on record) → toast → Add
+to policy lists it → Add → **4 h resumes**; light theme; mobile width
+stacks the cards. As the producer: no People item, `/people` bounces to
+the dashboard, the own profile renders Details (with DOB), Time off,
+Schedule and Role with no Edit / Add / Remove / menu; `/settings/profile`
+shows the phone field.
+
+Not run in the browser: Reactivate → pending (covered by e2e and the Users
+Bruno folder), a real photo on the list (the avatar route is e2e'd for 403
+/ 404; the 200 path is the `profile.e2e` upload path with the same stream
+code), the owner's full ⋯ menu on a row (unchanged code).
+
+Found on the way, local database only: `employeeProfiles` rows the closed
+PR #155 build wrote on 2026-10-23 were already `active` with v1 hire
+dates, so the seed's insert-only facts did not apply to them (Morgan Lee
+reads Active here; pending on any fresh database) — the migration unset
+their dead fields as planned; and the three PAC-174 interim
+`timeOffPolicies` orphans ("Paid holidays", "Standard week", "Texas office
+holidays" with no `accrualType`) still show as time off policies on the
+profile and in the Policies step — delete them by hand with
+`db.timeOffPolicies.deleteMany({ accrualType: { $exists: false } })`
+(the sandbox refused the delete from here).
+
+Open points (§7) all taken as written; none answered before the build.
