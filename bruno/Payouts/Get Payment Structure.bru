@@ -1,0 +1,99 @@
+meta {
+  name: Get Payment Structure
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/payouts/structures/{{payoutsStructureId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    // What the editor loads, and so the version its save names.
+    bru.setVar("payoutsStructureUpdatedAt", res.getBody().updatedAt);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is the structure just created, with its members", function () {
+    expect(res.getBody().id).to.equal(bru.getVar("payoutsStructureId"));
+    expect(res.getBody().members).to.be.an("array");
+  });
+
+  test("names the lead-source rate", function () {
+    expect(res.getBody().leadSourceRules[0].leadSourceName).to.equal(
+      bru.getVar("payoutsLeadSourceName")
+    );
+  });
+
+  test("carries the version an update must name", function () {
+    expect(res.getBody().updatedAt).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /payouts/structures/:id — one structure with its members (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  **Response `200`**
+  ```json
+  {
+    "id": "…",
+    "name": "Producers",
+    "status": "active",
+    "rules": [
+      { "carrier": "Allstate", "ratePercent": 10, "minBundleRatePercent": 83 },
+      { "carrier": "*", "ratePercent": 5, "minBundleRatePercent": null }
+    ],
+    "leadSourceRules": [
+      { "leadSourceId": "…", "leadSourceName": "JYA", "carrier": "*", "ratePercent": 4 }
+    ],
+    "hatTrick": { "enabled": true, "dealsPerDay": 3, "bonusAmount": 50 },
+    "individualTiers": [{ "thresholdPremium": 25000, "bonusAmount": 250 }],
+    "tiersStackable": false,
+    "teamBonusEligible": true,
+    "memberCount": 2,
+    "createdAt": "2026-11-04T10:00:00.000Z",
+    "updatedAt": "2026-11-04T10:00:00.000Z",
+    "members": [
+      { "id": "…", "name": "Pat Producer", "email": "pat@agency.com", "roles": ["Producer"], "status": "active" }
+    ]
+  }
+  ```
+  Each rule's `minBundleRatePercent` is the minimum bundle rate it enforces
+  (`null` = none); `tiersStackable` says whether every tier reached pays or
+  only the highest (see **Create Payment Structure**). Both read as off on a
+  structure saved before they existed.
+
+  `leadSourceRules` are the lead-source overrides (see **Create Payment
+  Structure**), by source name, then carrier with `*` ("any carrier") last.
+  `leadSourceName` is resolved on read from the `leadSources` row — archived
+  sources included, so an old rule still says where its sales come from —
+  and is `""` only for an id with no row. Empty for most structures.
+
+  A member removed from the agency after joining **stays** on the list with
+  `status: "deactivated"` — their last month is still paid from it — and is
+  not counted in `memberCount`.
+
+  `updatedAt` is the structure's version: **Update Payment Structure** must
+  send it back as `expectedUpdatedAt`. It moves on every save of the
+  structure, and also when a save of *another* structure moves one of its
+  members off this one — so an editor opened before that is told to reload
+  rather than putting the person back. An archived structure is still
+  returned (`status: "archived"`, no members); the web editor shows it
+  read-only.
+
+  **Errors** — `400` for a malformed id; `404` for an id that is not this
+  agency's.
+}

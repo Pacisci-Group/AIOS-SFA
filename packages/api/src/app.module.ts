@@ -50,6 +50,7 @@ import { ManagementDashboardModule } from './management-dashboard/management-das
 import { AnalyticsModule } from './analytics/analytics.module';
 import { DataExportModule } from './data-export/data-export.module';
 import { CarrierReconciliationModule } from './carrier-reconciliation/carrier-reconciliation.module';
+import { PayoutsModule } from './payouts/payouts.module';
 import { PoliciesModule } from './policies/policies.module';
 import { QuoteRecapsModule } from './quote-recaps/quote-recaps.module';
 import { FeatureModulesModule } from './feature-modules/feature-modules.module';
@@ -220,6 +221,7 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     DataExportModule,
     AnalyticsModule,
     CarrierReconciliationModule,
+    PayoutsModule,
     LeaderboardModule,
     ActivitiesModule,
     // Mailers and mailer campaigns (PAC-73, PAC-71). Registers the `mailers`,

@@ -1,0 +1,40 @@
+meta {
+  name: Archive Payment Structure
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/payouts/structures/{{payoutsStructureId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is archived and has released its members", function () {
+    expect(res.getBody().status).to.equal("archived");
+    expect(res.getBody().memberCount).to.equal(0);
+  });
+}
+
+docs {
+  # POST /payouts/structures/:id/archive — retire a structure (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  Archive, never delete. The structure's members are released — free to join
+  another, and on no structure until they do — and its name is free again.
+  Commission statements keep a snapshot of the rules they were computed with,
+  so an archived structure is history, not a dependency.
+
+  **Response `200`** — the archived structure as a summary (no `members`).
+
+  **Errors** — `404` for an unknown id; `409` when it is already archived.
+}

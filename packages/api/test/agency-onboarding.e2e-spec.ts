@@ -204,6 +204,9 @@ describe('Agency onboarding (e2e)', () => {
       expect(agency?.setup?.status).toBe('pending');
       // No zone sent: the schema default, which the wizard pre-selects.
       expect(agency?.timezone).toBe('America/Chicago');
+      // Payout settings stay absent until the owner saves them (PAC-177);
+      // readers fill the defaults.
+      expect(agency).not.toHaveProperty('payouts');
     });
 
     it('seeds every default role, with their permissions', async () => {

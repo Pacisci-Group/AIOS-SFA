@@ -115,6 +115,23 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Analytics | Get Sales Summary (Branch Manager) | `GET /analytics/sales/summary` | **PAC-152 part 2** — pinned to the manager's branch; never more than the owner's figure. |
 | Analytics | Get Sales Summary (Forbidden for Producer) | `GET /analytics/sales/summary` | **PAC-152 part 2** — a producer without the grant is a `403`. |
 | Analytics | Get Sales Breakdown (Invalid groupBy) | `GET /analytics/sales/breakdown` | **PAC-152 part 2** — `segmentBy` equal to `groupBy` is a `400`. |
+| Payouts | Login as Owner | `POST /auth/login` | **PAC-177** — captures `payoutsOwnerToken`; asserts the owner holds `agency:payouts:admin` (from the `payouts_module` migration). |
+| Payouts | Get Payout Settings | `GET /payouts/settings` | **PAC-177** — team bonus (levels of agency premium → pool, `stackable`, CSR/producer split) and Salesperson of the Month, defaults filled in. `agency:payouts:admin`. |
+| Payouts | Update Payout Settings | `PATCH /payouts/settings` | Either section, each sent whole. Team levels stored lowest first; stackable = every level reached pays. Sends the defaults so reruns leave the tenant as found. |
+| Payouts | Update Payout Settings (Shares Not 100) | `PATCH /payouts/settings` | The 100% split rule (400). |
+| Payouts | List Payout People | `GET /payouts/structures/people` | Who can be put on a structure, and the structure each person is on today. |
+| Payouts | List Lead Sources | `GET /lead-sources` | Captures `payoutsLeadSourceId` / `payoutsLeadSourceName` (the `jya` row if the agency has one, else the first) for the structures' lead-source rates. |
+| Payouts | Create Payment Structure | `POST /payouts/structures` | Rates per carrier (`*` = any other) with an optional minimum bundle rate each (missing it flags the statement; a bundle = 2+ policies on a sale), stackable or highest-only monthly tiers (`tiersStackable`, required), lead-source overrides (`leadSourceRules`, required, `[]` for none — they replace the carrier rate for that source's sales), hat trick, monthly tiers, team-bonus eligibility, members (who move from their old structure). Captures `payoutsStructureId` and `payoutsStructureUpdatedAt`. |
+| Payouts | Get Payment Structure | `GET /payouts/structures/:id` | One structure with its members and its lead-source rates named on read; a removed member stays, marked `deactivated`. Recaptures `payoutsStructureUpdatedAt` — the version an update names. |
+| Payouts | Update Payment Structure | `PATCH /payouts/structures/:id` | The whole structure, replaced, plus a required `expectedUpdatedAt` (the `updatedAt` it was edited from). |
+| Payouts | Update Payment Structure (Stale) | `PATCH /payouts/structures/:id` | Re-sends the pre-update version: 409 `PAYMENT_STRUCTURE_STALE` — saved elsewhere since it was loaded (another tab, or another structure took a member). |
+| Payouts | Create Payment Structure (Duplicate Name) | `POST /payouts/structures` | 409 `PAYMENT_STRUCTURE_NAME_TAKEN` — names are unique among active structures, ignoring case and spacing. |
+| Payouts | Create Payment Structure (Duplicate Lead-Source Rate) | `POST /payouts/structures` | 400 — two rates for one lead source and carrier (`Allstate` and `B4tEH` are one carrier); the shared `leadSourceRulesError` message. |
+| Payouts | List Payment Structures | `GET /payouts/structures` | Active structures by name, with member counts. |
+| Payouts | Archive Payment Structure | `POST /payouts/structures/:id/archive` | Releases the members and frees the name. |
+| Payouts | Archive Payment Structure (Again) | `POST /payouts/structures/:id/archive` | Already archived (409). |
+| Payouts | Login as Producer | `POST /auth/login` | Captures `payoutsProducerToken`; a producer holds `payouts:read` only. |
+| Payouts | List Payment Structures (as Producer, 403) | `GET /payouts/structures` | Structures are admin-only. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |

@@ -70,6 +70,11 @@ export const ONBOARDING_DEFAULT_MODULES: readonly ModuleKey[] = [
    * carries it.
    */
   ModuleKey.CarrierReconciliation,
+  /*
+   * PAC-176. On by default: every role template holds `payouts:read`, which a
+   * disabled module would filter away.
+   */
+  ModuleKey.Payouts,
 ];
 
 /** `GET /platform/agencies/availability` — live checks for the wizard's fields. */

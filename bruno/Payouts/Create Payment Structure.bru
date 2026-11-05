@@ -1,0 +1,128 @@
+meta {
+  name: Create Payment Structure
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/payouts/structures
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+script:pre-request {
+  // A fresh name per run: an active name is unique per agency.
+  bru.setVar("payoutsStructureName", "Bruno structure " + Date.now());
+}
+
+body:json {
+  {
+    "name": "{{payoutsStructureName}}",
+    "rules": [
+      { "carrier": "*", "ratePercent": 5 },
+      { "carrier": "Allstate", "ratePercent": 10, "minBundleRatePercent": 83 }
+    ],
+    "leadSourceRules": [
+      { "leadSourceId": "{{payoutsLeadSourceId}}", "carrier": "*", "ratePercent": 4 }
+    ],
+    "hatTrick": { "enabled": true, "dealsPerDay": 3, "bonusAmount": 50 },
+    "individualTiers": [
+      { "thresholdPremium": 50000, "bonusAmount": 500 },
+      { "thresholdPremium": 25000, "bonusAmount": 250 }
+    ],
+    "tiersStackable": true,
+    "teamBonusEligible": true,
+    "memberIds": []
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("payoutsStructureId", res.getBody().id);
+    // The version an update must name (`expectedUpdatedAt`).
+    bru.setVar("payoutsStructureUpdatedAt", res.getBody().updatedAt);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("stores carriers by name with the catch-all last, with their minimum bundle rates", function () {
+    expect(res.getBody().rules).to.deep.equal([
+      { carrier: "Allstate", ratePercent: 10, minBundleRatePercent: 83 },
+      { carrier: "*", ratePercent: 5, minBundleRatePercent: null }
+    ]);
+  });
+
+  test("stores whether the tiers stack", function () {
+    expect(res.getBody().tiersStackable).to.equal(true);
+  });
+
+  test("stores the lead-source rate by id and serves it named", function () {
+    expect(res.getBody().leadSourceRules).to.deep.equal([
+      {
+        leadSourceId: bru.getVar("payoutsLeadSourceId"),
+        leadSourceName: bru.getVar("payoutsLeadSourceName"),
+        carrier: "*",
+        ratePercent: 4
+      }
+    ]);
+  });
+
+  test("stores tiers lowest threshold first", function () {
+    const thresholds = res.getBody().individualTiers.map(function (t) {
+      return t.thresholdPremium;
+    });
+    expect(thresholds).to.deep.equal([25000, 50000]);
+  });
+}
+
+docs {
+  # POST /payouts/structures — create a payment structure (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  A structure is a set of pay rules plus the people on it. Different pay for
+  different people is another structure, never a per-person override.
+
+  **Body** — the whole structure:
+  | field | rules |
+  |---|---|
+  | name | 1–80 characters; unique among the agency's **active** structures, ignoring case and spacing |
+  | rules[] | at least one; `carrier` is a carrier's name or `*` for "any other carrier"; `ratePercent` 0–100, two decimals. One rule per carrier — `Allstate`, `allstate` and the migrated code `B4tEH` are the same carrier — and at most one `*`. Optional `minBundleRatePercent` (more than 0, at most 100, two decimals; `null` or left out = not enforced): the bundle rate the person must keep on that carrier's sales in the month. A **bundle** is a sale with two or more policies, whatever their carriers. Missing the minimum **flags** the statement for the manager (sales paid at a lead-source rate on that carrier included); pay is not changed. On `*` it applies to each carrier that rule covers. |
+  | leadSourceRules[] | **required**, `[]` for none; at most 50. `{ leadSourceId, carrier, ratePercent }` — sales whose lead came from that source are paid `ratePercent` **instead of** the carrier rate, for that carrier or (`*`) any carrier. `leadSourceId` is a `leadSources` row this agency can use (its own or a platform row, as **List Lead Sources** returns them); one source per rule. One rate per `(source, carrier)`. Precedence for a sale: source + carrier › source + any carrier › carrier › any other carrier. Premium from these sales still counts toward tiers, Salesperson of the Month and the team threshold — only the rate differs. |
+  | hatTrick | `{ enabled, dealsPerDay (whole, 2–20), bonusAmount }` — a bonus for each agency-local day with that many sales |
+  | individualTiers[] | `{ thresholdPremium (> 0), bonusAmount }`; distinct thresholds. May be empty. |
+  | tiersStackable | **required** boolean. `true`: every tier reached pays and the bonuses add up (a higher tier may add a smaller amount). `false`: only the highest tier reached pays, so a higher tier may not pay less than the one below. |
+  | teamBonusEligible | whether members share the agency's team pool |
+  | memberIds[] | the agency's people; anyone on another active structure **moves** here. Someone removed from the agency cannot be added. |
+
+  Stored normalised: carriers canonical and sorted with `*` last, tiers
+  sorted by threshold, lead-source rules by reference only (the source's
+  name is resolved on every read, never stored). The request sends no
+  members, so running the collection never moves anyone on the demo tenant.
+  Its lead-source rate uses the source **List Lead Sources** captured.
+
+  **Response `201`** — the structure as **Get Payment Structure** returns it.
+  Its `updatedAt` is what a later **Update Payment Structure** sends back as
+  `expectedUpdatedAt` (captured as `payoutsStructureUpdatedAt`).
+
+  **Errors**
+  - `400` — a shape or rule violation (the shared validators' message), a
+    member who is not in the agency or has been removed, a lead source that
+    is not this agency's ("Some lead sources chosen are not available to this
+    agency.") or an archived one ("… has been archived and cannot be
+    added."). See **Create Payment Structure (Duplicate Lead-Source Rate)**.
+  - `403` — without `agency:payouts:admin`.
+  - `409` `PAYMENT_STRUCTURE_NAME_TAKEN` — an active structure has the name.
+}

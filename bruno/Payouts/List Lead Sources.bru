@@ -1,0 +1,53 @@
+meta {
+  name: List Lead Sources
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/lead-sources
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:post-response {
+  // A structure's lead-source rates name a `leadSources` row by id, and ids
+  // differ per database — so one is captured here for the requests below.
+  // JYA when the agency has it (the rate this exists for: Jessica Yates is
+  // paid differently on JYA leads), else the first source listed.
+  if (res.getStatus() === 200) {
+    const sources = res.getBody().leadSources;
+    const pick = sources.find(function (s) { return s.slug === "jya"; }) || sources[0];
+    if (pick) {
+      bru.setVar("payoutsLeadSourceId", pick.id);
+      bru.setVar("payoutsLeadSourceName", pick.name);
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists at least one source to put a rate on", function () {
+    expect(res.getBody().leadSources).to.be.an("array");
+    expect(res.getBody().leadSources.length).to.be.above(0);
+  });
+}
+
+docs {
+  # GET /lead-sources — Payouts folder helper (PAC-177)
+
+  The same endpoint as **Lead Sources → List Lead Sources**: the platform's
+  sources plus this agency's own, active only, in display order. Gated by
+  `leads:read` or `owner_dashboard:read` (the owner holds both); the
+  structure editor's "Lead source rates" picker reads it too.
+
+  Captures `payoutsLeadSourceId` / `payoutsLeadSourceName` — the `jya` row
+  when the agency has one, otherwise the first row — for the lead-source rate
+  in **Create Payment Structure** and **Update Payment Structure**.
+}

@@ -53,6 +53,11 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       // agencies get it from the `analytics_module` migration, not from this
       // line. Read only — `:write` grants nothing on that page.
       modulePermission(ModuleKey.Analytics, "read"),
+      // Payouts (PAC-176): review, adjust and send the branch's commission
+      // statements. Existing agencies get it from the `payouts_module`
+      // migration, not from this line. Structures and rates stay the owner's
+      // (`agency:payouts:admin`).
+      ...permissionsForModule(ModuleKey.Payouts),
       modulePermission(ModuleKey.CrmService, "read"),
       modulePermission(ModuleKey.CrmService, "write"),
       modulePermission(ModuleKey.Mailers, "read"),
@@ -72,6 +77,9 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Clients, "write"),
       modulePermission(ModuleKey.Performance, "read"),
       modulePermission(ModuleKey.Leaderboard, "read"),
+      // PAC-176 — every employee reads their own commission statements.
+      // `payouts:read` is own-only whatever the scope (see `ModuleKey.Payouts`).
+      modulePermission(ModuleKey.Payouts, "read"),
     ],
   },
   {
@@ -87,6 +95,8 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Performance, "read"),
       ...permissionsForModule(ModuleKey.CrmService),
       ...permissionsForModule(ModuleKey.QuoteRecaps),
+      // PAC-176 — CSRs are licensed and sell; they are paid on statements too.
+      modulePermission(ModuleKey.Payouts, "read"),
     ],
   },
   {
@@ -130,6 +140,8 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       modulePermission(ModuleKey.Onboardings, "read"),
       modulePermission(ModuleKey.Onboardings, "write"),
       modulePermission(ModuleKey.Mailers, "read"),
+      // PAC-176 — own statements only, although this role is branch-scoped.
+      modulePermission(ModuleKey.Payouts, "read"),
     ],
   },
   {
@@ -154,6 +166,8 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
        * grants nothing on that page.
        */
       modulePermission(ModuleKey.DataExport, "read"),
+      // PAC-176 — own statements only, although this role is agency-scoped.
+      modulePermission(ModuleKey.Payouts, "read"),
     ],
   },
 ];
