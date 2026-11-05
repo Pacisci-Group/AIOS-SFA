@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Plane, Plus, X } from "lucide-react";
+import { Plane, Plus, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import type { PersonProfileView, PersonTimeOffPolicyView } from "@sfa/shared";
 import { DetailCard } from "@/components/common/DetailCard";
@@ -26,20 +26,35 @@ import {
 } from "@/features/hr/policies/time-off/time-off-display";
 
 /**
- * The person's time off policies with their **current balance** (PAC-162)
- * — the sum of their ledger rows; "Available" (minus pending and future
- * approved leave) arrives with PAC-165 and its definitions. Add / Remove
- * for HR admins; a removal keeps the ledger so the balance resumes if they
- * are ever re-added, which the dialog says.
+ * The person's time off policies with their two numbers (PAC-162,
+ * PAC-165): **Available** — what is left to ask for, the current balance
+ * less approved leave not yet taken and requests still waiting — and the
+ * **Balance** it is drawn from. The same numbers, from the same service,
+ * as the person's own Time off page.
+ *
+ * Add / Remove and **Adjust balance** for HR admins; a removal keeps the
+ * ledger so the balance resumes if they are ever re-added, which the dialog
+ * says. **Record time off** for someone who may record (`hr:write` +
+ * `agency:users:read`) on anybody's profile but their own, and a link to
+ * the person's requests.
  */
 export function TimeOffCard({
   profile,
   canManage,
   onAdd,
+  onAdjust,
+  onRecord,
+  requestsHref,
 }: {
   profile: PersonProfileView;
   canManage: boolean;
   onAdd: () => void;
+  /** HR admins: adjust this policy's balance by hand. */
+  onAdjust?: (policy: PersonTimeOffPolicyView) => void;
+  /** Recorders, on somebody else's profile. */
+  onRecord?: () => void;
+  /** Where this person's requests are listed, for a viewer who may see them. */
+  requestsHref?: string;
 }) {
   const queryClient = useQueryClient();
   const [removing, setRemoving] = useState<PersonTimeOffPolicyView | null>(null);
@@ -67,11 +82,25 @@ export function TimeOffCard({
       icon={Plane}
       bodyless
       action={
-        canManage ? (
-          <Button variant="ghost" size="sm" onClick={onAdd}>
-            <Plus className="size-4" />
-            Add to policy
-          </Button>
+        canManage || onRecord || requestsHref ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {requestsHref && (
+              <Button asChild variant="ghost" size="sm">
+                <Link to={requestsHref}>Requests</Link>
+              </Button>
+            )}
+            {onRecord && policies.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={onRecord}>
+                Record time off
+              </Button>
+            )}
+            {canManage && (
+              <Button variant="ghost" size="sm" onClick={onAdd}>
+                <Plus className="size-4" />
+                Add to policy
+              </Button>
+            )}
+          </div>
         ) : undefined
       }
     >
@@ -106,12 +135,35 @@ export function TimeOffCard({
                   {timeOffKindLabel(policy.timeOff)} · {summarizeTimeOff(policy.timeOff)}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-base font-semibold text-foreground">
-                  {formatBalance(policy.balanceHours)}
-                </p>
-                <p className="text-xs text-muted-foreground">Balance</p>
-              </div>
+              {policy.balanceHours === null ? (
+                <p className="text-base font-semibold text-foreground">Unlimited</p>
+              ) : (
+                <>
+                  <div className="text-right">
+                    <p className="text-base font-semibold tabular-nums text-foreground">
+                      {formatBalance(policy.availableHours)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Available</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-base tabular-nums text-muted-foreground">
+                      {formatBalance(policy.balanceHours)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Balance</p>
+                  </div>
+                </>
+              )}
+              {onAdjust && policy.balanceHours !== null && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Adjust the ${policy.name} balance`}
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => onAdjust(policy)}
+                >
+                  <SlidersHorizontal className="size-4" />
+                </Button>
+              )}
               {canManage && (
                 <Button
                   variant="ghost"

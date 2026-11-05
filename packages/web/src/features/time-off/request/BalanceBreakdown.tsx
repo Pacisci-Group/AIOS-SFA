@@ -37,11 +37,8 @@ export function BalanceBreakdown({
       )}
     >
       <Line label="Current balance" value={formatBalance(balance.currentBalance)} />
-      <Line
-        label="Other requested hours"
-        value={`− ${formatBalance(balance.otherRequestedHours)}`}
-      />
-      <Line label="This request" value={`− ${formatBalance(balance.thisRequestHours)}`} />
+      <Line label="Other requested hours" value={taken(balance.otherRequestedHours)} />
+      <Line label="This request" value={taken(balance.thisRequestHours)} />
       <div className="border-t border-border pt-2">
         <Line
           label="Remaining available balance"
@@ -67,6 +64,11 @@ export function BalanceBreakdown({
       )}
     </dl>
   );
+}
+
+/** Hours coming off the balance: `− 24 h`, and a plain `0 h` for none. */
+function taken(hours: number): string {
+  return hours > 0 ? `− ${formatBalance(hours)}` : formatBalance(hours);
 }
 
 function Line({

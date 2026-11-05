@@ -1198,7 +1198,9 @@ export class TimeOffRequestsService {
       if (projected.lowestBalance < 0 && !rules.allowNegativeBalance) {
         add(
           'negative_balance',
-          projected.lowestOn
+          // The date only means something when it is still to come: leave
+          // dated today or earlier is short *now*.
+          projected.lowestOn && projected.lowestOn > today
             ? `The balance would be ${-projected.lowestBalance} h short on ${formatDay(projected.lowestOn)}.`
             : `The balance would be ${-projected.lowestBalance} h short.`,
         );

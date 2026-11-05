@@ -133,9 +133,14 @@ export function RequestSheet({
       setError(failure instanceof ApiError ? failure.message : "Could not save. Try again."),
   });
 
+  // Recording from a profile: the person is fixed, and so is the policy
+  // when they are in only one.
+  const fixedPerson = employeeId ? people.find((entry) => entry.id === employeeId) : undefined;
   const form = useAppForm({
     defaultValues: requestFormDefaults({
-      policyId: policy?.id,
+      policyId:
+        policy?.id ??
+        (fixedPerson?.policies.length === 1 ? fixedPerson.policies[0].id : undefined),
       employeeId,
       request,
     }),

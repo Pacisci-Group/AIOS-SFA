@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   previewRecordedTimeOff,
   previewTimeOffRequest,
@@ -39,11 +39,7 @@ export function useRequestPreview(
   // The note changes nothing the preview computes.
   const key = input ? JSON.stringify({ ...input, note: null }) : "";
 
-  const [settled, setSettled] = useState(key);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setSettled(key), PREVIEW_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [key]);
+  const settled = useDebouncedValue(key, PREVIEW_DEBOUNCE_MS);
 
   const query = useQuery({
     queryKey: timeOffKeys.preview(mode, settled),
