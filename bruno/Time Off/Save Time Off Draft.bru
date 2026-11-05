@@ -1,0 +1,64 @@
+meta {
+  name: Save Time Off Draft
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torMon}}",
+    "lastDay": "{{torTue}}",
+    "dayMode": "full",
+    "send": false
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffRequestId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is a draft with a reference, the creator's alone", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("draft");
+    expect(body.group).to.equal("draft");
+    expect(body.reference).to.match(/^TOR-\d{4}-\d{3,}$/);
+    expect(body.actions).to.eql(["edit", "submit", "discard"]);
+  });
+}
+
+docs {
+  # POST /time-off/requests — save a draft, or send a request (PAC-165)
+
+  Module `hr`, permission `hr:read`. The caller's own request.
+
+  Body: the preview's four inputs plus **`send`** (required): `false` saves a
+  **Draft**, `true` sends it for review.
+
+  A Draft is visible only to its creator, holds no hours against the balance,
+  notifies nobody and is not checked — its hours are provisional and are
+  recomputed when it is sent. Every request gets a reference,
+  `TOR-<year>-<nnn>`, from a per-agency per-year counter.
+
+  Returns the request view (see `Get Time Off Request (as Reviewer)`),
+  including `actions[]` — what the caller may do next, computed by the server.
+
+  `404` — no such policy.
+}

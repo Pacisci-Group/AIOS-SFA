@@ -1,0 +1,46 @@
+meta {
+  name: Decline Time Off Request
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffSecondId}}/decline
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "note": "Two people are already off that day."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is Declined, terminally", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("declined");
+    expect(body.actions).to.eql([]);
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/decline — decline (PAC-165)
+
+  Module `hr`, permission `hr:write`; in scope, not the caller's own. Body
+  `{ note }` — **required**, and shown to the employee.
+
+  Submitted → **Declined**. Terminal: nothing is posted to the ledger, the
+  hours stop being held, and the request cannot be reopened — the employee
+  sends a new one. The employee is notified (`time_off.declined`).
+
+  `400` — no note. `403 own_request` · `404` · `409 already_decided`.
+}

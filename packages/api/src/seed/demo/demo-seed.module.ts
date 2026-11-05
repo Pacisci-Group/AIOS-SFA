@@ -102,6 +102,8 @@ import {
 import { Carrier, CarrierSchema } from '../../carriers/schemas/carrier.schema';
 import { LeadSourcesModule } from '../../lead-sources/lead-sources.module';
 import { PermissionsModule } from '../../permissions/permissions.module';
+import { LeaveLedgerService } from '../../common/time-off/leave-ledger.service';
+import { WorkingDaysModule } from '../../common/working-days/working-days.module';
 import { DemoSeedService } from './demo-seed.service';
 
 /**
@@ -171,7 +173,13 @@ import { DemoSeedService } from './demo-seed.service';
     // Leads and deals reference a `leadSources` row (PAC-135). Self-contained,
     // so it is safe in this standalone graph.
     LeadSourcesModule,
+    // The demo time off requests take their hours from each person's work
+    // week and holiday policy, as a request made in the app does (PAC-165).
+    WorkingDaysModule,
   ],
-  providers: [DemoSeedService],
+  // `LeaveLedgerService` on its own rather than `TimeOffModule`: the seed
+  // posts a request's `used` / `reversal` rows through the same writer the
+  // app uses, and needs nothing else from that module.
+  providers: [DemoSeedService, LeaveLedgerService],
 })
 export class DemoSeedModule {}

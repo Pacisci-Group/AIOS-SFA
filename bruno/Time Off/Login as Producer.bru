@@ -1,0 +1,70 @@
+meta {
+  name: Login as Producer
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("timeOffProducerToken", res.getBody().accessToken);
+    bru.setVar("timeOffProducerId", res.getBody().user.id);
+  }
+
+  // The dates every request below uses. A working week sixteen weeks out, so
+  // the run never lands on leave the demo seed gave the producer, and a
+  // working day safely in the past for the recorded entry.
+  const DAY = 86400000;
+  const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+  let monday = Date.now() + DAY;
+  while (new Date(monday).getUTCDay() !== 1) monday += DAY;
+  monday += 16 * 7 * DAY;
+  ["torMon", "torTue", "torWed", "torThu", "torFri"].forEach((name, index) =>
+    bru.setVar(name, iso(monday + index * DAY)),
+  );
+  let past = Date.now() - 3 * DAY;
+  while ([0, 6].includes(new Date(past).getUTCDay())) past -= DAY;
+  bru.setVar("torPast", iso(past));
+  // A reset date about half a year away: no day of the run is in a period
+  // that has already reset.
+  const reset = iso(Date.now() + 180 * DAY).slice(5);
+  bru.setVar("timeOffResetMonthDay", reset === "02-29" ? "02-28" : reset);
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("is an employee, not a reviewer", function () {
+    const permissions = res.getBody().user.permissions;
+    expect(permissions).to.include("hr:read");
+    expect(permissions).to.not.include("hr:write");
+  });
+}
+
+docs {
+  # POST /auth/login — Time Off folder helper
+
+  A producer: holds `hr:read` only, so they see their own balances and
+  requests and nobody else's. Captures `timeOffProducerToken` and
+  `timeOffProducerId`, and computes the run's dates: `torMon` … `torFri` (a
+  working week sixteen weeks out), `torPast` (a working day at least three
+  days ago) and `timeOffResetMonthDay` (a policy reset date half a year away).
+}

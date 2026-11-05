@@ -51,8 +51,11 @@ docs {
     the person themself or an `agency:hr:admin`** — `dateOfBirth` +
     `showBirthday` (omitted otherwise, never an age).
   - `timeOff.policies[]` — the active time off policies the person is in:
-    `{ id, name, timeOff: <rules>, balanceHours }` (`null` on Unlimited), the
-    balance being the sum of their `leaveLedger` rows.
+    `{ id, name, timeOff: <rules>, balanceHours, availableHours }` (both
+    `null` on Unlimited). `balanceHours` is the **current balance** — their
+    `leaveLedger` rows as of today; `availableHours` (PAC-165) takes off
+    approved leave not yet taken and requests still waiting for a decision.
+    The same numbers as `Time Off/Get Time Off Summary`.
   - `schedule` — `workWeek { id, name } | null` (null = the default Mon–Fri
     9–5), `days[]`, `hoursPerWeek` (Σ end − start — nobody clocks in), and
     `holiday { id, name } | null`.

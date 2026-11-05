@@ -542,7 +542,6 @@ export const DEMO_CONFIG = {
   repeatQuoteLeads: 4,
   serviceTickets: 16,
   mailers: 14,
-  timeOffRequests: 6,
   /**
    * Manager view fixtures (PAC-139), forced onto records the generators above
    * would otherwise draw at random — so the three alert cards never all read
@@ -553,3 +552,140 @@ export const DEMO_CONFIG = {
   agingAudits: 3,
   overdueTickets: 3,
 } as const;
+
+/**
+ * Time off requests for the demo tenant (PAC-165): one in every state the
+ * Time off page can show, so neither the employee's list nor the reviewer's
+ * queue opens empty.
+ *
+ * Dates are **relative to the week the seed runs in**: `week` counts weeks
+ * from the current one (negative = past), `from` is the weekday offset from
+ * that Monday, `days` the calendar length. The hours are computed from each
+ * person's work week and holiday policy when the seed runs, exactly as a
+ * request made in the app — so a week holding Thanksgiving shows the
+ * holiday rows at zero hours.
+ *
+ * Pat Producer (the demo login) carries most of them: a producer signing in
+ * sees every group. The others fill the Branch Manager's To review list and
+ * the "who else is off" panel; Morgan is in the Northgate branch, so only
+ * the owner's agency scope reaches that one. **Sam Torres has none**, on
+ * purpose — the Bruno `Time Off` folder records time off for Sam and must
+ * not trip the overlap block.
+ */
+export type DemoTimeOffStory =
+  | 'draft'
+  | 'pending'
+  | 'changes_requested'
+  | 'auto_approved'
+  | 'approved'
+  | 'recorded'
+  | 'declined'
+  | 'cancelled_after_approval';
+
+export interface DemoTimeOffRequestSpec {
+  /** Stable seed key: `demo:tor:<key>`. */
+  key: string;
+  /** `TeamMemberSpec.key` of the employee. */
+  employee: string;
+  story: DemoTimeOffStory;
+  week: number;
+  from: 0 | 1 | 2 | 3 | 4;
+  days: number;
+  /** The employee's note (or the recorder's, on a recorded entry). */
+  note?: string;
+  /** The reviewer's note on a decision. */
+  reviewerNote?: string;
+}
+
+export const DEMO_TIME_OFF_REQUESTS: DemoTimeOffRequestSpec[] = [
+  {
+    key: 'pat-draft',
+    employee: 'producer',
+    story: 'draft',
+    week: 6,
+    from: 0,
+    days: 3,
+  },
+  {
+    key: 'pat-changes',
+    employee: 'producer',
+    story: 'changes_requested',
+    week: 4,
+    from: 3,
+    days: 2,
+    note: 'Long weekend away.',
+    reviewerNote:
+      'Jordan is out that Thursday. Could you take the Friday only?',
+  },
+  {
+    key: 'pat-auto',
+    employee: 'producer',
+    story: 'auto_approved',
+    week: 2,
+    from: 0,
+    days: 2,
+  },
+  {
+    key: 'pat-recorded',
+    employee: 'producer',
+    story: 'recorded',
+    week: -3,
+    from: 2,
+    days: 1,
+    note: 'Called in sick.',
+  },
+  {
+    key: 'pat-declined',
+    employee: 'producer',
+    story: 'declined',
+    week: 3,
+    from: 0,
+    days: 5,
+    note: 'Family visiting.',
+    reviewerNote:
+      'Alex already asked for that week. Pick another and I will approve it.',
+  },
+  {
+    key: 'pat-cancelled',
+    employee: 'producer',
+    story: 'cancelled_after_approval',
+    week: 5,
+    from: 0,
+    days: 1,
+  },
+  {
+    key: 'alex-pending',
+    employee: 'producer-alex',
+    story: 'pending',
+    week: 3,
+    from: 0,
+    days: 5,
+    note: 'Visiting family out of state.',
+  },
+  {
+    key: 'jordan-pending',
+    employee: 'producer-jordan',
+    story: 'pending',
+    week: 2,
+    from: 1,
+    days: 4,
+  },
+  {
+    key: 'casey-approved',
+    employee: 'crm-casey',
+    story: 'approved',
+    week: 3,
+    from: 1,
+    days: 2,
+    reviewerNote: 'Enjoy.',
+  },
+  {
+    key: 'morgan-pending',
+    employee: 'producer-morgan',
+    story: 'pending',
+    week: 4,
+    from: 0,
+    days: 1,
+    note: 'Moving day.',
+  },
+];

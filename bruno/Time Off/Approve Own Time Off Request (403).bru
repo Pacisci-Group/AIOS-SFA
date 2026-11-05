@@ -1,0 +1,36 @@
+meta {
+  name: Approve Own Time Off Request (403)
+  type: http
+  seq: 26
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffOwnId}}/approve
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+
+  test("nobody decides their own request", function () {
+    expect(res.getBody().code).to.equal("own_request");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/approve — never your own
+
+  Enforced server-side on every decision: `403 { code: "own_request" }`.
+  Holding `hr:write` and a data scope that covers yourself changes nothing.
+}

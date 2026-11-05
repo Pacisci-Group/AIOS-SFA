@@ -1,0 +1,54 @@
+meta {
+  name: List Team Time Off Requests
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/time-off/requests
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("defaults to To review and contains the producer's request", function () {
+    const body = res.getBody();
+    expect(body.items.map((r) => r.id)).to.include(bru.getVar("timeOffRequestId"));
+    body.items.forEach((row) => expect(row.group).to.equal("pending"));
+  });
+
+  test("never lists the caller's own requests", function () {
+    res.getBody().items.forEach((row) =>
+      expect(row.employee.id).to.not.equal(bru.getVar("timeOffManagerId")),
+    );
+  });
+}
+
+docs {
+  # GET /time-off/requests — the team's requests (PAC-165)
+
+  Module `hr`, permission `hr:write` (the reviewer capability).
+
+  **Data scope**: the requests whose stamped branch the caller's scope
+  covers — `agency` reaches every branch, `branch` the caller's own, `own`
+  none; a branch-scoped caller with no branch reaches nothing. Never a
+  Draft, and never the caller's own requests (those are under
+  `/time-off/requests/mine` and are not theirs to decide).
+
+  Query: `group` (default **`pending`** — To review): `pending ·
+  changes_requested · approved · taken · declined · cancelled · imported`;
+  `q` (the employee's name or email); `policyId`; `employeeId`; `page`,
+  `pageSize` (≤ 100, default 25). Waiting requests come oldest first.
+
+  Returns `{ items[], total, page, pageSize }`, rows as in
+  `List My Time Off Requests`.
+
+  `403` — no `hr:write`.
+}

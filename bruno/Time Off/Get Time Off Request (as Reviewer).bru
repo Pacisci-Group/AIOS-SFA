@@ -1,0 +1,70 @@
+meta {
+  name: Get Time Off Request (as Reviewer)
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("shows the reviewer the request, the balance lines and who else is off", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("submitted");
+    expect(body.days.length).to.equal(3);
+    expect(body.balance).to.have.keys([
+      "currentBalance",
+      "otherRequestedHours",
+      "thisRequestHours",
+      "remainingHours",
+    ]);
+    expect(body.othersOff).to.be.an("array");
+    expect(body.timeline[0]).to.have.keys([
+      "at",
+      "actor",
+      "action",
+      "fromStatus",
+      "toStatus",
+      "note",
+      "warnings",
+    ]);
+  });
+
+  test("offers the three decisions", function () {
+    expect(res.getBody().actions).to.eql(["approve", "request_changes", "decline"]);
+  });
+}
+
+docs {
+  # GET /time-off/requests/:requestId — one request (PAC-165)
+
+  Module `hr`, permission `hr:read`. The caller's **own** request, or — with
+  `hr:write` — one whose branch their data scope covers. Anything else,
+  another person's Draft included, is a `404` (never a `403`, which would
+  confirm it exists).
+
+  Returns the list row plus:
+
+  - `days[]` — `{ date, hours, scheduledHours, reason }` for every date.
+  - `note`, and `timeline[]` — `{ at, actor, action, fromStatus, toStatus,
+    note, warnings }`, append-only; `actor: null` is the system (an automatic
+    approval, the import).
+  - `balance` and `projection` — the four lines and the projected lowest
+    balance **for that employee**, while the request is undecided; `null`
+    once decided and on an Unlimited policy.
+  - `actions[]` — what this caller may do now: `edit · submit · discard ·
+    cancel` for the employee, `approve · request_changes · decline · cancel`
+    for a reviewer. Never both: nobody decides their own request.
+  - `othersOff[]` — reviewers only: other people in the same branch with
+    Submitted or Approved leave on overlapping dates. Information, not a rule.
+}

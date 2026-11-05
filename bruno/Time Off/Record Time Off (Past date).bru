@@ -1,0 +1,73 @@
+meta {
+  name: Record Time Off (Past date)
+  type: http
+  seq: 29
+}
+
+post {
+  url: {{baseUrl}}/time-off/records
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "employeeId": "{{timeOffRecordeeId}}",
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torPast}}",
+    "lastDay": "{{torPast}}",
+    "dayMode": "full",
+    "note": "Called in sick."
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffRecordId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is Approved on creation, with both identities kept", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("approved");
+    expect(body.source).to.equal("recorded");
+    expect(body.group).to.equal("taken");
+    expect(body.employee.id).to.equal(bru.getVar("timeOffRecordeeId"));
+    expect(body.recordedBy.id).to.equal(bru.getVar("timeOffManagerId"));
+    expect(body.timeline.map((t) => t.action)).to.eql(["recorded"]);
+  });
+}
+
+docs {
+  # POST /time-off/records — record time off for someone else (PAC-165)
+
+  Module `hr`. Permissions `hr:write` **and** `agency:users:read` — both, and
+  no new permission string. Agency Owner and Branch Manager hold both.
+
+  Body `{ employeeId, policyId, firstDay, lastDay, dayMode, hours?, note? }`.
+  `note` is for the employee.
+
+  The request is created **already Approved**: there is no review, the
+  policy's auto-approval rules are not consulted, and its `used` ledger rows
+  are posted in the same transaction. Dates may be in the past (a sick day
+  called in). Both identities are stored — `employee` (whose time off) and
+  `recordedBy` (who recorded it) — and the single timeline entry is
+  `recorded`, carrying any `warnings` it was saved with. The employee is
+  notified (`time_off.recorded`).
+
+  Recording for yourself is not offered: your own time off is always a
+  request somebody else decides.
+
+  `400` — a blocker (`code` + `blockers[]`), or `own_request`. `403` — the
+  person is outside the caller's data scope, or a permission is missing.
+  `404` — not a person of this agency.
+}

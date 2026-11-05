@@ -1,0 +1,54 @@
+meta {
+  name: Approve Time Off Request
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}/approve
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "note": "Enjoy."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is Approved, by the reviewer", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("approved");
+    expect(body.autoApproved).to.equal(false);
+    expect(body.actions).to.eql(["cancel"]);
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/approve — approve (PAC-165)
+
+  Module `hr`, permission `hr:write`; in the caller's data scope, not their
+  own. Body `{ note? }`.
+
+  Submitted → **Approved**, and one `used` row per leave day is posted to
+  `leaveLedger`, **dated on that day** — so a request spanning a reset lands
+  in the right periods. The status change and the rows commit together; the
+  rows carry a unique key per request and day, so the hours cannot be posted
+  twice. The employee is notified (`time_off.approved`).
+
+  The balance is not re-checked: the reviewer sees the live lines and
+  decides. Approval **is** refused when the policy has been archived or the
+  employee is no longer in it or with the agency.
+
+  `403 own_request` · `404` out of scope · `409 already_decided` (first
+  decision wins; the body carries the record) · `409 policy_unavailable`.
+}

@@ -1,0 +1,54 @@
+meta {
+  name: List My Time Off Requests
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/time-off/requests/mine?group=pending
+  auth: bearer
+}
+
+params:query {
+  group: pending
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the caller's own requests, filed by group", function () {
+    const body = res.getBody();
+    expect(body.items.map((r) => r.id)).to.include(bru.getVar("timeOffRequestId"));
+    body.items.forEach((row) => {
+      expect(row.group).to.equal("pending");
+      expect(row.employee.id).to.equal(bru.getVar("timeOffProducerId"));
+    });
+  });
+}
+
+docs {
+  # GET /time-off/requests/mine — the caller's own requests (PAC-165)
+
+  Module `hr`, permission `hr:read`. **Always pinned to the caller** — a role
+  that only reads opens nobody else's leave, whatever its data scope.
+
+  Query: `group` (one, several comma-separated or repeated; none = all):
+  `changes_requested · draft · pending · approved · taken · declined ·
+  cancelled · imported`; `page`, `pageSize` (≤ 100, default 50).
+
+  `group` is how the page files a request, not its stored status: `pending`
+  is Submitted, `taken` is Approved leave whose last day has passed (derived
+  from the dates), `imported` is a read-only row migrated from SmartSuite.
+
+  Returns `{ items[], total, page, pageSize }`; each row
+  `{ id, reference, source, status, group, employee, recordedBy, policy,
+  firstDay, lastDay, dayMode, totalHours, autoApproved, submittedAt,
+  createdAt, legacy }`. `recordedBy` is set when someone recorded the time
+  off for the employee.
+}

@@ -1,0 +1,60 @@
+meta {
+  name: Preview Recorded Time Off
+  type: http
+  seq: 28
+}
+
+post {
+  url: {{baseUrl}}/time-off/records/preview
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "employeeId": "{{timeOffRecordeeId}}",
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torPast}}",
+    "lastDay": "{{torPast}}",
+    "dayMode": "full"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a past date is not a blocker when recording", function () {
+    const body = res.getBody();
+    expect(body.blockers).to.eql([]);
+    expect(body.warnings).to.be.an("array");
+    expect(body.balance.currentBalance).to.equal(80);
+  });
+}
+
+docs {
+  # POST /time-off/records/preview — what a recorded entry would amount to (PAC-165)
+
+  Module `hr`. Permissions `hr:write` **and** `agency:users:read`.
+
+  The preview's body plus `employeeId` — somebody in the caller's data scope,
+  never the caller. Returns the same shape as
+  `Preview Time Off Request`, **for that person**, with two differences:
+
+  - dates may be in the past;
+  - the usage waiting period, the Sick yearly usage cap and a negative
+    balance come back in `warnings[]` rather than `blockers[]` — a recorded
+    entry is warned about them and saved anyway.
+
+  Still `blockers`: `not_enrolled`, `policy_unavailable`,
+  `no_scheduled_hours`, `span_too_long`, `overlap`, and `old_period` (a day
+  before the policy's last reset — adjust the balance instead).
+
+  `400 own_request` — recording for yourself. `403` — outside the caller's
+  scope, or missing a permission. `404` — not in this agency.
+}
