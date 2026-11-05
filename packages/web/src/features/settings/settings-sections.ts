@@ -1,6 +1,7 @@
-import { AgencyPermission } from "@sfa/shared";
+import { AgencyPermission, ModuleKey } from "@sfa/shared";
 import {
   AtSign,
+  Banknote,
   BadgeCheck,
   Clock,
   Globe,
@@ -18,6 +19,13 @@ export interface SettingsSection {
   icon: LucideIcon;
   /** Read permission that both reveals the card and guards the route. */
   permission: string;
+  /**
+   * The module the section belongs to, when it has one. The card is hidden
+   * while the module is switched off — the page behind it would 403 — even
+   * from someone holding {@link permission}, since `agency:*` keys are not
+   * filtered by module the way page permissions are.
+   */
+  module?: ModuleKey;
 }
 
 /**
@@ -91,6 +99,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "The agency code each carrier that appointed you issued.",
     icon: BadgeCheck,
     permission: AgencyPermission.CarrierAppointmentsRead,
+  },
+  {
+    to: "/settings/payouts",
+    label: "Payouts",
+    description:
+      "Commission rates per carrier, bonuses, and who is paid on which structure.",
+    icon: Banknote,
+    permission: AgencyPermission.PayoutsAdmin,
+    module: ModuleKey.Payouts,
   },
 ];
 

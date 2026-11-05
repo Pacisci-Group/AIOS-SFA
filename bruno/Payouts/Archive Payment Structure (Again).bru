@@ -1,0 +1,27 @@
+meta {
+  name: Archive Payment Structure (Again)
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/payouts/structures/{{payoutsStructureId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 409", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST /payouts/structures/:id/archive — refused: already archived
+
+  A second archive is a `409`, so a stale page cannot report a success that
+  did nothing.
+}

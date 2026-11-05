@@ -26,11 +26,12 @@ import { SETTINGS_SECTIONS } from './settings-sections';
  * page is owner-only — it holds no secrets of its own, it is a list of links.
  */
 export default function WorkspaceSettingsPage() {
-  const { can } = usePermissions();
+  const { can, canRead } = usePermissions();
   const { branding } = useTenant();
 
-  const sections = SETTINGS_SECTIONS.filter((section) =>
-    can(section.permission),
+  const sections = SETTINGS_SECTIONS.filter(
+    (section) =>
+      can(section.permission) && (!section.module || canRead(section.module)),
   );
 
   return (

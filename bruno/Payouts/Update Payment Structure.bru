@@ -1,0 +1,103 @@
+meta {
+  name: Update Payment Structure
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/payouts/structures/{{payoutsStructureId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "{{payoutsStructureName}}",
+    "rules": [
+      { "carrier": "Allstate", "ratePercent": 12.5, "minBundleRatePercent": null },
+      { "carrier": "*", "ratePercent": 5, "minBundleRatePercent": 60 }
+    ],
+    "leadSourceRules": [
+      { "leadSourceId": "{{payoutsLeadSourceId}}", "carrier": "*", "ratePercent": 4 },
+      { "leadSourceId": "{{payoutsLeadSourceId}}", "carrier": "Allstate", "ratePercent": 4.5 }
+    ],
+    "hatTrick": { "enabled": false, "dealsPerDay": 3, "bonusAmount": 50 },
+    "individualTiers": [],
+    "tiersStackable": false,
+    "teamBonusEligible": false,
+    "memberIds": [],
+    "expectedUpdatedAt": "{{payoutsStructureUpdatedAt}}"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("replaced the whole structure", function () {
+    // Allstate's minimum cleared, one set on the catch-all instead.
+    expect(res.getBody().rules).to.deep.equal([
+      { carrier: "Allstate", ratePercent: 12.5, minBundleRatePercent: null },
+      { carrier: "*", ratePercent: 5, minBundleRatePercent: 60 }
+    ]);
+    expect(res.getBody().hatTrick.enabled).to.equal(false);
+    expect(res.getBody().individualTiers).to.deep.equal([]);
+    expect(res.getBody().tiersStackable).to.equal(false);
+    expect(res.getBody().teamBonusEligible).to.equal(false);
+  });
+
+  test("replaced the lead-source rates, the source's carrier rule before its any-carrier one", function () {
+    const rules = res.getBody().leadSourceRules.map(function (r) {
+      return [r.leadSourceName, r.carrier, r.ratePercent];
+    });
+    const name = bru.getVar("payoutsLeadSourceName");
+    expect(rules).to.deep.equal([
+      [name, "Allstate", 4.5],
+      [name, "*", 4]
+    ]);
+  });
+
+  test("is a new version", function () {
+    expect(res.getBody().updatedAt).to.not.equal(bru.getVar("payoutsStructureUpdatedAt"));
+  });
+}
+
+docs {
+  # PATCH /payouts/structures/:id — replace a structure (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  **Body** — the whole structure, exactly as **Create Payment Structure**,
+  plus:
+  | field | rules |
+  |---|---|
+  | expectedUpdatedAt | **required**; ISO-8601 date-time — the `updatedAt` of the copy the edit started from (**Get Payment Structure**). The write only lands on that version. |
+
+  Members it gains leave whichever active structure they were on, in the same
+  transaction (which also bumps those structures' `updatedAt`). A member who
+  has since been removed from the agency may stay; only adding one is
+  refused. Saves within one agency are serialised, so two saves that both add
+  the same person leave them on exactly one structure.
+
+  **Response `200`** — the structure as **Get Payment Structure** returns it,
+  with a new `updatedAt`.
+
+  **Errors** — as **Create Payment Structure** (a missing or malformed
+  `expectedUpdatedAt` is a `400`), plus:
+  - `404` — an unknown id.
+  - `409` `{ message: "This structure is archived." }` — it is archived.
+  - `409` `PAYMENT_STRUCTURE_STALE` — `expectedUpdatedAt` is not the stored
+    version: the structure was saved somewhere else (another tab or admin, or
+    a save of another structure that took one of its members) since it was
+    loaded. Reload and edit the latest version. See **Update Payment
+    Structure (Stale)**.
+}
