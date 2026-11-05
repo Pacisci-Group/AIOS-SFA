@@ -1,0 +1,61 @@
+meta {
+  name: List Payout People
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/payouts/structures/people
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("each person says which structure they are on", function () {
+    const people = res.getBody().people;
+    expect(people).to.be.an("array");
+    if (people.length) {
+      expect(people[0]).to.have.all.keys(
+        "id", "name", "email", "roles", "status", "branchName", "structure"
+      );
+    }
+  });
+}
+
+docs {
+  # GET /payouts/structures/people — who can be put on a structure (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  Everyone in the agency who has not been removed — invitees included, so a
+  structure can be ready before someone's first day — with their role names,
+  branch, and the **active structure they are on today** (`null` for none).
+  The structure editor's people step uses it to say "moves from …" before
+  anything is saved. Platform admins are never listed.
+
+  **Response `200`**
+  ```json
+  {
+    "people": [
+      {
+        "id": "…",
+        "name": "Pat Producer",
+        "email": "pat@agency.com",
+        "roles": ["Producer"],
+        "status": "active",
+        "branchName": "Main",
+        "structure": { "id": "…", "name": "Producers" }
+      }
+    ]
+  }
+  ```
+  `status` is `active` or `invited` here; `deactivated` only appears on a
+  structure's members (see **Get Payment Structure**).
+}

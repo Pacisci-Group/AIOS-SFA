@@ -240,6 +240,17 @@ temperature/aging that aren't first-class in legacy payloads. See
   matching from classification, so setting someone's code re-classifies a
   stored run without re-reading the file. Agency-wide by design: data scope is
   not applied.
+- `docs/plans/pac-176-payouts-implementation-plan.md` — Payouts (PAC-176, epic;
+  sub-stories PAC-177…182): payment structures (rates per carrier with optional
+  minimum bundle rates, lead-source rate overrides, hat trick, monthly tiers that
+  may stack, team-bonus eligibility, members), agency-wide team bonus (levels
+  that may stack) and Salesperson of the Month, the monthly commission
+  statement, the carrier chargeback import and the employee's sign-off. Module
+  `payouts`; structures and settings are `agency:payouts:admin`. ⚠
+  **`payouts:read` is own statements only, whatever the role's data scope** —
+  CRM (branch) and Data Team (agency) hold it too, so reading anyone else's pay
+  needs `payouts:write`, which is where data scope applies. Stacked on the
+  PAC-173 chain (#162).
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

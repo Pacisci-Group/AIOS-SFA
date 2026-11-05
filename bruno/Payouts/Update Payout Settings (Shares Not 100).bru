@@ -1,0 +1,53 @@
+meta {
+  name: Update Payout Settings (Shares Not 100)
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/payouts/settings
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "teamBonus": {
+      "enabled": true,
+      "stackable": true,
+      "levels": [
+        { "thresholdPremium": 300000, "poolAmount": 3000 },
+        { "thresholdPremium": 350000, "poolAmount": 3000 }
+      ],
+      "csrSharePercent": 30,
+      "producerSharePercent": 80
+    }
+  }
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("says why", function () {
+    expect(JSON.stringify(res.getBody())).to.contain(
+      "The CSR and producer shares must add up to 100%."
+    );
+  });
+}
+
+docs {
+  # PATCH /payouts/settings — refused: the split is 110%
+
+  The shared rule `teamSplitError` — the same one the settings form runs —
+  attached to the section. Nothing is written.
+}

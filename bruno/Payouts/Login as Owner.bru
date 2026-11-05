@@ -1,0 +1,51 @@
+meta {
+  name: Login as Owner
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{ownerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("payoutsOwnerToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("the owner holds the payouts admin key and the page", function () {
+    const perms = res.getBody().user.permissions;
+    // `agency:payouts:admin` reaches existing owners from the
+    // `payouts_module` migration; the page pair through the enabled module.
+    expect(perms).to.include("agency:payouts:admin");
+    expect(perms).to.include("payouts:read");
+  });
+}
+
+docs {
+  # POST /auth/login — Payouts folder helper (PAC-177)
+
+  Captures `payoutsOwnerToken` for the requests below, and checks the owner
+  holds `agency:payouts:admin` — granted to existing owners by migration
+  `20261104120000-payouts_module.js`, not by the role template. If that
+  assertion fails against an existing database, the migration has not run.
+}

@@ -35,6 +35,18 @@ export enum ModuleKey {
    * `carrier_reconciliation_module` migration copies the resulting 150/151.
    */
   CarrierReconciliation = 'carrier_reconciliation',
+  /**
+   * Payouts (PAC-176): payment structures, the monthly commission statement
+   * each producer and CSR receives, the carrier chargeback report and the
+   * employee's sign-off. `payouts:read` is **your own statements only**,
+   * whatever the role's data scope — pay is private, and a branch-scoped CRM
+   * or the agency-scoped Data Team must not read colleagues' pay through a
+   * page permission every employee holds. Seeing other people's statements is
+   * `payouts:write`, where data scope applies. Appended last for the same
+   * reason as `DataExport` — the `payouts_module` migration copies the
+   * resulting 160/161.
+   */
+  Payouts = 'payouts',
 }
 
 export const ALL_MODULE_KEYS = Object.values(ModuleKey);

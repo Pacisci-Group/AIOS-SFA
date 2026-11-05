@@ -97,6 +97,12 @@ const EmailSenderPage = lazy(
 const CarrierAppointmentsPage = lazy(
   () => import('@/features/settings/CarrierAppointmentsPage'),
 );
+const PayoutSettingsPage = lazy(
+  () => import('@/features/payouts/settings/PayoutSettingsPage'),
+);
+const StructureEditorPage = lazy(
+  () => import('@/features/payouts/settings/StructureEditorPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -792,6 +798,49 @@ export function App() {
                     </LazyPage>
                   }
                 />
+              </Route>
+
+              {/*
+                Payouts settings (PAC-177): payment structures and the
+                agency-wide bonuses. Two gates — the admin key, and the module
+                being on (the owner holds `payouts:read` only while it is) —
+                so a switched-off module never shows a page that 403s.
+              */}
+              <Route
+                element={
+                  <RequirePermission permission={AgencyPermission.PayoutsAdmin} />
+                }
+              >
+                <Route
+                  element={
+                    <RequirePermission permission={`${ModuleKey.Payouts}:read`} />
+                  }
+                >
+                  <Route
+                    path="/settings/payouts"
+                    element={
+                      <LazyPage>
+                        <PayoutSettingsPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    path="/settings/payouts/structures/new"
+                    element={
+                      <LazyPage>
+                        <StructureEditorPage />
+                      </LazyPage>
+                    }
+                  />
+                  <Route
+                    path="/settings/payouts/structures/:id"
+                    element={
+                      <LazyPage>
+                        <StructureEditorPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
               </Route>
 
               {/* Owner-only user directory */}

@@ -107,6 +107,12 @@ export const PAGES: PageDefinition[] = [
     description:
       "Reconcile the carrier's monthly new-business report against the agency's sales: policies missing from the app, app policies the carrier does not show, 1-800 policies for review and producer-credit mismatches. Edit uploads reports, reviews rows and re-checks a run against the staff's Allstate codes.",
   },
+  {
+    moduleKey: ModuleKey.Payouts,
+    label: 'Payouts',
+    description:
+      'Your own monthly commission statements: open, accept or dispute them. Edit lets a manager review, adjust and send the statements of the people in their scope.',
+  },
 ];
 
 export interface PageLevelOverride {

@@ -1,0 +1,49 @@
+meta {
+  name: Login as Producer
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("payoutsProducerToken", res.getBody().accessToken);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("a producer reads their own statements and nothing more", function () {
+    const perms = res.getBody().user.permissions;
+    expect(perms).to.include("payouts:read");
+    expect(perms).to.not.include("payouts:write");
+    expect(perms).to.not.include("agency:payouts:admin");
+  });
+}
+
+docs {
+  # POST /auth/login — Payouts folder helper
+
+  Captures `payoutsProducerToken`. Every role template holds `payouts:read`
+  (own statements only, whatever the role's data scope); none but the owner
+  holds `agency:payouts:admin`.
+}

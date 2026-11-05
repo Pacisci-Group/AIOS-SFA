@@ -1,0 +1,50 @@
+meta {
+  name: Create Payment Structure (Duplicate Name)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/payouts/structures
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "  {{payoutsStructureName}}  ",
+    "rules": [{ "carrier": "*", "ratePercent": 5 }],
+    "leadSourceRules": [],
+    "hatTrick": { "enabled": false, "dealsPerDay": 3, "bonusAmount": 0 },
+    "individualTiers": [],
+    "tiersStackable": false,
+    "teamBonusEligible": true,
+    "memberIds": []
+  }
+}
+
+tests {
+  test("returns 409", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("names the conflict", function () {
+    expect(res.getBody().code).to.equal("PAYMENT_STRUCTURE_NAME_TAKEN");
+  });
+}
+
+docs {
+  # POST /payouts/structures — refused: the name is taken
+
+  Names are compared trimmed, case-insensitively and with runs of spaces
+  collapsed, among **active** structures only — archiving one frees its name.
+  A unique partial index on `{ agencyId, nameKey }` holds the rule under a race.
+}

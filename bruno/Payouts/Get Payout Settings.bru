@@ -1,0 +1,66 @@
+meta {
+  name: Get Payout Settings
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/payouts/settings
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every field is present, defaults filled in", function () {
+    const body = res.getBody();
+    expect(body.teamBonus).to.have.all.keys(
+      "enabled", "stackable", "levels", "csrSharePercent", "producerSharePercent"
+    );
+    expect(body.teamBonus.levels).to.be.an("array");
+    expect(body.salespersonOfMonth).to.have.all.keys("enabled", "bonusAmount");
+  });
+}
+
+docs {
+  # GET /payouts/settings — the agency's payout settings (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin` (the owner's
+  by default; a Branch Manager holds `payouts:write` and is refused).
+
+  **Response `200`**
+  ```json
+  {
+    "teamBonus": {
+      "enabled": false,
+      "stackable": false,
+      "levels": [{ "thresholdPremium": 300000, "poolAmount": 0 }],
+      "csrSharePercent": 20,
+      "producerSharePercent": 80
+    },
+    "salespersonOfMonth": { "enabled": false, "bonusAmount": 0 }
+  }
+  ```
+  - **teamBonus** — `levels` (lowest threshold first): each level whose
+    `thresholdPremium` the agency's sold premium for the month reaches pays
+    its fixed `poolAmount`. **`stackable: true`** — every level reached pays
+    and the pools add up ($300,000 → $3,000 and $350,000 → $3,000 is $6,000 at
+    $360,000); **`false`** — only the highest level reached pays. The pool is
+    split `csrSharePercent` among CSRs and `producerSharePercent` among
+    producers, each by their share of their group's premium. Only people on a
+    structure with `teamBonusEligible` take part.
+  - **salespersonOfMonth** — a fixed bonus for the month's top seller.
+
+  Stored on `Agency.payouts`. An agency that never saved them reads the
+  defaults above (`DEFAULT_TEAM_BONUS`, `DEFAULT_SALESPERSON_OF_MONTH`); there
+  is no backfill.
+
+  **Errors** — `403` without `agency:payouts:admin`, or with the `payouts`
+  module switched off.
+}

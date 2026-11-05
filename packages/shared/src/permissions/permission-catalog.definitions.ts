@@ -186,6 +186,11 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
     description:
       'Change the agency’s time zone, which every dashboard’s day is cut on, and the hour everyone in the agency is set Away each night.',
   },
+  [AgencyPermission.PayoutsAdmin]: {
+    label: 'Administer payouts',
+    description:
+      'Set up payment structures and who is on them, the team bonus and Salesperson of the Month, import the carrier chargeback report and generate a month’s commission statements.',
+  },
 };
 
 function moduleDefinitions(): PermissionDefinition[] {

@@ -1,0 +1,81 @@
+meta {
+  name: Update Payout Settings
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/payouts/settings
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "teamBonus": {
+      "enabled": false,
+      "stackable": false,
+      "levels": [{ "thresholdPremium": 300000, "poolAmount": 0 }],
+      "csrSharePercent": 20,
+      "producerSharePercent": 80
+    }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("echoes the stored section", function () {
+    expect(res.getBody().teamBonus.stackable).to.equal(false);
+    expect(res.getBody().teamBonus.levels).to.deep.equal([
+      { thresholdPremium: 300000, poolAmount: 0 }
+    ]);
+    expect(res.getBody().teamBonus.csrSharePercent).to.equal(20);
+    expect(res.getBody().teamBonus.producerSharePercent).to.equal(80);
+  });
+}
+
+docs {
+  # PATCH /payouts/settings — change the team bonus and/or Salesperson of the Month (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  **Body** — `teamBonus`, `salespersonOfMonth`, or both; at least one. A
+  section that is sent is sent **whole** (every field), so a stored section
+  never mixes new levels with an old split. Numbers are JSON numbers —
+  `"5000"` is refused.
+
+  | field | rules |
+  |---|---|
+  | teamBonus.enabled | boolean |
+  | teamBonus.stackable | boolean — every level reached pays (pools add up), or only the highest |
+  | teamBonus.levels[] | `{ thresholdPremium, poolAmount }`, at most 20; at least one while `enabled`. Thresholds more than $0 and distinct; amounts in dollars, 0 – 10,000,000, two decimals. When **not** stackable a higher level may not pay a smaller pool than the one below. Stored lowest threshold first. |
+  | teamBonus.csrSharePercent, producerSharePercent | 0 – 100, at most two decimals, **must add up to 100** |
+  | salespersonOfMonth.enabled | boolean |
+  | salespersonOfMonth.bonusAmount | dollars, as above |
+
+  The request sends the defaults, so repeated runs leave the demo tenant
+  where they found it.
+
+  **Response `200`** — the same shape as **Get Payout Settings**.
+
+  **Errors**
+  - `400` — empty body, an unknown field (the old `thresholdPremium` /
+    `poolAmount` included), a string where a number belongs, a third decimal,
+    shares that do not add up to 100%, or levels the rules above refuse
+    ("Add at least one team bonus level.", "Two levels have the same
+    threshold.", "A higher level cannot pay less than the level below it,
+    unless the levels stack."). The reason is in `errors.formErrors` /
+    `errors.fieldErrors`.
+  - `403` — without `agency:payouts:admin`.
+}

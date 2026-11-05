@@ -1,0 +1,39 @@
+meta {
+  name: List Payment Structures
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/payouts/structures
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the structure created above", function () {
+    const ids = res.getBody().structures.map(function (s) {
+      return s.id;
+    });
+    expect(ids).to.include(bru.getVar("payoutsStructureId"));
+  });
+}
+
+docs {
+  # GET /payouts/structures — the agency's active structures (PAC-177)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  **Response `200`** — `{ "structures": PaymentStructureSummary[] }`, by name:
+  each structure as **Get Payment Structure** returns it, without `members`
+  (lead-source rates included, named). `memberCount` counts people who have
+  not been removed from the agency.
+  Archived structures are not listed.
+}
