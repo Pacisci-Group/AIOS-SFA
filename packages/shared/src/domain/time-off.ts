@@ -6,10 +6,12 @@ import { choiceVocabulary } from './choice-vocabulary';
  * One table, four selects, so one module — splitting them into four files would
  * scatter a single source of record for no gain.
  *
- * Nothing reads this collection yet: no controller, no service, no component.
- * It is normalized anyway because the cost is a lookup table and the alternative
- * is leaving `FEJyv` in the database for whoever builds the time-off screen to
- * rediscover. Labels from `docs/smartsuite-tables/The Time Off Request Table.md`.
+ * ⚠ **The legacy vocabulary only** (PAC-165). These are the SmartSuite labels
+ * the import writes under `TimeOffRequest.legacy.*` — display-only history on
+ * rows nothing may act on. A request made in the app uses the lifecycle in
+ * `time-off-request.ts` (`TimeOffRequestStatus`, `TimeOffDayMode`) and a time
+ * off *policy*, not the `Unpaid / PTO / Sick` label; do not map one onto the
+ * other. Labels from `docs/smartsuite-tables/The Time Off Request Table.md`.
  */
 
 /** Field `s4de941e84` (line 21). */

@@ -29,7 +29,8 @@ export type NotificationCategory =
   | 'goals'
   | 'service'
   | 'campaigns'
-  | 'attendance';
+  | 'attendance'
+  | 'hr';
 
 export interface NotificationChannelDefaults {
   /** The email channel through the existing worker pipeline. */
@@ -55,6 +56,70 @@ export const NOTIFICATION_TYPES = {
    */
   'bug_report.filed': {
     category: 'platform',
+    defaultChannels: { email: true, push: true },
+  },
+
+  /*
+   * Time off requests (PAC-165). Every type below is emitted by
+   * `TimeOffRequestsService` after the request's own write has committed and
+   * links to the request (`/time-off/requests/<id>`). They share one `data`
+   * shape: `{ requestId, reference, employeeName, actorName, policyName,
+   * firstDay, lastDay, totalHours, note }` plus the flag named on the row.
+   *
+   * "Reviewers" are the `hr:write` holders whose data scope covers the
+   * request, minus the employee and whoever acted. There is no fallback
+   * audience: with no reviewer nothing is sent (decided 2026-11-05).
+   */
+
+  /** Sent or resent for review (`data.resubmitted`). To the reviewers. */
+  'time_off.submitted': {
+    category: 'hr',
+    defaultChannels: { email: true, push: true },
+  },
+  /** A reviewer asked for changes; the note is theirs. To the employee. */
+  'time_off.changes_requested': {
+    category: 'hr',
+    defaultChannels: { email: true, push: true },
+  },
+  /** Approved by a reviewer, or by the policy's rules (`data.automatic`). To the employee. */
+  'time_off.approved': {
+    category: 'hr',
+    defaultChannels: { email: true, push: true },
+  },
+  /**
+   * The policy approved a request on its own; nobody has anything to do. To
+   * the reviewers, **in-app only** — an email saying "no action needed" is
+   * the kind that teaches people to ignore the ones that need them.
+   */
+  'time_off.auto_approved_notice': {
+    category: 'hr',
+    defaultChannels: { email: false, push: false },
+  },
+  /** Declined, with the reviewer's reason. To the employee. */
+  'time_off.declined': {
+    category: 'hr',
+    defaultChannels: { email: true, push: true },
+  },
+  /**
+   * Approved leave was cancelled. `data.cancelledBy` says by whom: a
+   * reviewer → to the employee; the employee → to the reviewers, who planned
+   * around it. Withdrawing a request nobody had decided notifies no one.
+   */
+  'time_off.approval_cancelled': {
+    category: 'hr',
+    defaultChannels: { email: true, push: true },
+  },
+  /** Time off was recorded on the employee's behalf, already approved. To the employee. */
+  'time_off.recorded': {
+    category: 'hr',
+    defaultChannels: { email: true, push: true },
+  },
+  /**
+   * An HR admin adjusted a balance by hand. To the employee.
+   * `data`: `{ policyName, hours (signed), reason, actorName }`.
+   */
+  'time_off.balance_adjusted': {
+    category: 'hr',
     defaultChannels: { email: true, push: true },
   },
 } as const satisfies Record<string, NotificationTypeDefinition>;
