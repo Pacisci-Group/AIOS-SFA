@@ -726,3 +726,82 @@ To put into the ticket once approved (not edited until then):
   fields ignore `form.reset` — the per-date hours are an object.
 - `text-destructive` is the amber token; raw palette classes break light
   mode.
+
+## As built (2026-11-05, branch `asad/pac-165-time-off-requests`)
+
+Ten commits over `asad/pac-162-people-page` in the order of §6 (plan ·
+shared · ledger · schema + migration · requests API · recording + adjustment
++ profile · Bruno + seed · web employee side · web reviewer side · this
+record), each green on its own.
+
+| Topic | Plan | Built | Why |
+|---|---|---|---|
+| Notification types | "seven" | **Eight** — §4's table lists eight; the count in §1 and §6 was wrong | — |
+| `availableHours` on the profile type (§6.1) | commit 1 | Commit 5, with the code that fills it | A required field with nothing writing it would not have built |
+| Balance read for the screens (§2.6) | `TimeOffBalanceService` "four lines" | `position()` → current balance, other requested hours, available, the other leave **by date** and the hours used this period; the lines and the projection are built from it | The projection needs the per-date leave, not a total |
+| Ledger | three writers + `balances(asOf)` | Plus `leaveDays(…, {from, before})` — net leave per day and per request | What "other requested" per date and "used this period" both read |
+| Scope (§2.8) | one `coversBranch` helper | `time-off-access.ts`: `coversBranch`, `holdsReview`, `reviewsBranch`, `reviewScopeFilter`; `buildScopeFilter` is not used on this collection at all | It takes no permission and skips the clamp for a null branch — both wrong here |
+| Legacy timeline (§2.13) | one `imported` entry | The migration writes it; the SmartSuite import writes it **on insert only** (`persist` gained a `setOnInsert` argument) | A re-import must not move the "imported" date |
+| Migration rehearsal (§7) | a copy of `sfa` through a second API on 4999 | The file was developed outside `migrations/` and run with `up(db)` against a throwaway copy of the collection (36 rows → `legacy`, no `status`, days derived, both indexes dropped, a second run 0 rows), then moved in | Asad's `api:dev` watch server was running and applies any file in `migrations/` on its next restart — it then applied the finished one to local `sfa` |
+| Demo seed (§6.6) | requests in every state | As planned, ten requests across five people, plus: the pre-PAC-165 `demo:too:*` rows are removed, `purge` deletes a demo request's ledger rows with it, and **Sam Torres is left with none** | Bruno records time off for Sam; the hard overlap block would otherwise trip |
+| Bruno (§6.6) | the listed requests | 36 requests, 69 tests; its own **Custom** policy with a reset date six months out; the recorded entry is cancelled and both policies archived, so the folder re-runs | Custom moves nobody out of the demo's PTO; a recorded day left behind would block the next run |
+| Employee card (§5) | the policy line from `summarizeTimeOff` | The policy's kind ("Paid Time Off") | The summary read carries no rules, and the card does not need them |
+| Web commits (§6.7–8) | review actions in commit 8 | The request window, with every action the API lists, is in commit 7; commit 8 adds the Team tab, recording, the profile entry points and `FacetChips` | One component renders `actions[]` for both people |
+| Confirmations | `AlertDialog` for cancel / discard | One `DecisionDialog` for every action that asks — the note field is hidden on Discard | One idiom; four of the six take a note |
+| Shortfall message | names the date | Names the date only when it is still to come | A past-dated record read "short on (today)" |
+| Hours typed on Partial days | 0…scheduled, step 0.25 | The DTO accepts 0–24 in quarter hours; the pure function clamps to the date's schedule | The schedule is the server's to know |
+
+**Verification.** Shared jest 404 (53 new: request maths, projection,
+renderers). API unit 1,471 (13 new: access helper, DTOs). API e2e:
+`time-off-requests` 35, and with `hr-policies`, `people`,
+`worker/accrue-time-off` (10, six new: the as-of balance, the three writers,
+a reset with next-period leave), `deliver-notification`, `notifications`,
+`users-deactivate`, `profile` — 10 suites, 175 tests, all green. API
+`nest build`, web `tsc` + build on every commit. Bruno `Time Off/` 36/36
+requests, 69/69 tests, twice in a row. The migration applied to the local
+`sfa` database (changelog `20261105190000-time_off_requests_v2.js`): 36 rows
+`legacy`, the four new indexes built, `status_1` and `producerId_1` gone.
+The demo seed ran after it.
+
+Browser, on the local dev servers (`localhost:5173` → API 4000). As the
+demo producer: the HR section with Time off and no People; two cards
+(Paid time off 40 h available · 72 h balance · 32 h requested); My requests
+in six groups; the form for 28 Dec – 4 Jan — 40 h with New Year's Day a
+Holiday and the weekend at 0 h, the four lines and the fifth ("Lowest
+projected balance 8 h on Thu, Dec 31"); a single day defaulting the last
+day from the first; Save as draft → the request window (details, balance,
+timeline, Edit · Discard · Send) → Discard with its confirmation. As the
+demo Branch Manager: Team opening on To review (Alex, Jordan); Alex's
+request with Thanksgiving and the day after as Holidays, the balance lines,
+"Also off: Casey Kim, Nov 24 – 25, Approved"; Request changes refused
+without a note and accepted with one, the timeline updating in place; the
+profile's Time off card with Available beside Balance, Requests, Record
+time off and Adjust; the record form for a past date on a policy with no
+hours — a warning, and Record still enabled; the Adjust balance sheet.
+Light theme and a 375 px viewport (no horizontal overflow). Notifications
+arrived in the demo users' notification centres through the real worker —
+`time_off.submitted` (and a resend as its own row), `changes_requested`,
+`approved`, `declined`, `approval_cancelled` — each linking to its request.
+
+**Not run.** In the browser: Approve, Decline, cancelling approved leave,
+saving a recorded entry and saving a balance adjustment (each covered by
+e2e and by the Bruno folder against the same API), an automatic approval,
+and the owner's agency-wide Team list. The SmartSuite import's new shape
+was typechecked, not run (no SmartSuite access from here). The email and
+push channels of the new notification types were not opened. Nothing was
+run against production.
+
+**Full Bruno collection.** 391 requests: 351 passed, 39 failed, 925/1017
+tests. No failure is in `Time Off`, `HR` or `People`, and this branch
+changes nothing under `auth`, `leads`, `quote-recaps` or `sold-deals`. The
+failures are `Auth/Me` (the test's key list predates the `phone` field
+PAC-162 added to the auth blob — one line to fix on that branch), a cascade
+of 404s through Leads → Quote Recaps → Sold Deals from one lead-date
+request, and two Platform Mailer Campaigns re-run cases. They were not
+compared against a run of the base branch.
+
+**e2e flake.** `hr-policies` › "refuses what the model cannot hold" failed
+once when run alongside two other suites and passed on every run since,
+alone and in the group; it does not touch this ticket's code.
+
+**Assumptions (§9)** all taken as written; none corrected before the build.
