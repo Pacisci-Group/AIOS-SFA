@@ -29,6 +29,7 @@ import {
   usageAllowedFrom,
   type AccessContext,
   type NotificationType,
+  type RecordablePersonView,
   type TimeOffBalanceLines,
   type TimeOffCheck,
   type TimeOffCheckCode,
@@ -497,6 +498,224 @@ export class TimeOffRequestsService {
         'Only a draft can be discarded. Cancel the request instead.',
       );
     }
+  }
+
+  // ── Recording for someone else ─────────────────────────────────────────
+
+  /**
+   * The people the caller may record time off for, with the policies each
+   * is in: active people whose home branch the caller's data scope covers,
+   * never the caller. The route requires both `hr:write` and
+   * `agency:users:read` (decided 2026-11-05: no new permission).
+   */
+  async recordablePeople(
+    access: AccessContext,
+    agencyId: string,
+    q?: string,
+  ): Promise<RecordablePersonView[]> {
+    const agency = new Types.ObjectId(agencyId);
+    const terms = (q ?? '').split(/\s+/).filter(Boolean).slice(0, 5);
+    const everyone = await this.users
+      .find({
+        agencyId: agency,
+        _id: { $ne: new Types.ObjectId(access.userId) },
+        isActive: true,
+        deactivatedAt: null,
+        isPlatformAdmin: { $ne: true },
+        ...(terms.length
+          ? {
+              $and: terms.map((term) => {
+                const pattern = new RegExp(escapeRegex(term), 'i');
+                return {
+                  $or: [
+                    { firstName: pattern },
+                    { lastName: pattern },
+                    { email: pattern },
+                  ],
+                };
+              }),
+            }
+          : {}),
+      })
+      .select(USER_FIELDS)
+      .sort({ firstName: 1, lastName: 1, email: 1 })
+      .limit(500)
+      .lean<UserLean[]>();
+
+    const fallback = everyone.some((user) => !user.branchId)
+      ? await this.defaultBranchId(agencyId)
+      : null;
+    const home = (user: UserLean) => user.branchId?.toString() ?? fallback;
+    const people = everyone.filter((user) => reviewsBranch(access, home(user)));
+    if (people.length === 0) return [];
+
+    const ids = people.map((user) => user._id);
+    const [policies, branches] = await Promise.all([
+      this.policies
+        .find({ agencyId, archivedAt: null, memberIds: { $in: ids } })
+        .sort({ createdAt: 1 })
+        .select('name timeOffType accrualType memberIds')
+        .lean<PolicyLean[]>(),
+      this.branches
+        .find({ agencyId: agency })
+        .select('name')
+        .lean<{ _id: Types.ObjectId; name: string }[]>(),
+    ]);
+    const branchNames = new Map(
+      branches.map((branch) => [branch._id.toString(), branch.name]),
+    );
+    return people.map((user) => ({
+      id: user._id.toString(),
+      name: personName(user),
+      branchName: branchNames.get(home(user) ?? '') ?? null,
+      policies: policies
+        .filter((policy) =>
+          (policy.memberIds ?? []).some((id) => id.equals(user._id)),
+        )
+        .map(policyRef),
+    }));
+  }
+
+  /** What a recorded entry would amount to. Writes nothing. */
+  async previewRecord(
+    access: AccessContext,
+    agencyId: string,
+    input: RequestInput & { employeeId: string },
+  ): Promise<TimeOffPreview> {
+    const employee = await this.requireRecordable(
+      access,
+      agencyId,
+      input.employeeId,
+    );
+    return toPreview(
+      await this.evaluate({
+        agencyId,
+        employee,
+        input,
+        mode: 'record',
+        timeZone: access.timeZone,
+      }),
+    );
+  }
+
+  /**
+   * Record time off for someone else — a sick day called in, leave agreed
+   * in person. Created **already Approved** with its hours posted: there is
+   * no review, the policy's auto-approval rules are not consulted, and the
+   * dates may be in the past. The waiting period, the usage cap and a
+   * negative balance only warn (they are kept on the timeline entry);
+   * everything else blocks as it does for a request.
+   */
+  async record(
+    access: AccessContext,
+    agencyId: string,
+    input: RequestInput & { employeeId: string },
+  ): Promise<TimeOffRequestView> {
+    const employee = await this.requireRecordable(
+      access,
+      agencyId,
+      input.employeeId,
+    );
+    const evaluation = await this.evaluate({
+      agencyId,
+      employee,
+      input,
+      mode: 'record',
+      timeZone: access.timeZone,
+    });
+    if (evaluation.blockers.length > 0) {
+      const [first] = evaluation.blockers;
+      throw refusal(400, first.code, first.message, {
+        blockers: evaluation.blockers,
+      });
+    }
+
+    const now = new Date();
+    const actor = new Types.ObjectId(access.userId);
+    const branchId = await this.homeBranchId(agencyId, employee);
+    const recorded = await this.transactions.run(async (session, created) => {
+      const [doc] = await this.requests.create(
+        [
+          {
+            agencyId,
+            branchId,
+            reference: await this.nextReference(
+              agencyId,
+              access.timeZone,
+              now,
+              session,
+            ),
+            source: 'recorded',
+            employeeId: employee._id,
+            initiatorId: actor,
+            ...requestFields(input, evaluation),
+            status: 'approved',
+            decidedAt: now,
+            decidedBy: actor,
+            timeline: [
+              entry(
+                now,
+                actor,
+                'recorded',
+                null,
+                'approved',
+                input.note ?? null,
+                evaluation.warnings.map((warning) => warning.code),
+              ),
+            ],
+          },
+        ],
+        { session: session ?? undefined },
+      );
+      created.track(this.requests, doc._id);
+      const row = doc.toObject();
+      await this.ledger.postUsed(
+        ledgerTarget(row),
+        row.days,
+        access.timeZone,
+        session,
+      );
+      return row;
+    });
+
+    await this.notify(
+      'time_off.recorded',
+      recorded,
+      [employee._id.toString()],
+      access.userId,
+      { note: input.note ?? null },
+    );
+    return this.toView(access, agencyId, recorded);
+  }
+
+  /**
+   * The person, if the caller may record time off for them: somebody else,
+   * still with the agency, whose home branch the caller's scope covers.
+   * Recording for yourself is not offered — your own time off is always a
+   * request that someone else decides.
+   */
+  private async requireRecordable(
+    access: AccessContext,
+    agencyId: string,
+    employeeId: string,
+  ): Promise<UserLean> {
+    if (employeeId === access.userId) {
+      throw refusal(
+        400,
+        'own_request',
+        'Your own time off is a request. Use Request time off instead.',
+      );
+    }
+    const employee = await this.requireUser(agencyId, employeeId);
+    if (!employee.isActive || employee.deactivatedAt) {
+      throw new NotFoundException('That person is not in this agency.');
+    }
+    if (!reviewsBranch(access, await this.homeBranchId(agencyId, employee))) {
+      throw new ForbiddenException(
+        'That person is outside the people you manage.',
+      );
+    }
+    return employee;
   }
 
   // ── Cancel ─────────────────────────────────────────────────────────────
@@ -1243,6 +1462,13 @@ export class TimeOffRequestsService {
     user: UserLean,
   ): Promise<string> {
     if (user.branchId) return user.branchId.toString();
+    const branchId = await this.defaultBranchId(agencyId);
+    if (!branchId)
+      throw new ConflictException('This agency has no branch yet.');
+    return branchId;
+  }
+
+  private async defaultBranchId(agencyId: string): Promise<string | null> {
     const agency = new Types.ObjectId(agencyId);
     const branch =
       (await this.branches
@@ -1254,8 +1480,7 @@ export class TimeOffRequestsService {
         .sort({ createdAt: 1 })
         .select('_id')
         .lean<{ _id: Types.ObjectId } | null>());
-    if (!branch) throw new ConflictException('This agency has no branch yet.');
-    return branch._id.toString();
+    return branch?._id.toString() ?? null;
   }
 
   /** `TOR-2026-007`: the agency's next number for the year the request is made in. */

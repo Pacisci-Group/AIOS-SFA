@@ -12,8 +12,10 @@ import {
 } from '@nestjs/common';
 import {
   type AccessContext,
+  AgencyPermission,
   ModuleKey,
   modulePermission,
+  type RecordablePersonView,
   type TimeOffPreview,
   type TimeOffRequestList,
   type TimeOffRequestView,
@@ -29,8 +31,10 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   createTimeOffRequestSchema,
   listMyTimeOffRequestsSchema,
+  listRecordablePeopleSchema,
   listTeamTimeOffRequestsSchema,
   previewTimeOffRequestSchema,
+  recordTimeOffSchema,
   submitTimeOffRequestSchema,
   timeOffDecisionSchema,
   timeOffNoteRequiredSchema,
@@ -38,8 +42,10 @@ import {
   timeOffRequestSchema,
   type CreateTimeOffRequestDto,
   type ListMyTimeOffRequestsDto,
+  type ListRecordablePeopleDto,
   type ListTeamTimeOffRequestsDto,
   type PreviewTimeOffRequestDto,
+  type RecordTimeOffDto,
   type SubmitTimeOffRequestDto,
   type TimeOffDecisionDto,
   type TimeOffNoteRequiredDto,
@@ -67,6 +73,10 @@ const requestId = () => new ZodValidationPipe(timeOffRequestIdParamSchema);
  *
  * `cancel` and the single read are `hr:read` because both people use them;
  * the service decides which of the two the caller is for that request.
+ *
+ * **Recording time off for someone else** needs `hr:write` *and*
+ * `agency:users:read` — the two existing permissions, both required, no new
+ * string (decided 2026-11-05). Agency Owner and Branch Manager hold both.
  *
  * `@SkipBranch()` — the scope is applied by the service from the access
  * context (`time-off-access.ts`), not by the branch header: an owner has no
@@ -260,5 +270,48 @@ export class TimeOffController {
     body: TimeOffNoteRequiredDto,
   ): Promise<TimeOffRequestView> {
     return this.requests.decline(access, agencyId, id, body.note);
+  }
+
+  /** The people the caller may record time off for, with their policies. */
+  @Get('recordable-people')
+  @RequirePermissions(HR_WRITE, AgencyPermission.UsersRead)
+  recordablePeople(
+    @Access() access: AccessContext,
+    @AgencyId() agencyId: string,
+    @Query(new ZodValidationPipe(listRecordablePeopleSchema))
+    query: ListRecordablePeopleDto,
+  ): Promise<RecordablePersonView[]> {
+    return this.requests.recordablePeople(access, agencyId, query.q);
+  }
+
+  /**
+   * What a recorded entry would amount to for that person. Past dates are
+   * allowed; the waiting period, the usage cap and a negative balance come
+   * back as `warnings`, everything else as `blockers`. Writes nothing.
+   */
+  @Post('records/preview')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions(HR_WRITE, AgencyPermission.UsersRead)
+  previewRecord(
+    @Access() access: AccessContext,
+    @AgencyId() agencyId: string,
+    @Body(new ZodValidationPipe(recordTimeOffSchema)) body: RecordTimeOffDto,
+  ): Promise<TimeOffPreview> {
+    return this.requests.previewRecord(access, agencyId, body);
+  }
+
+  /**
+   * Record time off for someone else: created Approved, hours posted, the
+   * employee told. 400 for yourself, 403 outside your data scope, 404 for
+   * someone not in the agency.
+   */
+  @Post('records')
+  @RequirePermissions(HR_WRITE, AgencyPermission.UsersRead)
+  record(
+    @Access() access: AccessContext,
+    @AgencyId() agencyId: string,
+    @Body(new ZodValidationPipe(recordTimeOffSchema)) body: RecordTimeOffDto,
+  ): Promise<TimeOffRequestView> {
+    return this.requests.record(access, agencyId, body);
   }
 }

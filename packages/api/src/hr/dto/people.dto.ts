@@ -1,4 +1,9 @@
-import { PHONE_MAX_LENGTH, roundHours, TIME_OFF_HOURS_MAX } from '@sfa/shared';
+import {
+  BALANCE_ADJUSTMENT_REASON_MAX_LENGTH,
+  PHONE_MAX_LENGTH,
+  roundHours,
+  TIME_OFF_HOURS_MAX,
+} from '@sfa/shared';
 import { z } from 'zod';
 import { objectId } from '../../common/dashboard/dashboard-filter-query.dto';
 import { clearable, trimmedText } from '../../common/dto/clearable';
@@ -58,5 +63,27 @@ export const completeOnboardingSchema = z.object({
     .default([]),
 });
 export type CompleteOnboardingDto = z.infer<typeof completeOnboardingSchema>;
+
+/**
+ * `POST /hr/people/:userId/balance-adjustments` (PAC-165) — an HR admin's
+ * correction to one person's balance in one policy. Signed hours (add or
+ * take away), never zero, and always with the reason: the ledger is
+ * append-only, so the reason is the only explanation the row will ever have.
+ */
+export const balanceAdjustmentSchema = z.object({
+  policyId: objectId,
+  hours: z
+    .number()
+    .min(-TIME_OFF_HOURS_MAX)
+    .max(TIME_OFF_HOURS_MAX)
+    .transform((value) => roundHours(value))
+    .refine((value) => value !== 0, 'Enter the hours to add or remove.'),
+  reason: z
+    .string()
+    .trim()
+    .min(1, 'Say why the balance is being adjusted.')
+    .max(BALANCE_ADJUSTMENT_REASON_MAX_LENGTH),
+});
+export type BalanceAdjustmentDto = z.infer<typeof balanceAdjustmentSchema>;
 
 export const personIdParamSchema = objectId;

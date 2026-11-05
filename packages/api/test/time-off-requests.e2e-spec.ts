@@ -1013,6 +1013,406 @@ describe('Time off requests (e2e)', () => {
     });
   });
 
+  describe('recording time off for someone else', () => {
+    /** The last working day before today. */
+    const lastWorkingDay = () => {
+      let day = addDays(today, -1);
+      while ([0, 6].includes(weekday(day))) day = addDays(day, -1);
+      return day;
+    };
+    const record = (token: string, payload: Record<string, unknown>) =>
+      api().post('/api/v1/time-off/records').set(auth(token)).send(payload);
+
+    it('needs both hr:write and agency:users:read', async () => {
+      const payload = { ...body(ptoId, week(8)), employeeId: ctx.csrUserId };
+      await record(producerToken, payload).expect(403);
+      await api()
+        .get('/api/v1/time-off/recordable-people')
+        .set(auth(producerToken))
+        .expect(403);
+
+      // A reviewer who may not see the directory: `hr:write` alone.
+      const assignments = app.get(RoleAssignmentsService);
+      const agencyId = new Types.ObjectId(ctx.agencyId);
+      const current = await assignments.rolePermissionKeys([
+        ctx.editableRoleId,
+      ]);
+      await assignments.setRolePermissions(
+        agencyId,
+        new Types.ObjectId(ctx.editableRoleId),
+        [...current, 'hr:write'],
+      );
+      const { passwordHash } = (await users
+        .findOne({ email: ctx.producerEmail })
+        .select('passwordHash')
+        .lean())!;
+      const reviewer = await users.create({
+        agencyId,
+        branchId: new Types.ObjectId(ctx.branchId),
+        email: 'timeoff-reviewer-only@sfa.local',
+        passwordHash,
+        firstName: 'Review',
+        lastName: 'Only',
+        isActive: true,
+      });
+      await assignments.setUserRoles(
+        { userId: ownerId, isPlatformAdmin: true },
+        agencyId,
+        reviewer._id,
+        [new Types.ObjectId(ctx.editableRoleId)],
+      );
+      const reviewerToken = await login('timeoff-reviewer-only@sfa.local');
+      // They review…
+      await api()
+        .get('/api/v1/time-off/requests')
+        .set(auth(reviewerToken))
+        .expect(200);
+      // …but cannot record.
+      await record(reviewerToken, payload).expect(403);
+      await api()
+        .post('/api/v1/time-off/records/preview')
+        .set(auth(reviewerToken))
+        .send(payload)
+        .expect(403);
+      await api()
+        .get('/api/v1/time-off/recordable-people')
+        .set(auth(reviewerToken))
+        .expect(403);
+    });
+
+    it('offers the people inside the caller’s data scope, with their policies', async () => {
+      const mine = await api()
+        .get('/api/v1/time-off/recordable-people')
+        .set(auth(managerToken))
+        .expect(200);
+      const people = mine.body as {
+        id: string;
+        name: string;
+        policies: { id: string }[];
+      }[];
+      const ids = people.map((person) => person.id);
+      expect(ids).toContain(producerId);
+      expect(ids).toContain(ctx.csrUserId);
+      // Never yourself, and nobody from another branch.
+      expect(ids).not.toContain(ctx.managerUserId);
+      expect(people.map((person) => person.name)).not.toContain(
+        'Time timeoff-outsider',
+      );
+      expect(
+        people
+          .find((person) => person.id === ctx.csrUserId)!
+          .policies.map((policy) => policy.id),
+      ).toContain(ptoId);
+
+      const all = await api()
+        .get('/api/v1/time-off/recordable-people')
+        .query({ q: 'outsider' })
+        .set(auth(ownerToken))
+        .expect(200);
+      expect(
+        (all.body as { name: string }[]).map((person) => person.name),
+      ).toEqual(['Time timeoff-outsider']);
+    });
+
+    it('is refused for yourself, outside your scope, and across agencies', async () => {
+      const self = await record(managerToken, {
+        ...body(ptoId, week(8)),
+        employeeId: ctx.managerUserId,
+      }).expect(400);
+      expect((self.body as Refusal).code).toBe('own_request');
+
+      const outsider = await users
+        .findOne({ email: 'timeoff-outsider@sfa.local' })
+        .select('_id')
+        .lean();
+      await record(managerToken, {
+        ...body(ptoId, week(8)),
+        employeeId: outsider!._id.toString(),
+      }).expect(403);
+      await record(managerToken, {
+        ...body(ptoId, week(8)),
+        employeeId: ctx.otherAgencyUserId,
+      }).expect(404);
+    });
+
+    it('creates a past-dated entry already Approved, with its hours posted and both identities kept', async () => {
+      const day = lastWorkingDay();
+      // The employee could not have asked for it themself.
+      const own = await api()
+        .post('/api/v1/time-off/requests')
+        .set(auth(csrToken))
+        .send({ ...body(ptoId, day), send: true })
+        .expect(400);
+      expect((own.body as Refusal).code).toBe('past_date');
+
+      const before = inngest.sent.length;
+      const res = await record(managerToken, {
+        ...body(ptoId, day, day, { note: 'Called in sick' }),
+        employeeId: ctx.csrUserId,
+      }).expect(201);
+      const recorded = res.body as TimeOffRequestView;
+      expect(recorded).toMatchObject({
+        status: 'approved',
+        source: 'recorded',
+        group: 'taken',
+        autoApproved: false,
+        totalHours: 8,
+        employee: { id: ctx.csrUserId },
+        recordedBy: { id: ctx.managerUserId },
+      });
+      expect(recorded.timeline).toHaveLength(1);
+      expect(recorded.timeline[0]).toMatchObject({
+        action: 'recorded',
+        note: 'Called in sick',
+        actor: { id: ctx.managerUserId },
+        toStatus: 'approved',
+        warnings: [],
+      });
+      const used = await rowsOf(recorded.id, 'used');
+      expect(used).toHaveLength(1);
+      expect(used[0].effectiveAt).toEqual(businessDateInstant(day, timeZone));
+
+      // It has already happened: out of the balance, not "other requested".
+      const { card } = await summaryOf(csrToken, ptoId);
+      expect(card).toMatchObject({
+        currentBalance: 72,
+        otherRequestedHours: 0,
+        availableHours: 72,
+      });
+      const [event] = notified(before);
+      expect(event).toMatchObject({
+        type: 'time_off.recorded',
+        recipientIds: [ctx.csrUserId],
+        actorId: ctx.managerUserId,
+      });
+
+      // The employee sees it in their own list, labelled with who recorded it.
+      const mine = await api()
+        .get('/api/v1/time-off/requests/mine')
+        .query({ group: 'taken' })
+        .set(auth(csrToken))
+        .expect(200);
+      expect((mine.body as TimeOffRequestList).items[0]).toMatchObject({
+        id: recorded.id,
+        recordedBy: { id: ctx.managerUserId },
+      });
+
+      // The same day twice is the hard overlap block, recorded or not.
+      const again = await record(managerToken, {
+        ...body(ptoId, day),
+        employeeId: ctx.csrUserId,
+      }).expect(400);
+      expect((again.body as Refusal).code).toBe('overlap');
+    });
+
+    it('warns about a balance it overdraws, and saves anyway', async () => {
+      const tinyId = await createPolicy(
+        'Tiny leave',
+        'custom',
+        [ctx.csrUserId],
+        { hoursPerYear: 8 },
+        { [ctx.csrUserId]: 8 },
+      );
+      const payload = {
+        ...body(tinyId, week(8), addDays(week(8), 1)),
+        employeeId: ctx.csrUserId,
+      };
+      const preview = await api()
+        .post('/api/v1/time-off/records/preview')
+        .set(auth(managerToken))
+        .send(payload)
+        .expect(200);
+      const lines = preview.body as TimeOffPreview;
+      expect(lines.blockers).toEqual([]);
+      expect(lines.warnings.map((warning) => warning.code)).toEqual([
+        'negative_balance',
+      ]);
+      // The employee's own request for the same dates is blocked by it.
+      const own = await api()
+        .post('/api/v1/time-off/requests/preview')
+        .set(auth(csrToken))
+        .send(body(tinyId, week(8), addDays(week(8), 1)))
+        .expect(200);
+      expect(
+        (own.body as TimeOffPreview).blockers.map((blocker) => blocker.code),
+      ).toEqual(['negative_balance']);
+
+      const res = await record(managerToken, payload).expect(201);
+      const recorded = res.body as TimeOffRequestView;
+      expect(recorded.status).toBe('approved');
+      expect(recorded.timeline[0].warnings).toEqual(['negative_balance']);
+      expect((await summaryOf(csrToken, tinyId)).card.availableHours).toBe(-8);
+    });
+
+    it('refuses a day, and a cancellation, in a period that has already reset', async () => {
+      // A policy that reset three days ago: anything before that is closed.
+      const resetDay = addDays(today, -3);
+      const closedId = await createPolicy(
+        'Just reset',
+        'custom',
+        [ctx.readOnlyUserId],
+        { resetMonthDay: monthDay(resetDay) },
+      );
+      let closedDay = addDays(resetDay, -1);
+      while ([0, 6].includes(weekday(closedDay)))
+        closedDay = addDays(closedDay, -1);
+
+      const res = await record(managerToken, {
+        ...body(closedId, closedDay),
+        employeeId: ctx.readOnlyUserId,
+      }).expect(400);
+      expect((res.body as Refusal).code).toBe('old_period');
+
+      // Leave approved before the reset cannot be handed back afterwards.
+      const old = await requests.create({
+        agencyId: ctx.agencyId,
+        branchId: ctx.branchId,
+        source: 'recorded',
+        policyId: new Types.ObjectId(closedId),
+        employeeId: new Types.ObjectId(ctx.readOnlyUserId),
+        initiatorId: new Types.ObjectId(ctx.managerUserId),
+        status: 'approved',
+        firstDay: closedDay,
+        lastDay: closedDay,
+        dayMode: 'full',
+        days: [
+          { date: closedDay, hours: 8, scheduledHours: 8, reason: 'scheduled' },
+        ],
+        totalHours: 8,
+      });
+      const cancel = await act(managerToken, old._id.toString(), 'cancel', {
+        note: 'They came in after all',
+      }).expect(400);
+      expect((cancel.body as Refusal).code).toBe('old_period');
+      expect((await requests.findById(old._id).lean())?.status).toBe(
+        'approved',
+      );
+    });
+  });
+
+  describe('balance adjustment and the profile', () => {
+    const adjust = (token: string, userId: string, payload: unknown) =>
+      api()
+        .post(`/api/v1/hr/people/${userId}/balance-adjustments`)
+        .set(auth(token))
+        .send(payload as object);
+
+    it('is an HR admin’s: a signed row with the reason, and the employee is told', async () => {
+      const payload = {
+        policyId: ptoId,
+        hours: -4,
+        reason: 'Correcting a double accrual',
+      };
+      await adjust(producerToken, ctx.csrUserId, payload).expect(403);
+
+      const before = inngest.sent.length;
+      const start = (await summaryOf(csrToken, ptoId)).card.currentBalance!;
+      const res = await adjust(managerToken, ctx.csrUserId, payload).expect(
+        201,
+      );
+      expect(res.body).toEqual({ balanceHours: start - 4 });
+
+      const row = await ledger
+        .findOne({
+          policyId: new Types.ObjectId(ptoId),
+          userId: new Types.ObjectId(ctx.csrUserId),
+          kind: 'manual_adjustment',
+        })
+        .lean();
+      expect(row).toMatchObject({
+        hours: -4,
+        note: 'Correcting a double accrual',
+        periodKey: null,
+      });
+      expect(row?.source).toMatchObject({ kind: 'admin', id: null });
+      expect(String(row?.createdBy)).toBe(ctx.managerUserId);
+
+      const [event] = notified(before);
+      expect(event).toMatchObject({
+        type: 'time_off.balance_adjusted',
+        recipientIds: [ctx.csrUserId],
+        dedupeKey: `time_off.balance_adjusted:${String(row?._id)}`,
+      });
+      expect(event.data).toMatchObject({
+        hours: -4,
+        policyName: 'Requests PTO',
+        reason: 'Correcting a double accrual',
+      });
+      await notificationRequested
+        .create({
+          ...event,
+          eventLogId: new Types.ObjectId().toHexString(),
+        } as never)
+        .validate();
+    });
+
+    it('refuses nothing to adjust: zero hours, no reason, an unlimited policy, a non-member', async () => {
+      await adjust(managerToken, ctx.csrUserId, {
+        policyId: ptoId,
+        hours: 0,
+        reason: 'Nothing',
+      }).expect(400);
+      await adjust(managerToken, ctx.csrUserId, {
+        policyId: ptoId,
+        hours: 4,
+        reason: '  ',
+      }).expect(400);
+      const unlimitedId = await createPolicy(
+        'Unlimited unpaid',
+        'unpaid',
+        [ctx.csrUserId],
+        { accrualType: 'unlimited' },
+      );
+      await adjust(managerToken, ctx.csrUserId, {
+        policyId: unlimitedId,
+        hours: 4,
+        reason: 'No balance to move',
+      }).expect(400);
+      // The manager is not in "Tiny leave".
+      const tiny = await requests
+        .findOne({
+          employeeId: new Types.ObjectId(ctx.csrUserId),
+          totalHours: 16,
+        })
+        .select('policyId')
+        .lean();
+      await adjust(managerToken, ctx.managerUserId, {
+        policyId: String(tiny!.policyId),
+        hours: 4,
+        reason: 'Not enrolled',
+      }).expect(400);
+      await adjust(managerToken, ctx.csrUserId, {
+        policyId: new Types.ObjectId().toHexString(),
+        hours: 4,
+        reason: 'No such policy',
+      }).expect(404);
+    });
+
+    it('shows Available beside Balance on the profile, from the same numbers as the page', async () => {
+      // Something still waiting, so the two numbers differ.
+      await send(csrToken, ptoId, week(9));
+      const { card } = await summaryOf(csrToken, ptoId);
+      const res = await api()
+        .get(`/api/v1/users/${ctx.csrUserId}/profile`)
+        .set(auth(csrToken))
+        .expect(200);
+      const policy = (
+        res.body as {
+          timeOff: {
+            policies: {
+              id: string;
+              balanceHours: number | null;
+              availableHours: number | null;
+            }[];
+          };
+        }
+      ).timeOff.policies.find((row) => row.id === ptoId)!;
+      expect(policy.balanceHours).toBe(card.currentBalance);
+      expect(policy.availableHours).toBe(card.availableHours);
+      expect(policy.availableHours).toBe(policy.balanceHours! - 8);
+    });
+  });
+
   describe('imported rows', () => {
     it('are read-only history: listed apart, opened, and never acted on', async () => {
       const imported = await requests.create({

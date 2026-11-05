@@ -95,8 +95,17 @@ export interface PersonTimeOffPolicyView {
   id: string;
   name: string;
   timeOff: TimeOffPolicyRules;
-  /** The sum of the person's ledger rows; null on an Unlimited policy. */
+  /**
+   * The current balance: the person's ledger as of today. Approved leave
+   * that has not happened yet is still in it. Null on an Unlimited policy.
+   */
   balanceHours: number | null;
+  /**
+   * What is left to ask for (PAC-165): the current balance minus approved
+   * leave not yet taken and requests still waiting for a decision. Null on
+   * an Unlimited policy.
+   */
+  availableHours: number | null;
 }
 
 /** The person's week, as their Work week and Holiday policies say. */
