@@ -5,6 +5,7 @@ import {
   FileDown,
   Home,
   LayoutDashboard,
+  Plane,
   SlidersHorizontal,
   Ticket,
   TrendingUp,
@@ -146,6 +147,31 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     /*
+     * HR (PAC-165): the pages people work in about people. **People**
+     * (PAC-162) is the directory that was `/settings/users`, with onboarding
+     * in its status and a profile per person — it sat under Workspace until
+     * this section existed. **Time off** is every employee's: their own
+     * balances and requests, and for a reviewer the team's. The policies
+     * that govern both are configuration and stay behind Workspace Settings.
+     */
+    title: "HR",
+    items: [
+      {
+        to: "/people",
+        label: "People",
+        icon: Contact,
+        permission: AgencyPermission.UsersRead,
+      },
+      {
+        to: "/time-off",
+        label: "Time off",
+        icon: Plane,
+        module: ModuleKey.Hr,
+      },
+    ],
+  },
+  {
+    /*
      * One entry, not the five this section used to hold.
      *
      * Agency Users · Roles & Permissions · Branding · Domains · Email were five
@@ -161,16 +187,6 @@ export const NAV_SECTIONS: NavSection[] = [
       // not to the workspace, so the row lives in the sidebar footer under
       // the profile chip and status switch — `NOTIFICATIONS_ITEM` in
       // `SidebarBody.tsx`, which is also where the unread badge is wired.
-      {
-        // People (PAC-162): the directory that was `/settings/users`, with
-        // onboarding in its status and a profile per person. A page people
-        // work in, not configuration, so it is a row of its own above the
-        // hub — here until PAC-165 opens an HR section to move it into.
-        to: "/people",
-        label: "People",
-        icon: Contact,
-        permission: AgencyPermission.UsersRead,
-      },
       {
         to: "/settings",
         label: "Workspace Settings",
