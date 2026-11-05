@@ -1,0 +1,73 @@
+meta {
+  name: Get Pay Statement
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  // Nobody was on the structure (the demo producer was already on another).
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("carries the Commission Statement's sections", function () {
+    const s = res.getBody();
+    expect(s).to.include.keys(
+      "structure", "premiumLines", "deals", "chargebacks", "bonuses",
+      "indicators", "adjustments", "totals", "warnings", "allstateBindId"
+    );
+    expect(s.status).to.equal("draft");
+  });
+
+  test("its lines add up to its totals", function () {
+    const s = res.getBody();
+    const cents = function (n) { return Math.round(n * 100); };
+    const gross = s.premiumLines.reduce(function (sum, l) { return sum + cents(l.grossPremium); }, 0);
+    const net = s.premiumLines.reduce(function (sum, l) { return sum + cents(l.netCommission); }, 0);
+    expect(gross).to.equal(cents(s.totals.grossPremium));
+    expect(net).to.equal(cents(s.totals.grossCommission) - cents(s.totals.chargebackImpact));
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id — one statement (PAC-178)
+
+  **Module** — `payouts`. **Permission** — `payouts:read`, under the same
+  rule as **List Pay Statements**: your own once sent, or anything your scope
+  reaches with `payouts:write`. Anything else is a `404` — never a `403`, so
+  whether a statement exists is not given away.
+
+  **Response `200`** — the summary fields plus:
+  | field | |
+  |---|---|
+  | allstateBindId | the "SOK number", the statement's Producer ID |
+  | timeZone | the agency's zone the month was cut in |
+  | structure | the payment structure as it was when computed (rates, lead-source rates named, hat trick, tiers, `tiersStackable`, `teamBonusEligible`) |
+  | premiumLines[] | the carrier production table: `{ carrier, leadSourceId, leadSourceName, appointed, grossPremium, chargebacks, netPremium, ratePercent, rateSource, grossCommission, chargebackImpact, netCommission, bundleRate, minBundleRatePercent, bundleShortfall }`. A sale paid a **lead-source rate** is on a line of its own ("Allstate · JYA leads"); every other sale on a carrier is on the carrier's line. Every appointed carrier is listed, sold or not. `rateSource` is `carrier`, `any`, `lead_source_carrier`, `lead_source` or `none` (no rule covers it — paid 0%, with a warning). |
+  | deals[] | the month's sales: `{ dealId, soldDate, soldDay, clientName, policyTypes, carriers, policyCount, premium, leadSourceId, leadSourceName, isBundle }` (a bundle = 2+ policies) |
+  | chargebacks[] | `{ chargebackId, policyId, policyNumber, policyType, carrier, customerName, amount, occurredAt, occurredDay, reason, source, leadSourceId, ratePercent, commissionDeduction, excluded, excludedNote }` — each on the line of the sale it reverses, costing its premium at that line's rate |
+  | bonuses | `hatTrick { enabled, dealsPerDay, bonusAmount, days[], amount }`, `individual { stackable, reached[], amount }`, `team { eligible, met, poolAmount, pool, groupPool, groupPremium, amount }`, `salespersonOfMonth { enabled, winner, amount }` |
+  | indicators | `{ tier: { level, thresholdPremium } \| null, bundleRate, hatTricks, somStatus: winner\|none\|off, complianceStatus: compliant\|non_compliant, failedAudits }` |
+  | adjustments[] | the manager's corrections (written from PAC-182) |
+  | warnings[] | e.g. "Allstate bundle rate 71% is below the 83% minimum." — a flag; pay is not changed |
+
+  `totals.netCommission` = gross commission − chargeback impact + tier + team
+  + Salesperson of the Month + hat trick + SPIFFs + compliance adjustment +
+  other adjustments. Sold premium is gross (the Owner dashboard's figure);
+  `Deal.chargebackAdjustment` is not applied — the ledger row carries it.
+
+  Skipped when the run had no statement to read.
+}

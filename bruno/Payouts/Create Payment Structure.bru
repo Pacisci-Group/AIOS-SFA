@@ -40,7 +40,7 @@ body:json {
     ],
     "tiersStackable": true,
     "teamBonusEligible": true,
-    "memberIds": []
+    "memberIds": {{payoutsMemberIdsJson}}
   }
 }
 
@@ -109,8 +109,10 @@ docs {
 
   Stored normalised: carriers canonical and sorted with `*` last, tiers
   sorted by threshold, lead-source rules by reference only (the source's
-  name is resolved on every read, never stored). The request sends no
-  members, so running the collection never moves anyone on the demo tenant.
+  name is resolved on every read, never stored). Its only member is the demo
+  producer, and only when **List Payout People** found them on no structure
+  (`payoutsMemberIdsJson`), so running the collection never moves anyone off
+  a real structure.
   Its lead-source rate uses the source **List Lead Sources** captured.
 
   **Response `201`** — the structure as **Get Payment Structure** returns it.

@@ -9,6 +9,7 @@ import {
   Ticket,
   TrendingUp,
   Users,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import { ModuleKey } from "@sfa/shared";
@@ -68,6 +69,13 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: TrendingUp,
         module: ModuleKey.Performance,
       },
+      {
+        // PAC-178. Every employee's own statements (`payouts:read`).
+        to: "/my-pay",
+        label: "My Pay",
+        icon: Wallet,
+        module: ModuleKey.Payouts,
+      },
     ],
   },
   {
@@ -96,6 +104,16 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Analytics",
         icon: ChartColumn,
         module: ModuleKey.Analytics,
+      },
+      {
+        // PAC-178. The reviewers' page — the owner and branch managers hold
+        // `payouts:write`. A permission rather than `module`, which would show
+        // it to everyone with `payouts:read`; module-filtered all the same,
+        // since a switched-off module grants neither.
+        to: "/payouts",
+        label: "Payouts",
+        icon: Wallet,
+        permission: `${ModuleKey.Payouts}:write`,
       },
     ],
   },

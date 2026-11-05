@@ -250,7 +250,13 @@ temperature/aging that aren't first-class in legacy payloads. See
   **`payouts:read` is own statements only, whatever the role's data scope** —
   CRM (branch) and Data Team (agency) hold it too, so reading anyone else's pay
   needs `payouts:write`, which is where data scope applies. Stacked on the
-  PAC-173 chain (#162).
+  PAC-173 chain (#162). The statement engine (PAC-178) is pure math in
+  `@sfa/shared` `domain/payout-math.ts` with its loaders in
+  `packages/api/src/common/payouts/`, shared by the hourly 1st-of-month job
+  (`GeneratePayStatementsFn`, claimed on the unique `payoutRuns`
+  `{agencyId, month}`) and the owner's Generate; sales are read through the
+  Owner dashboard's `linesPrefix`, so the two agree. A statement is a
+  snapshot: recalculating rewrites draft and disputed ones only.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

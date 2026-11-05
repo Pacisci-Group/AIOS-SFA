@@ -1,0 +1,48 @@
+meta {
+  name: Recalculate Pay Statement
+  type: http
+  seq: 19
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/recalculate
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is the same statement, recomputed", function () {
+    expect(res.getBody().id).to.equal(bru.getVar("payoutsStatementId"));
+    expect(res.getBody().status).to.equal("draft");
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/recalculate — recompute one draft (PAC-178)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope (a statement outside it is a `404`).
+
+  Re-reads the person's sales and chargebacks and applies their **current**
+  structure (the one the statement was drafted with, if they have left every
+  structure) against the team split and Salesperson of the Month the month
+  was last calculated with — re-splitting the pool for one person would
+  change everyone else's share. When the person's premium has moved since,
+  the statement's warnings say to recalculate the month.
+
+  **Response `200`** — the statement, as **Get Pay Statement**.
+
+  **Errors** — `403` without `payouts:write`; `404` outside your scope; `409`
+  `PAYOUT_STATEMENT_NOT_EDITABLE` once it has been sent or accepted.
+}

@@ -1,0 +1,92 @@
+meta {
+  name: List Pay Statements
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements?month={{payoutsMonth}}&page=1&pageSize=25
+  auth: bearer
+}
+
+params:query {
+  month: {{payoutsMonth}}
+  page: 1
+  pageSize: 25
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:post-response {
+  // The demo producer's statement if there is one, else the first.
+  const rows = (res.getBody() && res.getBody().statements) || [];
+  const mine = rows.find(function (row) {
+    return row.userId === bru.getVar("payoutsProducerUserId");
+  });
+  const pick = mine || rows[0];
+  bru.setVar("payoutsStatementId", pick ? pick.id : "");
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is a page of the month's statements", function () {
+    const body = res.getBody();
+    expect(body.statements).to.be.an("array");
+    expect(body.page).to.equal(1);
+    body.statements.forEach(function (row) {
+      expect(row.month).to.equal(bru.getVar("payoutsMonth"));
+      expect(row.totals).to.have.property("netCommission");
+    });
+  });
+}
+
+docs {
+  # GET /payouts/statements — pay statements (PAC-178)
+
+  **Module** — `payouts`. **Permission** — `payouts:read`.
+
+  ⚠ **What you see depends on `payouts:write`, not on your data scope.**
+  - Without it (producer, CSR, CRM, Data Team): **your own statements, and
+    never a draft** — a statement appears once it has been sent. CRM is
+    branch-scoped and Data Team agency-scoped, and neither sees anyone
+    else's pay.
+  - With it: every statement your data scope reaches — a branch manager
+    their branch, the owner the agency. Drafts included.
+
+  **Query** (all optional; each narrows, none widens)
+  | param | |
+  |---|---|
+  | month | `YYYY-MM`; omitted = every month, newest first |
+  | status | `draft` · `sent` · `accepted` · `rejected` (disputed) |
+  | branchId | an agency-wide reviewer's branch filter; a branch manager is already pinned to theirs (another branch is a `403` from the branch guard) |
+  | q | name contains, case-insensitive |
+  | mine | `true` — My Pay: your own statements under the employee rule, whoever you are |
+  | page, pageSize | 1-based; `pageSize` ≤ 100, default 25 |
+
+  **Response `200`**
+  ```json
+  {
+    "statements": [
+      {
+        "id": "…", "runId": "…", "month": "2026-10", "userId": "…",
+        "userName": "Pat Producer", "roleNames": ["Producer"], "pool": "producer",
+        "branchId": "…", "branchName": "Main", "structureId": "…",
+        "structureName": "Producers", "status": "draft", "version": 1,
+        "totals": { "grossPremium": 8000, "chargebackTotal": 1500, "netPremium": 6500,
+                    "grossCommission": 615, "chargebackImpact": 90, "tierBonus": 100,
+                    "teamBonus": 711.11, "somBonus": 250, "hatTrickBonus": 50,
+                    "spiffs": 0, "complianceAdjustment": 0, "otherAdjustments": 0,
+                    "netCommission": 1636.11 },
+        "warningCount": 1, "computedAt": "…"
+      }
+    ],
+    "page": 1, "pageSize": 25, "total": 1, "totalPages": 1
+  }
+  ```
+  Captures `payoutsStatementId` (the demo producer's, else the first).
+}

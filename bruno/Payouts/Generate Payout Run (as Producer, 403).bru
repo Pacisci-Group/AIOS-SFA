@@ -1,0 +1,38 @@
+meta {
+  name: Generate Payout Run (as Producer, 403)
+  type: http
+  seq: 30
+}
+
+post {
+  url: {{baseUrl}}/payouts/runs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "month": "{{payoutsMonth}}"
+  }
+}
+
+tests {
+  test("returns 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /payouts/runs — refused to a producer
+
+  Generating a month is `agency:payouts:admin` (the owner). A branch manager
+  is refused the same way.
+}

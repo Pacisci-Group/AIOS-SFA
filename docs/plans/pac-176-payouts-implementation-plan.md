@@ -708,3 +708,123 @@ only when ticked, 0 is refused, an unticked blank does not block Continue; non-s
 tiers with a smaller higher bonus are refused and accepted once Stackable is ticked; list
 row "Allstate 10% (min. bundle 83%) · … · 2 monthly tiers, stacking"; reopen shows both.
 Test structure archived and the demo team bonus reset to defaults afterwards.
+
+---
+
+## As built — PAC-178 + PAC-179, PR 2 (5 Nov 2026)
+
+Branch `awaris/pac-178-monthly-commission-statements-calculation-drafts-on-the-1st`, cut
+from the PAC-177 branch (#169, `2264113`); PR base = that branch.
+
+**What landed**
+
+- **Shared.** `domain/payouts.ts` gains the statement vocabulary: `PAYOUT_MONTH_PATTERN`,
+  `PAY_STATEMENT_STATUSES` (+ `EDITABLE_PAY_STATEMENT_STATUSES`, `isEditableStatementStatus`),
+  `PAYOUT_RUN_STATUSES`, `PAYOUT_RUN_TRIGGERS`, `STALE_PAYOUT_RUN_MINUTES` (30),
+  `PAYOUT_POOLS` + `payoutPoolFor(roleSlugs)` (`csr` slug → CSR pool), `STATEMENT_ADJUSTMENT_KINDS`,
+  `STATEMENT_RATE_SOURCES` (`RATE_SOURCES` + `none`), `PAYOUT_NO_CARRIER`, page sizes, the
+  409 codes `PAYOUT_RUN_GENERATING` / `PAYOUT_STATEMENT_NOT_EDITABLE`, and the view types
+  (`PayoutRunView`/`PayoutRunResponse`, `PayStatementSummary`/`View`, `PremiumLineView`,
+  `StatementDealView`, `StatementChargebackView`, bonuses, indicators, totals,
+  `PayoutActivityView`, `PayoutActivityPeopleResponse`). New `domain/payout-math.ts`: the
+  pure engine — `computeStatement`, `computeTeamContext` + `teamBonusFor`, `allocatePool`
+  (largest remainder in cents), `salespersonOfMonthWinners`, `hatTrickDays`, `toDealView`,
+  `percentOf` (cents × basis points, rounded once, half away from zero), `roundToCents`,
+  `payoutCarrierName`, `salesGrossPremium`. Notification `payouts.run_ready` (new category
+  `payouts`; email + push).
+- **API, `common/payouts/` (the worker may import it).** `month-window.ts` (the month on the
+  agency's clock via `customRange` + `instantWindow`; `previousMonthIn`, `monthLabel`);
+  `load-run-inputs.ts` — **one `linesPrefix(…, SOLD_LINES, {}, true, { carrier: true })`
+  aggregate** gives each person's sales with their lines and lead source, so a statement's
+  buckets and its deal list add up by construction; `agencyGrossPremium` is the Owner
+  dashboard's `linePremium` sum over the same match; chargebacks by `occurredAt` with the
+  policy's carrier and the original deal's source; failed audits per sale;
+  `appointedCarrierNames`. `run-claim.ts` (`claimRun`), `generate-run.ts` (`generateRun`,
+  `recomputeStatement`, `structureSnapshot`), `run-ready.ts`, `lead-source-labels.ts`.
+  `payout-people.ts` **moved here from `payouts/`** and gained `roleSlugs` and
+  `allstateBindId` (the statement's Producer ID).
+- **Collections.** `payoutRuns` (unique `{agencyId, month}` = the claim; `timeZone`,
+  `window`, `settingsSnapshot`, `agencyGrossPremium`, `teamBonus`, `teamShares[]` — every
+  member's share as the last full calculation split it — `salespersonOfMonth`, `warnings`,
+  `startedAt`/`finishedAt`/`error`, `trigger` of the latest generation). `payStatements` (a
+  snapshot: person, `branchId`/`branchName` as strings, roles, pool, `structureSnapshot`,
+  lines, deals, chargebacks, bonuses, indicators, `adjustments[]`, totals, warnings,
+  `status`, `version`). Indexes as §2; no migration (new collections).
+- **Endpoints** (`PayoutsStatementsController`, `payouts:read` at class level, branch header
+  honoured):
+
+  | Route | Guard | |
+  |---|---|---|
+  | `GET /payouts/runs?month` | `payouts:write` | `{ month, currentMonth, run \| null }`; counts and totals over the statements the caller may see |
+  | `POST /payouts/runs {month}` | `agency:payouts:admin` | generate / recalculate inline; 400 future month; 409 `PAYOUT_RUN_GENERATING` |
+  | `GET /payouts/statements?month&status&branchId&q&mine&page&pageSize` | `payouts:read` | `mine=true` = My Pay |
+  | `GET /payouts/statements/:id` | `payouts:read` | 404 when not visible |
+  | `POST /payouts/statements/:id/recalculate` | `payouts:write` | 409 `PAYOUT_STATEMENT_NOT_EDITABLE` once sent |
+  | `GET /payouts/activity/people` | `payouts:write` | whose activity the caller may open |
+  | `GET /payouts/activity?month&userId` | `payouts:read` | own always; another person: 403 without write, 404 outside scope |
+
+- **Job.** `GeneratePayStatementsFn` — hourly UTC cron, `concurrency 1`, `retries 0`,
+  `forEachAgency`; skips agencies with Payouts off or no structure with members; drafts
+  `previousMonthIn(tz, now)`; notifies owners + branch managers once per run
+  (`deterministicEventId('payouts.run_ready', runId)`, dedupe `payout-run:<runId>:ready`).
+  `worker.module.ts` registers `PaymentStructure`, `PayoutRun`, `PayStatement`,
+  `AgencyRole`, `UserRole` and the fn.
+- **Web.** `/payouts` (Management → Payouts, `payouts:write`): month picker (default = the
+  previous agency month), run summary (agency premium vs the first team level, pools,
+  statements by status, net commission, Salesperson of the Month, warnings), Generate /
+  Recalculate (owner; confirm dialog for a recalculation), statements table with instant
+  status / branch / name filters. `/payouts/statements/:id` (both audiences): Statement tab
+  = details, indicators, carrier production (lead-source lines, bundle shortfall badge),
+  commission summary + net commission, chargeback detail, how each bonus was reached;
+  Activity tab. `/my-pay` (Sales → My Pay): own statements (never a draft) + own activity
+  with a month picker. `/payouts/activity`: person picker + month. New
+  `components/common/MonthPicker.tsx`, `lib/months.ts`, `features/payouts/payout-format.ts`.
+- **Bruno.** 13 requests (30 in the folder), README rows.
+
+**Decisions taken while building** (state them in the PR)
+
+1. **Lead-source buckets fold** (user, 5 Nov): a bucket keeps a line of its own only when a
+   lead-source rate applied (`lead_source_carrier` / `lead_source`); every other sale on a
+   carrier is on the carrier's line. Appointed carriers are listed with zero rows.
+2. **Chargebacks are matched by `occurredAt` only.** The ledger has no `statementMonth`,
+   `carrier` or `customerName` yet; PAC-180 adds the `statementMonth` clause and the
+   chargeback-schema additions (still not in this PR, as planned).
+3. **Who gets a statement:** everyone active on a structure; someone invited or removed
+   only for a month with sales or chargebacks. A draft for someone no longer on a structure
+   is deleted on recalculation; any other status is kept.
+4. **The claim** (`run-claim.ts`): a live `generating` run (< 30 min) is busy; a `failed` or
+   stale one is taken over; the job leaves a `ready` month alone **only if it was generated
+   after the month ended** — a month the owner generated on the 31st is re-drafted on the 1st.
+   A manual Generate always recalculates.
+5. **Recalculating one statement** applies the person's current structure (or the snapshot
+   if they left every structure) against the run's stored team shares and Salesperson of
+   the Month, and warns when their premium has moved since — re-splitting the pool for one
+   person would change other people's statements.
+6. **Visibility:** a statement the caller may not see is a 404; someone else's activity
+   without `payouts:write` is a 403 (the ticket's wording). `mine=true` gives the employee
+   view to anyone, so My Pay never shows a branch manager their own draft.
+7. **Run counts and totals are read in the caller's scope**, never stored — a branch
+   manager is not shown the agency's payroll. The agency premium and pools are shown to both
+   (the team bonus is agency-wide).
+8. Only the job notifies; a manual Generate does not.
+9. Computed money is stored as plain numbers (may be negative); `MONEY_PROP` stays for
+   input.
+10. PDF, send, acceptance, rejection and history fields arrive with PAC-181/182 (nullable
+    additions). The math already applies `adjustments[]`.
+11. The Bruno structure enrols the demo producer **only when they are on no structure**
+    (`payoutsMemberIdsJson`), keeping PR 1's "a run never moves anyone" guarantee.
+
+**Verified (5 Nov):** shared 440 tests (payout-math + render specs new), tsc clean; API tsc =
+24-error baseline (none in payouts, common/payouts or the worker), eslint clean on the
+touched paths, unit 1597 (month-window 6 new); e2e `payouts-run` 18, `payouts-structures`
+38, `worker/generate-pay-statements` 5, `agency-onboarding` 24; web `npm run lint` clean,
+prettier clean on the new files; Bruno Payouts 30/30 (62 tests). Headless Chrome on the demo
+agency (owner, producer, branch manager; dark + light): `/payouts` defaults to October and
+offers Generate; November recalculated through the dialog with the "still running" note;
+October generated from the page — **agency premium $91,929 = the Owner dashboard's for the
+same month, and each of the 7 statements' sold premium = the dashboard filtered to that
+person**; statement sections and Activity tab; activity totals = the statement's; the
+producer's My Pay hides their draft and shows it once marked sent (no Recalculate for
+them); the producer is redirected from `/payouts`; the branch manager sees their branch's
+5 of 7 and no Generate. Console: only the existing forwardRef warning. The check structure
+was archived, the demo payout settings restored and the runs it created deleted.

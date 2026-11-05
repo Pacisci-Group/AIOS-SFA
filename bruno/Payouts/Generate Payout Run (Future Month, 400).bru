@@ -1,0 +1,38 @@
+meta {
+  name: Generate Payout Run (Future Month, 400)
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/payouts/runs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "month": "2099-01"
+  }
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /payouts/runs — a month that has not started
+
+  There is nothing to calculate before a month begins on the agency's
+  calendar, so it is refused rather than drafted empty.
+}

@@ -1,0 +1,88 @@
+meta {
+  name: Get Payout Run
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/payouts/runs?month={{payoutsMonth}}
+  auth: bearer
+}
+
+params:query {
+  month: {{payoutsMonth}}
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  // Roughly the demo agency's month (Chicago is UTC−5/−6; the script
+  // sandbox has no time-zone data). Any valid month will do here: the
+  // response's `currentMonth` is the authority and replaces it below.
+  const chicago = new Date(Date.now() - 6 * 60 * 60 * 1000);
+  bru.setVar("payoutsMonth", chicago.toISOString().slice(0, 7));
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("payoutsMonth", res.getBody().currentMonth);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("names the month and the agency's current one; run is the run or null", function () {
+    const body = res.getBody();
+    expect(body.month).to.match(/^\d{4}-\d{2}$/);
+    expect(body.currentMonth).to.match(/^\d{4}-\d{2}$/);
+    expect(body).to.have.property("run");
+  });
+}
+
+docs {
+  # GET /payouts/runs?month — a month's run (PAC-178)
+
+  **Module** — `payouts`. **Permission** — `payouts:write` (owner, branch
+  manager). A producer or CSR (`payouts:read` only) gets `403`.
+
+  **Query** — `month` (`YYYY-MM`, required).
+
+  **Response `200`**
+  ```json
+  {
+    "month": "2026-10",
+    "currentMonth": "2026-11",
+    "run": {
+      "id": "…",
+      "month": "2026-10",
+      "status": "ready",
+      "trigger": "cron",
+      "timeZone": "America/Chicago",
+      "window": { "from": "2026-10-01T05:00:00.000Z", "to": "2026-11-01T05:00:00.000Z" },
+      "agencyGrossPremium": 182000,
+      "teamBonus": { "enabled": true, "stackable": false, "levels": [ … ], "met": false,
+                     "poolAmount": 0, "csrSharePercent": 20, "producerSharePercent": 80,
+                     "csrPool": 0, "producerPool": 0, "csrPremium": 0, "producerPremium": 0 },
+      "salespersonOfMonth": { "enabled": true, "bonusAmount": 250, "topGrossPremium": 51100,
+                              "winners": [{ "userId": "…", "name": "Jessica Yates" }] },
+      "counts": { "statements": 7, "draft": 7, "sent": 0, "accepted": 0, "rejected": 0 },
+      "totals": { "grossPremium": 152000, "netCommission": 14310.5 },
+      "warnings": [],
+      "startedAt": "…", "finishedAt": "…", "error": null
+    }
+  }
+  ```
+  `run` is `null` before the month has been generated. `agencyGrossPremium`
+  and the pools are the agency's (the team bonus is agency-wide); `counts`
+  and `totals` are over the statements **the caller may see** — a branch
+  manager's are their branch's. A month is the agency's calendar month, so a
+  sale at 11:30 pm Central on the 31st is in it. The current month is
+  partial until it ends.
+
+  **Errors** — `400` for a malformed month; `403` without `payouts:write`.
+}

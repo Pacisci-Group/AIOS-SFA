@@ -13,6 +13,21 @@ auth:bearer {
   token: {{payoutsOwnerToken}}
 }
 
+script:post-response {
+  // The statements half of the folder (PAC-178) needs someone on the
+  // structure it creates. The demo producer is enrolled only when they are
+  // on no structure today, so a run never moves anyone off a real one.
+  const people = (res.getBody() && res.getBody().people) || [];
+  const producer = people.find(function (person) {
+    return person.email === bru.getEnvVar("producerEmail");
+  });
+  bru.setVar("payoutsProducerUserId", producer ? producer.id : "");
+  bru.setVar(
+    "payoutsMemberIdsJson",
+    JSON.stringify(producer && !producer.structure ? [producer.id] : [])
+  );
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);

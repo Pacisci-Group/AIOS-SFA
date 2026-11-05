@@ -1,0 +1,37 @@
+meta {
+  name: List Activity People
+  type: http
+  seq: 20
+}
+
+get {
+  url: {{baseUrl}}/payouts/activity/people
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists people with their roles and branch", function () {
+    const people = res.getBody().people;
+    expect(people).to.be.an("array").that.is.not.empty;
+    expect(people[0]).to.have.all.keys("id", "name", "roles", "status", "branchName");
+  });
+}
+
+docs {
+  # GET /payouts/activity/people — whose activity a reviewer may open (PAC-179)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`.
+
+  Everyone not removed from the agency, for the owner; a branch manager's
+  branch only. The Activity page's person picker.
+
+  **Response `200`** — `{ "people": [{ "id", "name", "roles": ["Producer"], "status": "active", "branchName": "Main" }] }`
+}

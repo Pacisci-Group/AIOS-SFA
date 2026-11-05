@@ -1,0 +1,40 @@
+meta {
+  name: List My Pay Statements (as Producer)
+  type: http
+  seq: 26
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements?mine=true
+  auth: bearer
+}
+
+params:query {
+  mine: true
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("only their own, and never a draft", function () {
+    res.getBody().statements.forEach(function (row) {
+      expect(row.userId).to.equal(bru.getVar("payoutsProducerUserId"));
+      expect(row.status).to.not.equal("draft");
+    });
+  });
+}
+
+docs {
+  # GET /payouts/statements?mine=true — My Pay, as a producer (PAC-178)
+
+  The employee view: the caller's own statements once sent, newest month
+  first. The draft **Generate Payout Run** just wrote for this producer is
+  not here — nothing reaches an employee until someone sends it (PAC-181).
+  Without `payouts:write` the same holds with or without `mine`.
+}

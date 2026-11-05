@@ -1,0 +1,146 @@
+import type {
+  PayoutRunView,
+  PayStatementStatus,
+  PayStatementSummary,
+  PayStatementView,
+  StatementAdjustmentView,
+} from '@sfa/shared';
+import type { Types } from 'mongoose';
+import type { PayoutRun } from './schemas/payout-run.schema';
+import type { PayStatement } from './schemas/pay-statement.schema';
+
+/**
+ * Stored runs and statements → the wire shapes in `@sfa/shared`. Reads are
+ * `.lean()`, which fills no schema default, so every optional part is
+ * null-guarded.
+ */
+
+export type LeanRun = PayoutRun & { _id: Types.ObjectId };
+export type LeanStatement = PayStatement & { _id: Types.ObjectId };
+
+export interface RunCounts {
+  counts: PayoutRunView['counts'];
+  totals: PayoutRunView['totals'];
+}
+
+export const EMPTY_RUN_COUNTS: RunCounts = {
+  counts: { statements: 0, draft: 0, sent: 0, accepted: 0, rejected: 0 },
+  totals: { grossPremium: 0, netCommission: 0 },
+};
+
+/** Per-status counts and totals over a set of statements, from an aggregate. */
+export function runCountsFrom(
+  rows: readonly {
+    _id: PayStatementStatus;
+    count: number;
+    grossPremium: number;
+    netCommission: number;
+  }[],
+): RunCounts {
+  const counts = { ...EMPTY_RUN_COUNTS.counts };
+  let gross = 0;
+  let net = 0;
+  for (const row of rows) {
+    counts[row._id] = row.count;
+    counts.statements += row.count;
+    gross += Math.round(row.grossPremium * 100);
+    net += Math.round(row.netCommission * 100);
+  }
+  return {
+    counts,
+    totals: { grossPremium: gross / 100, netCommission: net / 100 },
+  };
+}
+
+export function runView(run: LeanRun, scoped: RunCounts): PayoutRunView {
+  const team = run.teamBonus;
+  const som = run.salespersonOfMonth;
+  return {
+    id: String(run._id),
+    month: run.month,
+    status: run.status,
+    trigger: run.trigger,
+    timeZone: run.timeZone,
+    window: {
+      from: run.window.from.toISOString(),
+      to: run.window.to.toISOString(),
+    },
+    agencyGrossPremium: run.agencyGrossPremium ?? 0,
+    teamBonus: {
+      enabled: team?.enabled ?? false,
+      stackable: team?.stackable ?? false,
+      levels: team?.levels ?? [],
+      met: team?.met ?? false,
+      poolAmount: team?.poolAmount ?? 0,
+      csrSharePercent: team?.csrSharePercent ?? 0,
+      producerSharePercent: team?.producerSharePercent ?? 0,
+      csrPool: team?.csrPool ?? 0,
+      producerPool: team?.producerPool ?? 0,
+      csrPremium: team?.csrPremium ?? 0,
+      producerPremium: team?.producerPremium ?? 0,
+    },
+    salespersonOfMonth: {
+      enabled: som?.enabled ?? false,
+      bonusAmount: som?.bonusAmount ?? 0,
+      topGrossPremium: som?.topGrossPremium ?? null,
+      winners: som?.winners ?? [],
+    },
+    counts: scoped.counts,
+    totals: scoped.totals,
+    warnings: run.warnings ?? [],
+    startedAt: run.startedAt.toISOString(),
+    finishedAt: run.finishedAt ? run.finishedAt.toISOString() : null,
+    error: run.error ?? null,
+  };
+}
+
+export function statementSummary(doc: LeanStatement): PayStatementSummary {
+  return {
+    id: String(doc._id),
+    runId: String(doc.runId),
+    month: doc.month,
+    userId: String(doc.userId),
+    userName: doc.userName,
+    roleNames: doc.roleNames ?? [],
+    pool: doc.pool,
+    branchId: doc.branchId ?? null,
+    branchName: doc.branchName ?? null,
+    structureId: String(doc.structureId),
+    structureName: doc.structureSnapshot?.name ?? '',
+    status: doc.status,
+    version: doc.version ?? 1,
+    totals: doc.totals,
+    warningCount: doc.warnings?.length ?? 0,
+    computedAt: doc.computedAt.toISOString(),
+  };
+}
+
+function adjustmentView(
+  row: LeanStatement['adjustments'][number],
+): StatementAdjustmentView {
+  return {
+    id: String(row._id),
+    kind: row.kind,
+    chargebackId: row.chargebackId ? String(row.chargebackId) : null,
+    amount: row.amount ?? null,
+    note: row.note ?? '',
+    createdBy: row.createdBy ? String(row.createdBy) : null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function statementView(doc: LeanStatement): PayStatementView {
+  return {
+    ...statementSummary(doc),
+    allstateBindId: doc.allstateBindId ?? null,
+    timeZone: doc.timeZone,
+    structure: doc.structureSnapshot,
+    premiumLines: doc.premiumLines ?? [],
+    deals: doc.deals ?? [],
+    chargebacks: doc.chargebacks ?? [],
+    bonuses: doc.bonuses,
+    indicators: doc.indicators,
+    adjustments: (doc.adjustments ?? []).map(adjustmentView),
+    warnings: doc.warnings ?? [],
+  };
+}

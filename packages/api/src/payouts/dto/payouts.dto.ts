@@ -4,8 +4,12 @@ import {
   hatTrickError,
   leadSourceRulesError,
   MAX_BONUS_TIERS,
+  MAX_PAY_STATEMENTS_PAGE_SIZE,
   MAX_RATE_RULES,
+  PAY_STATEMENT_STATUSES,
+  PAY_STATEMENTS_PAGE_SIZE,
   PAYMENT_STRUCTURE_NAME_MAX_LENGTH,
+  PAYOUT_MONTH_PATTERN,
   rateRulesError,
   teamBonusError,
 } from '@sfa/shared';
@@ -195,3 +199,61 @@ export type UpdatePaymentStructureDto = z.infer<
 
 /** `:id`. */
 export const paymentStructureIdSchema = objectId;
+
+// ── Statements (PAC-178 / PAC-179) ──────────────────────────────────────
+
+/** A pay month, `YYYY-MM`. */
+export const payoutMonthSchema = z
+  .string()
+  .trim()
+  .regex(PAYOUT_MONTH_PATTERN, 'month must be in YYYY-MM form.');
+
+/** `GET /payouts/runs?month`. */
+export const getPayoutRunQuerySchema = z
+  .object({ month: payoutMonthSchema })
+  .strict();
+export type GetPayoutRunQueryDto = z.infer<typeof getPayoutRunQuerySchema>;
+
+/** `POST /payouts/runs` — generate the month, or recalculate it. */
+export const generatePayoutRunSchema = z
+  .object({ month: payoutMonthSchema })
+  .strict();
+export type GeneratePayoutRunDto = z.infer<typeof generatePayoutRunSchema>;
+
+/**
+ * `GET /payouts/statements`. Every filter narrows what the caller may
+ * already see; none widens it. `mine=true` is My Pay: the caller's own
+ * statements under the employee rule (never a draft), whatever else they
+ * may see.
+ */
+export const listPayStatementsQuerySchema = z
+  .object({
+    month: payoutMonthSchema.optional(),
+    status: z.enum(PAY_STATEMENT_STATUSES).optional(),
+    branchId: objectId.optional(),
+    q: z.string().trim().max(100).optional(),
+    mine: z.enum(['true', 'false']).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_PAY_STATEMENTS_PAGE_SIZE)
+      .default(PAY_STATEMENTS_PAGE_SIZE),
+  })
+  .strict();
+export type ListPayStatementsQueryDto = z.infer<
+  typeof listPayStatementsQuerySchema
+>;
+
+/** `:id` of a statement. */
+export const payStatementIdSchema = objectId;
+
+/** `GET /payouts/activity` (PAC-179). No `userId` = the caller. */
+export const payoutActivityQuerySchema = z
+  .object({
+    month: payoutMonthSchema,
+    userId: objectId.optional(),
+  })
+  .strict();
+export type PayoutActivityQueryDto = z.infer<typeof payoutActivityQuerySchema>;

@@ -13,6 +13,7 @@ import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycl
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
 import { DataExportExpireFn } from './functions/data-export-expire.fn';
 import { DataExportGenerateFn } from './functions/data-export-generate.fn';
+import { GeneratePayStatementsFn } from './functions/generate-pay-statements.fn';
 import { DeliverNotificationFn } from './functions/deliver-notification.fn';
 import { SendNotificationEmailFn } from './functions/send-notification-email.fn';
 import { RenewalMaterializationService } from '../common/renewal/renewal-materialization.service';
@@ -78,6 +79,26 @@ import {
 import { RedisModule } from '../common/redis/redis.module';
 import { StorageModule } from '../storage/storage.module';
 import { Branch, BranchSchema } from '../branches/schemas/branch.schema';
+import {
+  PaymentStructure,
+  PaymentStructureSchema,
+} from '../payouts/schemas/payment-structure.schema';
+import {
+  PayStatement,
+  PayStatementSchema,
+} from '../payouts/schemas/pay-statement.schema';
+import {
+  PayoutRun,
+  PayoutRunSchema,
+} from '../payouts/schemas/payout-run.schema';
+import {
+  UserRole,
+  UserRoleSchema,
+} from '../permissions/schemas/user-role.schema';
+import {
+  AgencyRole,
+  AgencyRoleSchema,
+} from '../roles/schemas/agency-role.schema';
 import {
   Chargeback,
   ChargebackSchema,
@@ -212,6 +233,18 @@ import {
       { name: Chargeback.name, schema: ChargebackSchema },
       { name: Branch.name, schema: BranchSchema },
       { name: LeadSource.name, schema: LeadSourceSchema },
+      // The monthly pay statement job (PAC-178). It reads the structures,
+      // the month's sales (`Deal`, `Policy`, `Chargeback`, `DealAudit`,
+      // `Household`, `Contact`, `Carrier`, `LeadSource`, all above) and the
+      // people's roles, and writes the run and its statements. The engine
+      // lives in `common/payouts/` so this boundary holds. Their indexes —
+      // the run's unique `{agencyId, month}` claim among them — are built by
+      // `PayoutsModule` in the API, which owns the schemas.
+      { name: PaymentStructure.name, schema: PaymentStructureSchema },
+      { name: PayoutRun.name, schema: PayoutRunSchema },
+      { name: PayStatement.name, schema: PayStatementSchema },
+      { name: AgencyRole.name, schema: AgencyRoleSchema },
+      { name: UserRole.name, schema: UserRoleSchema },
     ]),
     // Imported explicitly rather than relying on `StorageModule` being
     // `@Global()`: a global module is only global within the app that imports
@@ -294,6 +327,9 @@ import {
     // email the requester; delete files past retention.
     DataExportGenerateFn,
     DataExportExpireFn,
+    // Payouts (PAC-178): draft last month's pay statements on each agency's
+    // 1st, and tell its owners and branch managers.
+    GeneratePayStatementsFn,
   ],
 })
 export class WorkerModule {}

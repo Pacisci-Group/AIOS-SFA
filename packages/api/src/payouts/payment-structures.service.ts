@@ -45,7 +45,7 @@ import {
   loadPayoutPeople,
   type PayoutPeopleModels,
   type PayoutPerson,
-} from './payout-people';
+} from '../common/payouts/payout-people';
 import {
   PaymentStructure,
   PaymentStructureDocument,

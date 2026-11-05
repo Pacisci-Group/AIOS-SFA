@@ -1,0 +1,32 @@
+meta {
+  name: Get Payout Activity (as Producer, Other Person, 403)
+  type: http
+  seq: 29
+}
+
+get {
+  url: {{baseUrl}}/payouts/activity?month={{payoutsMonth}}&userId={{payoutsOwnerUserId}}
+  auth: bearer
+}
+
+params:query {
+  month: {{payoutsMonth}}
+  userId: {{payoutsOwnerUserId}}
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+tests {
+  test("returns 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /payouts/activity — someone else's, as a producer
+
+  `payouts:read` is your own only. Anyone else's activity needs
+  `payouts:write` (the ticket's "own or 403").
+}

@@ -24,6 +24,8 @@ body:json {
 script:post-response {
   if (res.getStatus() === 201 || res.getStatus() === 200) {
     bru.setVar("payoutsOwnerToken", res.getBody().accessToken);
+    // Someone else's id, for the producer's "not yours" activity check.
+    bru.setVar("payoutsOwnerUserId", res.getBody().user.id);
   }
 }
 
