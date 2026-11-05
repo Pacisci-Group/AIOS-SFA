@@ -293,6 +293,17 @@ const MIGRATION_STEP_COUNT = 23;
  */
 const ERROR_LOG_LIMIT = 25;
 
+/**
+ * The calendar day (`YYYY-MM-DD`) a SmartSuite date names. Its date-only
+ * fields arrive at UTC midnight, so the UTC day *is* the day that was typed —
+ * a leave day is a calendar fact, not a business instant (PAC-165).
+ */
+function leaveDay(value: Date | undefined): string | null {
+  return value && !Number.isNaN(value.getTime())
+    ? value.toISOString().slice(0, 10)
+    : null;
+}
+
 function formatMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
@@ -2870,32 +2881,79 @@ export class MigrationService {
         rec[TIME_OFF_REQUEST_FIELDS.producer],
       );
 
+      // PAC-165: an imported request is read-only history. It carries no
+      // lifecycle `status` and no policy — the SmartSuite labels go under
+      // `legacy.*` for display — so nothing that asks for "Submitted"
+      // requests can ever pick one up. The same shape the
+      // `time_off_requests_v2` migration gives rows imported before it.
+      const requestType = normalizeTimeOffRequestType(
+        selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
+      );
+      const firstDay =
+        leaveDay(toDate(rec[TIME_OFF_REQUEST_FIELDS.startDate])) ??
+        leaveDay(toDate(rec[TIME_OFF_REQUEST_FIELDS.endDate]));
+      const hoursRequested = toNumber(
+        rec[TIME_OFF_REQUEST_FIELDS.hoursRequested],
+      );
+
       await this.persist(
         this.timeOffRequestModel,
         ctx,
         legacyId,
         {
-          title: toText(rec[TIME_OFF_REQUEST_FIELDS.title]),
-          startDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.startDate]),
-          endDate: toDate(rec[TIME_OFF_REQUEST_FIELDS.endDate]),
-          requestType: normalizeTimeOffRequestType(
-            selectCode(rec[TIME_OFF_REQUEST_FIELDS.requestType]),
-          ),
-          hoursRequested: toNumber(rec[TIME_OFF_REQUEST_FIELDS.hoursRequested]),
-          status: normalizeTimeOffStatus(
-            selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
-          ),
-          type: normalizeTimeOffType(
-            selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
-          ),
-          decision: normalizeTimeOffDecision(
-            selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
-          ),
-          producerId: this.userRef(legacyProducerId, producers),
+          source: 'legacy',
+          employeeId: this.userRef(legacyProducerId, producers) ?? null,
           legacyProducerId,
+          firstDay,
+          lastDay:
+            leaveDay(toDate(rec[TIME_OFF_REQUEST_FIELDS.endDate])) ?? firstDay,
+          dayMode:
+            requestType === 'Full Day(s)'
+              ? 'full'
+              : requestType === 'Partial Day (Hours)'
+                ? 'partial'
+                : null,
+          // Copied raw from SmartSuite: anything that is not a sane number
+          // reads as zero rather than poisoning a sum.
+          totalHours:
+            typeof hoursRequested === 'number' &&
+            Number.isFinite(hoursRequested) &&
+            hoursRequested >= 0
+              ? hoursRequested
+              : 0,
+          legacy: {
+            status:
+              normalizeTimeOffStatus(
+                selectCode(rec[TIME_OFF_REQUEST_FIELDS.status]),
+              ) || null,
+            type:
+              normalizeTimeOffType(
+                selectCode(rec[TIME_OFF_REQUEST_FIELDS.type]),
+              ) || null,
+            requestType: requestType || null,
+            decision:
+              normalizeTimeOffDecision(
+                selectCode(rec[TIME_OFF_REQUEST_FIELDS.decision]),
+              ) || null,
+            title: toText(rec[TIME_OFF_REQUEST_FIELDS.title]) || null,
+          },
         },
         stat,
         report,
+        // Written once: a re-import must not move the row's "imported" date.
+        {
+          timeline: [
+            {
+              at: new Date(),
+              actorId: null,
+              action: 'imported',
+              fromStatus: null,
+              toStatus: null,
+              note: null,
+              warnings: [],
+            },
+          ],
+        },
       );
     }
     this.logger.log(`Time off requests: fetched ${stat.fetched}`);
@@ -3142,6 +3200,8 @@ export class MigrationService {
     fields: Record<string, unknown>,
     stat: CollectionStat,
     report: MigrationReport,
+    /** Fields written only when the record is first imported, never on a re-run. */
+    setOnInsert: Record<string, unknown> = {},
   ): Promise<Types.ObjectId | undefined> {
     try {
       const id = await this.upsert(
@@ -3156,7 +3216,7 @@ export class MigrationService {
           legacySmartSuiteId: legacyId,
           ...fields,
         },
-        {},
+        setOnInsert,
         ctx.dryRun,
       );
       stat.migrated += ctx.dryRun ? 0 : 1;

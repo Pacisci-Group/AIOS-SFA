@@ -11,6 +11,7 @@ import {
   LOCKED_TIME_OFF_FIELDS,
   normalizeTimeOffPolicyRules,
   timeOffPolicyRulesError,
+  UNDECIDED_TIME_OFF_REQUEST_STATUSES,
   type CreatablePolicyType,
   type HolidayKey,
   type HrPoliciesResponse,
@@ -85,8 +86,6 @@ type UserLean = {
 /** Spelled out on every read: archived policies stay as rows (PAC-155). */
 const ACTIVE = { archivedAt: null } as const;
 
-/** PAC-165's "waiting for a decision" status; migrated rows carry it too. */
-const SUBMITTED = 'Submitted';
 
 /**
  * HR policies (PAC-161 v3, PAC-174): list, read, create, edit and archive,
@@ -434,10 +433,14 @@ export class HrPoliciesService {
   ): Promise<void> {
     const row = await this.find(agencyId, policyId);
     if (row.type === 'time_off') {
+      // Waiting on a person: sent and undecided, or sent back for changes
+      // (PAC-165). A discarded draft is not a request; an imported row has
+      // no policy and no status, so it can never match.
       const waiting = await this.timeOffRequests.countDocuments({
         agencyId,
         policyId: row._id,
-        status: SUBMITTED,
+        status: { $in: UNDECIDED_TIME_OFF_REQUEST_STATUSES },
+        deletedAt: null,
       });
       if (waiting > 0) {
         throw new ConflictException(

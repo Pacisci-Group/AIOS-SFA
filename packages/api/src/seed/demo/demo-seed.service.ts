@@ -369,7 +369,6 @@ export class DemoSeedService {
     await this.seedServiceTickets(ctx, crms, households, policies, rng);
     await this.seedProducerAssignments(ctx, producers, crms, rng);
     await this.seedCrmRotations(ctx, producers, crms);
-    await this.seedTimeOffRequests(ctx, producers, rng);
 
     await this.seedProducerGoals(ctx, producers);
     await this.seedActivities(ctx, leads, quotes, deals, rng);
@@ -1887,39 +1886,6 @@ export class DemoSeedService {
         this.inc('crmRotations');
         n++;
       }
-    }
-  }
-
-  private async seedTimeOffRequests(
-    ctx: Ctx,
-    producers: TeamMember[],
-    rng: Rng,
-  ): Promise<void> {
-    for (let i = 0; i < DEMO_CONFIG.timeOffRequests; i++) {
-      const producer = rng.pick(producers);
-      const start = this.daysAgo(rng.int(-30, 20));
-      const end = this.addDays(start, rng.int(0, 4));
-      const status = rng.pick(['Approved', 'Pending', 'Approved', 'Denied']);
-      const legacyId = `demo:too:${i}`;
-      await this.upsert(
-        this.timeOffRequestModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
-        {
-          agencyId: ctx.agencyId,
-          branchId: producer.branchId,
-          legacySmartSuiteId: legacyId,
-          title: `${producer.fullName} — Time Off`,
-          startDate: start,
-          endDate: end,
-          requestType: rng.pick(['PTO', 'Sick', 'Unpaid']),
-          hoursRequested: (this.daysBetween(start, end) + 1) * 8,
-          status,
-          type: rng.pick(['Full Day', 'Partial Day']),
-          decision: status === 'Pending' ? undefined : status,
-          producerId: producer.userId,
-        },
-      );
-      this.inc('timeOffRequests');
     }
   }
 
