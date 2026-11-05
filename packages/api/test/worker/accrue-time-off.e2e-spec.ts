@@ -12,6 +12,7 @@ import { Agency } from '../../src/platform/schemas/agency.schema';
 import { EmployeeProfile } from '../../src/hr/schemas/employee-profile.schema';
 import { LeaveLedger } from '../../src/hr/schemas/leave-ledger.schema';
 import { TimeOffPolicy } from '../../src/hr/schemas/time-off-policy.schema';
+import { LeaveLedgerService } from '../../src/common/time-off/leave-ledger.service';
 import { inlineStep } from '../helpers/inline-step';
 
 /**
@@ -47,6 +48,7 @@ describe('AccrueTimeOffFn (e2e)', () => {
   let policies: Model<TimeOffPolicy>;
   let ledger: Model<LeaveLedger>;
   let profiles: Model<EmployeeProfile>;
+  let ledgerService: LeaveLedgerService;
 
   const agencyId = new Types.ObjectId();
   const alice = new Types.ObjectId();
@@ -143,6 +145,7 @@ describe('AccrueTimeOffFn (e2e)', () => {
     await app.init();
 
     fn = app.get(AccrueTimeOffFn);
+    ledgerService = app.get(LeaveLedgerService);
     agencies = app.get<Model<Agency>>(getModelToken(Agency.name));
     policies = app.get<Model<TimeOffPolicy>>(getModelToken(TimeOffPolicy.name));
     ledger = app.get<Model<LeaveLedger>>(getModelToken(LeaveLedger.name));
@@ -359,5 +362,262 @@ describe('AccrueTimeOffFn (e2e)', () => {
 
     await run(new Date(CHICAGO_MAR_1_0030.getTime() + 3_600_000));
     expect(await rows(anniversary, alice)).toHaveLength(4);
+  });
+
+  it('closes the period on the leave that belongs to it — approved leave after the reset does not shrink the carryover (PAC-165)', async () => {
+    const policyId = await insertPolicy({
+      name: 'Yearly PTO',
+      hoursPerYear: 80,
+      accrualFrequency: 'yearly',
+      resetDateKind: 'fixed',
+      resetMonthDay: '01-01',
+      maxBalanceHours: null,
+      carryoverCapHours: 40,
+      memberIds: [alice],
+    });
+    await ledger.create({
+      agencyId: agencyId.toString(),
+      policyId,
+      userId: alice,
+      kind: 'allocation',
+      hours: 50,
+      effectiveAt: new Date('2024-06-01T05:00:00Z'),
+      source: { kind: 'enrollment', id: policyId },
+    });
+    // One request across the reset: 30 December is this period's, the reset
+    // day itself and 6 January are the next one's.
+    const requestId = new Types.ObjectId();
+    await ledgerService.postUsed(
+      { agencyId: agencyId.toString(), policyId, userId: alice, requestId },
+      [
+        { date: '2024-12-30', hours: 8 },
+        { date: '2025-01-01', hours: 8 },
+        { date: '2025-01-06', hours: 8 },
+      ],
+      'America/Chicago',
+    );
+
+    await run(CHICAGO_JAN_1_0100);
+
+    const byKind = Object.fromEntries(
+      (await rows(policyId, alice)).map((row) => [row.kind, row]),
+    );
+    // 50 − 8 closes at 42, not at 26: the cap keeps 40, two hours are lost.
+    expect(byKind.expiration).toMatchObject({
+      hours: -42,
+      reason: 'carryover_cap',
+    });
+    expect(byKind.carryover).toMatchObject({ hours: 40 });
+    // 40 carried + 80 granted − the 16 h of January leave.
+    expect(await balance(policyId, alice)).toBe(104);
+  });
+
+  describe('LeaveLedgerService request rows (PAC-165)', () => {
+    const target = (policyId: Types.ObjectId, requestId = new Types.ObjectId()) => ({
+      agencyId: agencyId.toString(),
+      policyId,
+      userId: alice,
+      requestId,
+    });
+    const days = [
+      { date: '2025-03-06', hours: 8 },
+      { date: '2025-03-07', hours: 4 },
+      { date: '2025-03-08', hours: 0 }, // a Saturday inside the range
+      { date: '2025-03-10', hours: 8 },
+    ];
+    const of = (
+      map: Map<string, { current: number; upcoming: number }>,
+      userId: Types.ObjectId,
+    ) => map.get(userId.toString());
+
+    async function policyWith80Hours(): Promise<Types.ObjectId> {
+      const policyId = await insertPolicy({
+        name: 'Requests PTO',
+        hoursPerYear: 80,
+        accrualFrequency: 'yearly',
+        resetDateKind: 'fixed',
+        resetMonthDay: '01-01',
+        memberIds: [alice],
+      });
+      await ledger.create({
+        agencyId: agencyId.toString(),
+        policyId,
+        userId: alice,
+        kind: 'allocation',
+        hours: 80,
+        effectiveAt: new Date('2025-01-01T06:00:00Z'),
+        source: { kind: 'activation', id: policyId },
+      });
+      return policyId;
+    }
+
+    it('posts one `used` row per leave day, dated on the day, exactly once', async () => {
+      const policyId = await policyWith80Hours();
+      const request = target(policyId);
+
+      expect(
+        await ledgerService.postUsed(request, days, 'America/Chicago'),
+      ).toBe(3);
+      const used = await ledger
+        .find({ policyId, kind: 'used' })
+        .sort({ effectiveAt: 1 })
+        .lean();
+      expect(used.map((row) => row.hours)).toEqual([-8, -4, -8]);
+      // 6 March in Chicago (CST, UTC−6) starts at 06:00Z.
+      expect(used[0].effectiveAt.toISOString()).toBe('2025-03-06T06:00:00.000Z');
+      expect(used[0].periodKey).toBe(
+        `used:${request.requestId.toString()}:2025-03-06`,
+      );
+      expect(used[0].source).toMatchObject({ kind: 'request' });
+      expect(String(used[0].source.id)).toBe(request.requestId.toString());
+
+      // A second post of the same request is refused by the unique index.
+      await expect(
+        ledgerService.postUsed(request, days, 'America/Chicago'),
+      ).rejects.toMatchObject({ code: 11000 });
+      expect(await ledger.countDocuments({ policyId, kind: 'used' })).toBe(3);
+    });
+
+    it('splits the balance at the as-of instant: future leave is upcoming, not current', async () => {
+      const policyId = await policyWith80Hours();
+      await ledgerService.postUsed(target(policyId), days, 'America/Chicago');
+      const read = (asOf: string) =>
+        ledgerService.balances(
+          agencyId.toString(),
+          policyId,
+          [alice, bob],
+          new Date(asOf),
+        );
+
+      // Before any of it: the balance is whole and 20 h are on their way.
+      expect(of(await read('2025-03-01T06:00:00Z'), alice)).toEqual({
+        current: 80,
+        upcoming: 20,
+      });
+      // As of the start of 7 March: the 6th is taken, the rest is not.
+      expect(of(await read('2025-03-07T06:00:00Z'), alice)).toEqual({
+        current: 72,
+        upcoming: 12,
+      });
+      // After all of it.
+      expect(of(await read('2025-04-01T05:00:00Z'), alice)).toEqual({
+        current: 60,
+        upcoming: 0,
+      });
+      // Someone with no rows is absent, and another agency's key reads nothing.
+      expect(of(await read('2025-03-01T06:00:00Z'), bob)).toBeUndefined();
+      expect(
+        (
+          await ledgerService.balances(
+            new Types.ObjectId().toString(),
+            policyId,
+            [alice],
+            new Date('2025-03-01T06:00:00Z'),
+          )
+        ).size,
+      ).toBe(0);
+    });
+
+    it('reverses each `used` row on its own day and restores the balance', async () => {
+      const policyId = await policyWith80Hours();
+      const request = target(policyId);
+      await ledgerService.postUsed(request, days, 'America/Chicago');
+
+      expect(await ledgerService.postReversal(request)).toBe(3);
+      const used = await ledger
+        .find({ policyId, kind: 'used' })
+        .sort({ effectiveAt: 1 })
+        .lean();
+      const reversals = await ledger
+        .find({ policyId, kind: 'reversal' })
+        .sort({ effectiveAt: 1 })
+        .lean();
+      expect(reversals.map((row) => row.hours)).toEqual([8, 4, 8]);
+      reversals.forEach((row, index) => {
+        expect(String(row.reversesId)).toBe(String(used[index]._id));
+        expect(row.effectiveAt).toEqual(used[index].effectiveAt);
+      });
+      expect(reversals[0].periodKey).toBe(
+        `reversal:${request.requestId.toString()}:2025-03-06`,
+      );
+      expect(
+        of(
+          await ledgerService.balances(
+            agencyId.toString(),
+            policyId,
+            [alice],
+            new Date('2025-03-01T06:00:00Z'),
+          ),
+          alice,
+        ),
+      ).toEqual({ current: 80, upcoming: 0 });
+      // Nothing left to count as leave, and a second reversal is refused.
+      expect(
+        await ledgerService.leaveDays(agencyId.toString(), policyId, alice),
+      ).toEqual([]);
+      await expect(ledgerService.postReversal(request)).rejects.toMatchObject({
+        code: 11000,
+      });
+    });
+
+    it('reports leave per day and per request inside a window', async () => {
+      const policyId = await policyWith80Hours();
+      const first = target(policyId);
+      const second = target(policyId);
+      await ledgerService.postUsed(first, days, 'America/Chicago');
+      await ledgerService.postUsed(
+        second,
+        [{ date: '2025-04-02', hours: 8 }],
+        'America/Chicago',
+      );
+
+      const fromMarch7 = await ledgerService.leaveDays(
+        agencyId.toString(),
+        policyId,
+        alice,
+        { from: new Date('2025-03-07T06:00:00Z') },
+      );
+      expect(fromMarch7.map((row) => row.hours)).toEqual([4, 8, 8]);
+      expect(String(fromMarch7[2].requestId)).toBe(second.requestId.toString());
+      const marchOnly = await ledgerService.leaveDays(
+        agencyId.toString(),
+        policyId,
+        alice,
+        { before: new Date('2025-04-01T05:00:00Z') },
+      );
+      expect(marchOnly.reduce((sum, row) => sum + row.hours, 0)).toBe(20);
+    });
+
+    it('posts a manual adjustment with the admin’s reason', async () => {
+      const policyId = await policyWith80Hours();
+      const id = await ledgerService.postAdjustment({
+        agencyId: agencyId.toString(),
+        policyId,
+        userId: alice,
+        hours: -8.004,
+        note: '  Correcting the March accrual ',
+        effectiveAt: new Date('2025-03-01T06:00:00Z'),
+      });
+      const row = await ledger.findById(id).lean();
+      expect(row).toMatchObject({
+        kind: 'manual_adjustment',
+        hours: -8,
+        note: 'Correcting the March accrual',
+        periodKey: null,
+        reversesId: null,
+      });
+      expect(row?.source).toMatchObject({ kind: 'admin', id: null });
+      expect(
+        of(
+          await ledgerService.balances(
+            agencyId.toString(),
+            policyId,
+            [alice],
+            new Date('2025-03-02T06:00:00Z'),
+          ),
+          alice,
+        ),
+      ).toEqual({ current: 72, upcoming: 0 });
+    });
   });
 });

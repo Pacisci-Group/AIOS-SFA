@@ -30,6 +30,7 @@ import {
 import { FilterQuery, Model, Types } from 'mongoose';
 import { avatarUrlFor } from '../common/avatar-url';
 import { peopleStatus } from '../common/hr/people-status';
+import { balanceAsOf } from '../common/time-off/balance-as-of';
 import { LeaveLedgerService } from '../common/time-off/leave-ledger.service';
 import {
   timeOffRulesOf,
@@ -471,9 +472,14 @@ export class UsersService {
       const balanceHours =
         rules.accrualType === 'unlimited'
           ? null
-          : ((await this.ledger.balances(row._id, [user._id])).get(
-              user._id.toString(),
-            ) ?? 0);
+          : ((
+              await this.ledger.balances(
+                agencyId,
+                row._id,
+                [user._id],
+                balanceAsOf(access.timeZone),
+              )
+            ).get(user._id.toString())?.current ?? 0);
       policies.push({
         id: row._id.toString(),
         name: row.name,

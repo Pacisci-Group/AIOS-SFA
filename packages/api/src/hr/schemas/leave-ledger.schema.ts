@@ -46,9 +46,12 @@ export const LeaveLedgerSourceSchema =
  * Rows the job writes carry a `periodKey` (`accrual:2027-03`,
  * `reset:2027-01-01`), and the partial unique index below makes "write the
  * March twelfth for this person" a no-op the second time — a re-run, a
- * retry, a second replica. Hand-written rows (a starting balance, a
- * request) carry `null` and are outside the index. Query it with
- * `periodKey: { $type: 'string' }` or Mongo will not use it.
+ * retry, a second replica. A request's rows carry one too
+ * (`used:<requestId>:<date>`, `reversal:<requestId>:<date>`, PAC-165), which
+ * is what makes posting a leave day twice impossible. Other hand-written
+ * rows (a starting balance, a removal, an adjustment) carry `null` and are
+ * outside the index. Query it with `periodKey: { $type: 'string' }` or Mongo
+ * will not use it.
  *
  * Not a `TenantRecord`: a policy belongs to the agency, not to a branch, and
  * so does its ledger. `agencyId` is a string, the policy convention.
@@ -86,6 +89,14 @@ export class LeaveLedger {
   /** A `reversal`'s link to the `used` row it undoes (PAC-165). */
   @Prop({ type: ObjectIdType, ref: 'LeaveLedger', default: null })
   reversesId: Types.ObjectId | null;
+
+  /**
+   * Free text: the reason an HR admin gave for a `manual_adjustment`
+   * (PAC-165). `reason` above is the job's own two-value vocabulary and
+   * cannot hold a sentence; every other kind leaves this null.
+   */
+  @Prop({ type: String, trim: true, maxlength: 500, default: null })
+  note: string | null;
 
   createdAt?: Date;
   updatedAt?: Date;
