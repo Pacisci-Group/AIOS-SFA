@@ -1,0 +1,39 @@
+meta {
+  name: Approve Time Off Request (Again, 409)
+  type: http
+  seq: 19
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}/approve
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("the first decision won; the record comes back", function () {
+    expect(res.getBody().code).to.equal("already_decided");
+    expect(res.getBody().request.status).to.equal("approved");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/approve — first decision wins
+
+  A decision is accepted only while the request is Submitted. A second one —
+  another reviewer a moment later, a double click — gets
+  `409 { code: "already_decided", request }` with the record as it now
+  stands, and posts nothing.
+}

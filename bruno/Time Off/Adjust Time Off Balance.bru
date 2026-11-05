@@ -1,0 +1,53 @@
+meta {
+  name: Adjust Time Off Balance
+  type: http
+  seq: 32
+}
+
+post {
+  url: {{baseUrl}}/hr/people/{{timeOffRecordeeId}}/balance-adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "hours": 4,
+    "reason": "Carried over from the old spreadsheet."
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the new balance", function () {
+    expect(res.getBody()).to.eql({ balanceHours: 84 });
+  });
+}
+
+docs {
+  # POST /hr/people/:userId/balance-adjustments — adjust a balance by hand (PAC-165)
+
+  Module `hr`, permission `agency:hr:admin`.
+
+  Body `{ policyId, hours, reason }` — `hours` signed (add or take away),
+  never zero, two decimals; `reason` required (≤ 500 characters).
+
+  Posts a `manual_adjustment` row to `leaveLedger`, effective today on the
+  agency's calendar, with the reason kept on the row. The ledger is
+  append-only: a wrong adjustment is corrected by another one. The employee
+  is notified (`time_off.balance_adjusted`).
+
+  Returns `{ balanceHours }` — the person's current balance afterwards.
+
+  `400` — zero hours, no reason, an **Unlimited** policy (no balance to
+  move), or a person who is not in the policy. `404` — no such person or
+  policy.
+}

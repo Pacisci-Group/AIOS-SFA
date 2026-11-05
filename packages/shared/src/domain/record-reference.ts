@@ -105,3 +105,34 @@ export function parseLegacyTicketNumber(
   if (!Number.isSafeInteger(seq) || seq < 1) return null;
   return `${match[1].toUpperCase()}-${seq}`;
 }
+
+/** Distinguishes a time off request reference at a glance (PAC-165). */
+export const TIME_OFF_REQUEST_REFERENCE_PREFIX = 'TOR';
+
+/**
+ * `TOR-2026-007` from a year and that year's sequence number.
+ *
+ * Unlike the household reference this one carries the year and pads to three
+ * digits — the ticket's format, and what makes a list of requests sort and
+ * read by year. The sequence is per agency per year (`counters` key
+ * `timeOffRequest:<agencyId>:<year>`), allocated when the request is first
+ * saved, so a discarded draft leaves a gap; the number names a request, it
+ * does not count them.
+ *
+ * Throws rather than coercing, for the reason `formatHouseholdRef` does: the
+ * arguments come from a counter and the agency's calendar, so a bad value is
+ * a broken allocator, and `TOR-NaN-000` in a unique index would outlive it.
+ */
+export function formatTimeOffRequestRef(year: number, seq: number): string {
+  if (!Number.isSafeInteger(year) || year < 2000 || year > 9999) {
+    throw new RangeError(
+      `Time off request reference year must be a four-digit year, received ${year}`,
+    );
+  }
+  if (!Number.isSafeInteger(seq) || seq < 1) {
+    throw new RangeError(
+      `Time off request reference sequence must be a positive integer, received ${seq}`,
+    );
+  }
+  return `${TIME_OFF_REQUEST_REFERENCE_PREFIX}-${year}-${String(seq).padStart(3, '0')}`;
+}

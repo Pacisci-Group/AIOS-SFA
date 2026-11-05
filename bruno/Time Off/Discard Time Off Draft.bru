@@ -1,0 +1,33 @@
+meta {
+  name: Discard Time Off Draft
+  type: http
+  seq: 24
+}
+
+delete {
+  url: {{baseUrl}}/time-off/requests/{{timeOffDiscardId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /time-off/requests/:requestId — discard a draft (PAC-165)
+
+  Module `hr`, permission `hr:read`. The caller's own **Draft** only.
+
+  A **soft delete**: the row stays in `timeOffRequests`, stamped
+  `deletedAt` / `deletedBy`, and leaves every list and read. Nothing is ever
+  removed. A request that was sent is cancelled, not discarded.
+
+  `404` — not the caller's request, or already discarded.
+  `409 already_decided` — it is not a draft.
+}

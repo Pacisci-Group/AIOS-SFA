@@ -29,6 +29,8 @@ docs {
   # GET /hr/policies/:policyId — a Time off policy with balances (PAC-174)
 
   Same endpoint as `Get HR Policy`; a `time_off` view carries `timeOff`
-  (the rules) and `members[].balanceHours` — the sum of each person's
-  `leaveLedger` rows in this policy, `null` on Unlimited.
+  (the rules) and `members[].balanceHours` — each person's **current
+  balance**: their `leaveLedger` rows in this policy as of today, so
+  approved leave that has not happened yet is not taken off it (PAC-165).
+  `null` on Unlimited.
 }

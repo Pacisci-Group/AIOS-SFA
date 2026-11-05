@@ -16,6 +16,13 @@ import {
   type StoredAddress,
 } from '@sfa/shared';
 import type { DealAuditStatus, ServiceTicketStatus } from '@sfa/shared';
+import {
+  formatTimeOffRequestRef,
+  requestDays,
+  totalRequestHours,
+  type TimeOffRequestStatus,
+  type TimeOffTimelineAction,
+} from '@sfa/shared';
 import { reconcileDealAudits } from '../../deal-audits/audit-reconcile';
 import { SequenceService } from '../../common/mongo/sequence.service';
 import {
@@ -42,7 +49,18 @@ import { TimeOffPolicy } from '../../hr/schemas/time-off-policy.schema';
 import { LeaveLedger } from '../../hr/schemas/leave-ledger.schema';
 import { EmployeeProfile } from '../../hr/schemas/employee-profile.schema';
 import { businessDateInstant } from '../../common/dates/business-dates';
-import { agencyTodayIso } from '../../performance/performance.range';
+import { LeaveLedgerService } from '../../common/time-off/leave-ledger.service';
+import {
+  calendarDate,
+  scheduledDaysBetween,
+} from '../../common/working-days/working-days';
+import { WorkingDaysService } from '../../common/working-days/working-days.service';
+import {
+  addDays as addCalendarDays,
+  agencyTodayIso,
+  parseIsoDate,
+  toIsoDate,
+} from '../../performance/performance.range';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
@@ -77,6 +95,7 @@ import {
   CITIES,
   CitySpec,
   DEMO_CONFIG,
+  DEMO_TIME_OFF_REQUESTS,
   FIRST_NAMES,
   LAST_NAMES,
   DEMO_LEAD_SOURCE_NAMES,
@@ -94,6 +113,11 @@ import {
   TeamMemberSpec,
 } from './demo-data';
 import { createRng, Rng } from './rng';
+
+/** `YYYY-MM-DD` plus `days` calendar days. */
+function isoAddDays(iso: string, days: number): string {
+  return toIsoDate(addCalendarDays(parseIsoDate(iso), days));
+}
 import { Mailer } from '../../mailers/schemas/mailer.schema';
 import { MailerCampaign } from '../../mailers/schemas/mailer-campaign.schema';
 import { implicitCampaignDoc } from '../../common/mailers/implicit-campaign';
@@ -298,6 +322,8 @@ export class DemoSeedService {
     private readonly leadSourceModel: Model<LeadSource>,
     private readonly leadSources: LeadSourcesService,
     private readonly roleAssignments: RoleAssignmentsService,
+    private readonly workingDays: WorkingDaysService,
+    private readonly leaveLedger: LeaveLedgerService,
     private readonly sequences: SequenceService,
   ) {}
 
@@ -342,6 +368,7 @@ export class DemoSeedService {
 
     await this.seedAuditTemplates(ctx);
     await this.seedHrPolicies(ctx, team);
+    await this.seedTimeOffRequests(ctx, team);
     /*
      * Roll-ups **before** items (PAC-72): the board pages over `dealAudits`,
      * and an item needs its parent's `_id` to be loadable from a card. The
@@ -369,7 +396,6 @@ export class DemoSeedService {
     await this.seedServiceTickets(ctx, crms, households, policies, rng);
     await this.seedProducerAssignments(ctx, producers, crms, rng);
     await this.seedCrmRotations(ctx, producers, crms);
-    await this.seedTimeOffRequests(ctx, producers, rng);
 
     await this.seedProducerGoals(ctx, producers);
     await this.seedActivities(ctx, leads, quotes, deals, rng);
@@ -1415,6 +1441,250 @@ export class DemoSeedService {
     }
   }
 
+  /**
+   * A time off request in every state (PAC-165) — see
+   * `DEMO_TIME_OFF_REQUESTS`. Written the way the app writes them: the hours
+   * per date from the person's work week and holiday policy, a `TOR-`
+   * reference from the agency's counter, the timeline of what happened, and
+   * — for anything that was ever Approved — the `used` (and `reversal`) rows
+   * through `LeaveLedgerService`, so the balances on the page are the sum of
+   * real rows rather than numbers the seed made up.
+   *
+   * Insert-only on `demo:tor:<key>`: a re-run leaves a request someone has
+   * since decided in the demo alone, and never posts its hours twice.
+   */
+  private async seedTimeOffRequests(
+    ctx: Ctx,
+    team: TeamMember[],
+  ): Promise<void> {
+    const policy = await this.timeOffPolicyModel
+      .findOne({
+        agencyId: ctx.agencyId,
+        name: 'Paid time off',
+        archivedAt: null,
+      })
+      .select('_id')
+      .lean<{ _id: Types.ObjectId } | null>();
+    const manager = team.find((member) => member.spec.key === 'manager');
+    if (!policy || !manager) return;
+
+    // The six rows the seed wrote before PAC-165 (`demo:too:<n>`) were
+    // SmartSuite-shaped; on a database that still has them they would read
+    // as imported history. These replace them.
+    await this.timeOffRequestModel.deleteMany({
+      agencyId: ctx.agencyId,
+      legacySmartSuiteId: { $regex: '^demo:too:' },
+    });
+
+    const today = agencyTodayIso(ctx.timeZone);
+    // The Monday of the week the seed runs in.
+    const weekdayIndex = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
+    const thisMonday = isoAddDays(today, -weekdayIndex);
+    const year = Number(today.slice(0, 4));
+    const at = (daysAgo: number) => this.daysAgo(daysAgo);
+
+    for (const spec of DEMO_TIME_OFF_REQUESTS) {
+      const employee = team.find((member) => member.spec.key === spec.employee);
+      if (!employee) continue;
+      const legacySmartSuiteId = `demo:tor:${spec.key}`;
+      const exists = await this.timeOffRequestModel.exists({
+        agencyId: ctx.agencyId,
+        legacySmartSuiteId,
+      });
+      if (exists) continue;
+
+      const firstDay = isoAddDays(thisMonday, spec.week * 7 + spec.from);
+      const lastDay = isoAddDays(firstDay, spec.days - 1);
+      const calendar = await this.workingDays.forPerson(
+        ctx.agencyId,
+        employee.userId.toString(),
+        { from: firstDay, to: lastDay },
+      );
+      const days = requestDays(
+        scheduledDaysBetween(
+          calendar.snapshot,
+          calendar.schedule,
+          calendarDate(firstDay),
+          calendarDate(lastDay),
+        ),
+        'full',
+      );
+      const totalHours = totalRequestHours(days);
+      // A range of holidays and weekends is not a request.
+      if (totalHours <= 0) continue;
+
+      const step = (
+        when: Date,
+        actorId: Types.ObjectId | null,
+        action: TimeOffTimelineAction,
+        fromStatus: TimeOffRequestStatus | null,
+        toStatus: TimeOffRequestStatus | null,
+        note: string | null = null,
+      ) => ({
+        at: when,
+        actorId,
+        action,
+        fromStatus,
+        toStatus,
+        note,
+        warnings: [],
+      });
+      const sent = (daysAgo: number) =>
+        step(
+          at(daysAgo),
+          employee.userId,
+          'submitted',
+          null,
+          'submitted',
+          spec.note ?? null,
+        );
+      const reviewerNote = spec.reviewerNote ?? null;
+
+      let status: TimeOffRequestStatus;
+      let timeline: ReturnType<typeof step>[];
+      let submittedAt: Date | null = null;
+      let decidedAt: Date | null = null;
+      let decidedBy: Types.ObjectId | null = null;
+      switch (spec.story) {
+        case 'draft':
+          status = 'draft';
+          timeline = [step(at(1), employee.userId, 'created', null, 'draft')];
+          break;
+        case 'pending':
+          status = 'submitted';
+          submittedAt = at(1);
+          timeline = [sent(1)];
+          break;
+        case 'changes_requested':
+          status = 'changes_requested';
+          submittedAt = at(3);
+          timeline = [
+            sent(3),
+            step(
+              at(2),
+              manager.userId,
+              'changes_requested',
+              'submitted',
+              'changes_requested',
+              reviewerNote,
+            ),
+          ];
+          break;
+        case 'auto_approved':
+          status = 'approved';
+          submittedAt = decidedAt = at(2);
+          timeline = [
+            sent(2),
+            step(at(2), null, 'auto_approved', 'submitted', 'approved'),
+          ];
+          break;
+        case 'approved':
+          status = 'approved';
+          submittedAt = at(4);
+          decidedAt = at(3);
+          decidedBy = manager.userId;
+          timeline = [
+            sent(4),
+            step(
+              at(3),
+              manager.userId,
+              'approved',
+              'submitted',
+              'approved',
+              reviewerNote,
+            ),
+          ];
+          break;
+        case 'recorded':
+          status = 'approved';
+          decidedAt = businessDateInstant(isoAddDays(lastDay, 1), ctx.timeZone);
+          decidedBy = manager.userId;
+          timeline = [
+            step(
+              decidedAt,
+              manager.userId,
+              'recorded',
+              null,
+              'approved',
+              spec.note ?? null,
+            ),
+          ];
+          break;
+        case 'declined':
+          status = 'declined';
+          submittedAt = at(5);
+          decidedAt = at(4);
+          decidedBy = manager.userId;
+          timeline = [
+            sent(5),
+            step(
+              at(4),
+              manager.userId,
+              'declined',
+              'submitted',
+              'declined',
+              reviewerNote,
+            ),
+          ];
+          break;
+        case 'cancelled_after_approval':
+          status = 'cancelled';
+          submittedAt = at(6);
+          decidedAt = at(5);
+          decidedBy = manager.userId;
+          timeline = [
+            sent(6),
+            step(at(5), manager.userId, 'approved', 'submitted', 'approved'),
+            step(at(1), employee.userId, 'cancelled', 'approved', 'cancelled'),
+          ];
+          break;
+      }
+
+      const recorded = spec.story === 'recorded';
+      const seq = await this.sequences.next(
+        `timeOffRequest:${ctx.agencyId}:${year}`,
+      );
+      const request = await this.timeOffRequestModel.create({
+        agencyId: ctx.agencyId,
+        branchId: employee.branchId,
+        legacySmartSuiteId,
+        reference: formatTimeOffRequestRef(year, seq),
+        source: recorded ? 'recorded' : 'self',
+        employeeId: employee.userId,
+        initiatorId: recorded ? manager.userId : employee.userId,
+        policyId: policy._id,
+        status,
+        firstDay,
+        lastDay,
+        dayMode: 'full',
+        days,
+        totalHours,
+        note: spec.note ?? null,
+        submittedAt,
+        decidedAt,
+        decidedBy,
+        autoApproved: spec.story === 'auto_approved',
+        timeline,
+      });
+
+      // Anything that was ever Approved has its hours on the ledger; the
+      // one cancelled afterwards has them handed back.
+      const wasApproved =
+        status === 'approved' || spec.story === 'cancelled_after_approval';
+      if (wasApproved) {
+        const target = {
+          agencyId: ctx.agencyId,
+          policyId: policy._id,
+          userId: employee.userId,
+          requestId: request._id,
+        };
+        await this.leaveLedger.postUsed(target, days, ctx.timeZone);
+        if (status === 'cancelled') await this.leaveLedger.postReversal(target);
+      }
+      this.inc('timeOffRequests');
+    }
+  }
+
   private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],
@@ -1890,39 +2160,6 @@ export class DemoSeedService {
     }
   }
 
-  private async seedTimeOffRequests(
-    ctx: Ctx,
-    producers: TeamMember[],
-    rng: Rng,
-  ): Promise<void> {
-    for (let i = 0; i < DEMO_CONFIG.timeOffRequests; i++) {
-      const producer = rng.pick(producers);
-      const start = this.daysAgo(rng.int(-30, 20));
-      const end = this.addDays(start, rng.int(0, 4));
-      const status = rng.pick(['Approved', 'Pending', 'Approved', 'Denied']);
-      const legacyId = `demo:too:${i}`;
-      await this.upsert(
-        this.timeOffRequestModel,
-        { agencyId: ctx.agencyId, legacySmartSuiteId: legacyId },
-        {
-          agencyId: ctx.agencyId,
-          branchId: producer.branchId,
-          legacySmartSuiteId: legacyId,
-          title: `${producer.fullName} — Time Off`,
-          startDate: start,
-          endDate: end,
-          requestType: rng.pick(['PTO', 'Sick', 'Unpaid']),
-          hoursRequested: (this.daysBetween(start, end) + 1) * 8,
-          status,
-          type: rng.pick(['Full Day', 'Partial Day']),
-          decision: status === 'Pending' ? undefined : status,
-          producerId: producer.userId,
-        },
-      );
-      this.inc('timeOffRequests');
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Producer goals + activities
   // ---------------------------------------------------------------------------
@@ -2291,6 +2528,18 @@ export class DemoSeedService {
       this.timeOffRequestModel,
       this.activityModel,
     ] as Model<unknown>[];
+    // A demo request's hours are ledger rows pointing at it (PAC-165). They
+    // go first, while the requests can still be listed — otherwise a fresh
+    // seed would post the same leave on top of rows nothing refers to.
+    const demoRequestIds = await this.timeOffRequestModel
+      .find(demoFilter)
+      .distinct('_id');
+    if (demoRequestIds.length) {
+      await this.leaveLedgerModel.deleteMany({
+        'source.kind': 'request',
+        'source.id': { $in: demoRequestIds },
+      });
+    }
     for (const model of models) {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }

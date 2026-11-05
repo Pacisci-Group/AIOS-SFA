@@ -77,6 +77,7 @@ const RolePermissionsPage = lazy(
   () => import('@/features/admin/RolePermissionsPage'),
 );
 const PeoplePage = lazy(() => import('@/features/people/PeoplePage'));
+const TimeOffPage = lazy(() => import('@/features/time-off/TimeOffPage'));
 const PersonProfilePage = lazy(
   () => import('@/features/people/PersonProfilePage'),
 );
@@ -799,6 +800,34 @@ export function App() {
                   </LazyPage>
                 }
               />
+              {/*
+                Time off (PAC-165): every employee's own balances and
+                requests (`hr:read`), and for a reviewer the team's. The
+                second path opens the page with one request on top — where
+                a notification lands.
+              */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.Hr}:read`} />
+                }
+              >
+                <Route
+                  path="/time-off"
+                  element={
+                    <LazyPage>
+                      <TimeOffPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/time-off/requests/:requestId"
+                  element={
+                    <LazyPage>
+                      <TimeOffPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
               {/* The directory's old address: bookmarks and the hub card. */}
               <Route
                 path="/settings/users"

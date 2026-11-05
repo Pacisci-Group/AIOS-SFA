@@ -1,0 +1,36 @@
+meta {
+  name: Cancel Own Time Off Request (as Manager)
+  type: http
+  seq: 27
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffOwnId}}/cancel
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("withdrawing an undecided request needs no note", function () {
+    expect(res.getBody().status).to.equal("cancelled");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/cancel — folder tidy-up
+
+  The manager withdraws their own undecided request, as an employee. See
+  `Cancel Approved Time Off`.
+}

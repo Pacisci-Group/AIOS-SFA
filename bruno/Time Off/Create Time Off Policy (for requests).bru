@@ -1,0 +1,73 @@
+meta {
+  name: Create Time Off Policy (for requests)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+script:pre-request {
+  bru.setVar("timeOffPolicyName", `Bruno time off ${Date.now()}`);
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{timeOffPolicyName}}",
+    "timeOff": {
+        "timeOffType": "custom",
+        "description": "Created by the Bruno Time Off folder.",
+        "compensation": "paid",
+        "accrualType": "fixed_amount",
+        "hoursPerYear": 80,
+        "accrualFrequency": "yearly",
+        "resetDateKind": "fixed",
+        "resetMonthDay": "{{timeOffResetMonthDay}}",
+        "accrualRate": null,
+        "accrualRateUnit": null,
+        "maxBalanceHours": null,
+        "maxAccruedPerYearHours": null,
+        "carryoverCapHours": null,
+        "annualUsageCapHours": null,
+        "waitingPeriodDays": null,
+        "accrualWaitingPeriodDays": null,
+        "allowNegativeBalance": false,
+        "payOutOnTermination": false,
+        "autoApprove": { "enabled": false, "maxCalendarDays": null, "minNoticeHours": null }
+      },
+    "memberIds": ["{{timeOffProducerId}}", "{{timeOffManagerId}}", "{{timeOffRecordeeId}}"]
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("everyone starts with the yearly total", function () {
+    expect(res.getBody().members.map((m) => m.balanceHours)).to.eql([80, 80, 80]);
+  });
+}
+
+docs {
+  # POST /hr/policies — the run's own policy
+
+  A **Custom** time off policy (80 h a year, no auto-approval) holding the
+  producer, the manager and the person time off is recorded for. Custom, so
+  enrolling them moves nobody out of the demo's PTO or Sick policy. Archived
+  at the end of the folder. See `HR/Create Time Off Policy`.
+}

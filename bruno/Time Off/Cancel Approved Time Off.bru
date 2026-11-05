@@ -1,0 +1,60 @@
+meta {
+  name: Cancel Approved Time Off
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}/cancel
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is Cancelled and the row stays", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("cancelled");
+    const last = body.timeline[body.timeline.length - 1];
+    expect(last.action).to.equal("cancelled");
+    expect(last.fromStatus).to.equal("approved");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/cancel — cancel (PAC-165)
+
+  Module `hr`, permission `hr:read`. Who is asking decides what is allowed:
+
+  - **The employee** withdraws a Submitted or Changes Requested request at
+    any time, and cancels **Approved** leave until the day before it starts
+    (agency calendar). `note` optional.
+  - **A reviewer** (`hr:write`, in scope, not their own) cancels someone
+    else's Approved leave at any time; `note` **required**.
+
+  Cancelling Approved leave posts a mirror `reversal` ledger row for each
+  `used` row — same hours, same day, linked by `reversesId` — so the hours
+  come back to the period they were taken from. Nothing is deleted.
+
+  Notifications: an employee cancelling **approved** leave tells the
+  reviewers; a reviewer cancelling tells the employee
+  (`time_off.approval_cancelled`). Withdrawing an undecided request tells
+  nobody.
+
+  `400` — a reviewer sent no note. `400 old_period` — a reviewer cancelling
+  leave in a period that has already reset (adjust the balance instead).
+  `404` — not the caller's to see. `409 already_decided` — nothing left to
+  cancel, or approved leave that has already started. `409 imported` — a row
+  migrated from SmartSuite.
+}

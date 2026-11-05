@@ -1,0 +1,59 @@
+meta {
+  name: Send Time Off Request
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}/submit
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is waiting for a decision", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("submitted");
+    expect(body.group).to.equal("pending");
+    expect(body.actions).to.eql(["cancel"]);
+    expect(body.timeline.map((t) => t.action)).to.eql(["created", "submitted"]);
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/submit — send, or resend (PAC-165)
+
+  Module `hr`, permission `hr:read`. The caller's own Draft or Changes
+  Requested request.
+
+  Body: **empty** (`{}`) to send the request as saved, or the full set of
+  inputs to save the edited form and send it in one call.
+
+  On sending the hours are recomputed and **frozen**, and every check runs:
+  enrolled in an active policy · past the usage waiting period · starts today
+  or later · at least one scheduled hour · within the span limits · no overlap
+  with the person's own Submitted, Changes Requested or Approved requests (any
+  policy; a hard block) · within the Sick yearly usage cap · the projected
+  balance never below zero unless the policy allows negative balances.
+
+  If the policy's auto-approval rules pass, the request is **Approved at
+  once** (`autoApproved: true`, a system `auto_approved` timeline entry, its
+  `used` ledger rows posted); otherwise it is Submitted and the reviewers —
+  `hr:write` holders whose data scope covers it, minus the employee — are
+  notified (`time_off.submitted`).
+
+  `400` — a failed check: the body carries its `code` and `blockers[]`.
+  `409 already_decided` — not a Draft or Changes Requested any more.
+}

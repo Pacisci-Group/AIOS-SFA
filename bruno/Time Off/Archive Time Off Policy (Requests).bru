@@ -1,0 +1,29 @@
+meta {
+  name: Archive Time Off Policy (Requests)
+  type: http
+  seq: 35
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{timeOffPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — folder tidy-up
+
+  Archives the run's policy. Every request made against it has been decided
+  or cancelled by now — a policy with a request still **Submitted or Changes
+  Requested** against it answers `409`. The requests and their ledger rows
+  stay. See `HR/Archive Time Off Policy`.
+}

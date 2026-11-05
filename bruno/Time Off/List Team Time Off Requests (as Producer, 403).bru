@@ -1,0 +1,27 @@
+meta {
+  name: List Team Time Off Requests (as Producer, 403)
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/time-off/requests
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # GET /time-off/requests — reviewers only
+
+  The team list needs `hr:write`. A producer holds `hr:read` and is refused —
+  reading their own requests is `GET /time-off/requests/mine`.
+}

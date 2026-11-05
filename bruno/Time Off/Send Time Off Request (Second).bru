@@ -1,0 +1,50 @@
+meta {
+  name: Send Time Off Request (Second)
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torThu}}",
+    "lastDay": "{{torThu}}",
+    "dayMode": "full",
+    "send": true
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffSecondId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is sent without ever being a draft", function () {
+    expect(res.getBody().status).to.equal("submitted");
+    expect(res.getBody().timeline.map((t) => t.action)).to.eql(["submitted"]);
+  });
+}
+
+docs {
+  # POST /time-off/requests — send straight away
+
+  `send: true` skips the draft: the request is checked, its hours frozen and
+  it is Submitted (or Approved by the policy's rules) in one call. Captures
+  `timeOffSecondId` for the decline below.
+}

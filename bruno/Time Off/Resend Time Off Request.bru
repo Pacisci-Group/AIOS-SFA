@@ -1,0 +1,48 @@
+meta {
+  name: Resend Time Off Request
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}/submit
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torMon}}",
+    "lastDay": "{{torTue}}",
+    "dayMode": "full",
+    "note": "Two days it is."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is Submitted again with the hours recomputed", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("submitted");
+    expect(body.days.length).to.equal(2);
+    const last = body.timeline[body.timeline.length - 1];
+    expect(last.action).to.equal("resubmitted");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/submit — resend after changes
+
+  The edited form rides along: the inputs are saved, the hours recomputed and
+  frozen, the checks re-run, and the request is Submitted again
+  (`resubmitted` on the timeline). The reviewers are notified with
+  `resubmitted: true`. See `Send Time Off Request`.
+}

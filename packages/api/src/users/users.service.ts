@@ -30,7 +30,7 @@ import {
 import { FilterQuery, Model, Types } from 'mongoose';
 import { avatarUrlFor } from '../common/avatar-url';
 import { peopleStatus } from '../common/hr/people-status';
-import { LeaveLedgerService } from '../common/time-off/leave-ledger.service';
+import { TimeOffBalanceService } from '../common/time-off/time-off-balance.service';
 import {
   timeOffRulesOf,
   type TimeOffFieldsLean,
@@ -181,7 +181,7 @@ export class UsersService {
     private workWeekPolicies: Model<WorkWeekPolicy>,
     @InjectModel(HolidayPolicy.name)
     private holidayPolicies: Model<HolidayPolicy>,
-    private ledger: LeaveLedgerService,
+    private timeOffBalance: TimeOffBalanceService,
     private storage: StorageService,
     private permissionsService: PermissionsService,
     private roleAssignments: RoleAssignmentsService,
@@ -468,17 +468,21 @@ export class UsersService {
     const policies: PersonTimeOffPolicyView[] = [];
     for (const row of timeOffRows) {
       const rules = timeOffRulesOf(row);
-      const balanceHours =
-        rules.accrualType === 'unlimited'
-          ? null
-          : ((await this.ledger.balances(row._id, [user._id])).get(
-              user._id.toString(),
-            ) ?? 0);
+      // One definition of both numbers, shared with the Time off page
+      // (PAC-165); null on an Unlimited policy.
+      const position = await this.timeOffBalance.position({
+        agencyId,
+        policyId: row._id,
+        rules,
+        userId: user._id,
+        timeZone: access.timeZone,
+      });
       policies.push({
         id: row._id.toString(),
         name: row.name,
         timeOff: rules,
-        balanceHours,
+        balanceHours: position?.currentBalance ?? null,
+        availableHours: position?.availableHours ?? null,
       });
     }
     const days = (

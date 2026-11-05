@@ -1,0 +1,35 @@
+meta {
+  name: Adjust Time Off Balance (Unlimited, 400)
+  type: http
+  seq: 34
+}
+
+post {
+  url: {{baseUrl}}/hr/people/{{timeOffRecordeeId}}/balance-adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffUnlimitedId}}",
+    "hours": 4,
+    "reason": "There is no balance to move."
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /hr/people/:userId/balance-adjustments — nothing to adjust
+
+  An Unlimited policy has no balance: `400`. See `Adjust Time Off Balance`.
+}

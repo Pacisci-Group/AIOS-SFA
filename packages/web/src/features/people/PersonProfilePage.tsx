@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Contact } from "lucide-react";
-import { AgencyPermission, type PersonProfileView } from "@sfa/shared";
+import {
+  AgencyPermission,
+  ModuleKey,
+  type PersonProfileView,
+  type PersonTimeOffPolicyView,
+} from "@sfa/shared";
 import { UserAvatar } from "@/components/common/UserAvatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -21,11 +26,13 @@ import { OnboardingCard } from "./profile/OnboardingCard";
 import { RoleCard } from "./profile/RoleCard";
 import { ScheduleCard } from "./profile/ScheduleCard";
 import { TimeOffCard } from "./profile/TimeOffCard";
+import { RequestSheet } from "@/features/time-off/request/RequestSheet";
 import { AddToPolicySheet } from "./sheets/AddToPolicySheet";
+import { AdjustBalanceSheet } from "./sheets/AdjustBalanceSheet";
 import { CompleteOnboardingSheet } from "./sheets/CompleteOnboardingSheet";
 import { EditDetailsSheet } from "./sheets/EditDetailsSheet";
 
-type Sheet = "details" | "onboarding" | "policy";
+type Sheet = "details" | "onboarding" | "policy" | "record";
 
 /**
  * A person's profile (`/people/:userId`, PAC-162): the account, the HR
@@ -49,12 +56,18 @@ export default function PersonProfilePage() {
   const { userId = "" } = useParams<{ userId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user: viewer } = useAuth();
-  const { can } = usePermissions();
+  const { can, canWrite } = usePermissions();
   const [sheet, setSheet] = useState<Sheet | null>(null);
+  const [adjusting, setAdjusting] = useState<PersonTimeOffPolicyView | null>(null);
 
   const isSelf = viewer?.id === userId;
   const mayView = isSelf || can(AgencyPermission.UsersRead);
   const hrAdmin = can(AgencyPermission.HrAdmin);
+  // Time off (PAC-165): a reviewer sees the person's requests; with the
+  // directory permission as well they may record time off for them — never
+  // for themself, whose own time off is always a request.
+  const reviewer = canWrite(ModuleKey.Hr);
+  const mayRecord = reviewer && can(AgencyPermission.UsersRead) && !isSelf;
 
   const profile = useQuery({
     queryKey: peopleKeys.profile(userId),
@@ -157,6 +170,17 @@ export default function PersonProfilePage() {
                   profile={data}
                   canManage={hrAdmin}
                   onAdd={() => setSheet("policy")}
+                  onAdjust={hrAdmin ? setAdjusting : undefined}
+                  onRecord={
+                    mayRecord && data.user.isActive ? () => setSheet("record") : undefined
+                  }
+                  requestsHref={
+                    isSelf
+                      ? "/time-off"
+                      : reviewer
+                        ? `/time-off?tab=team&employee=${data.user.id}`
+                        : undefined
+                  }
                 />
               )}
             </div>
@@ -180,6 +204,36 @@ export default function PersonProfilePage() {
       )}
       {data && sheet === "policy" && (
         <AddToPolicySheet profile={data} onClose={() => setSheet(null)} />
+      )}
+      {data && adjusting && (
+        <AdjustBalanceSheet
+          key={adjusting.id}
+          profile={data}
+          policy={adjusting}
+          onClose={() => setAdjusting(null)}
+        />
+      )}
+      {data && sheet === "record" && mayRecord && (
+        <RequestSheet
+          key={`record-${data.user.id}`}
+          mode="record"
+          employeeId={data.user.id}
+          // The profile already holds what the picker needs about this person.
+          people={[
+            {
+              id: data.user.id,
+              name: data.user.name,
+              branchName: data.user.branch?.name ?? null,
+              policies: (data.timeOff?.policies ?? []).map((policy) => ({
+                id: policy.id,
+                name: policy.name,
+                timeOffType: policy.timeOff.timeOffType,
+                unlimited: policy.timeOff.accrualType === "unlimited",
+              })),
+            },
+          ]}
+          onClose={() => setSheet(null)}
+        />
       )}
     </SettingsPage>
   );

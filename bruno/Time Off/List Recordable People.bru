@@ -1,0 +1,55 @@
+meta {
+  name: List Recordable People
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/time-off/recordable-people?q=Sam
+  auth: bearer
+}
+
+params:query {
+  q: Sam
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().length) {
+    bru.setVar("timeOffRecordeeId", res.getBody()[0].id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists people in the caller's scope with their policies, never the caller", function () {
+    const people = res.getBody();
+    expect(people.length).to.be.greaterThan(0);
+    expect(people[0]).to.have.keys(["id", "name", "branchName", "policies"]);
+    expect(people.map((p) => p.id)).to.not.include(bru.getVar("timeOffManagerId"));
+  });
+}
+
+docs {
+  # GET /time-off/recordable-people — who time off can be recorded for (PAC-165)
+
+  Module `hr`. Permissions `hr:write` **and** `agency:users:read` (both; no
+  new permission string). Query `q` matches the name or email.
+
+  Returns the active people whose **home branch** the caller's data scope
+  covers — a Branch Manager's branch, an owner's whole agency — never the
+  caller, each as `{ id, name, branchName, policies[] }` with the time off
+  policies they are in (`{ id, name, timeOffType, unlimited }`). A person with
+  no branch (an owner) belongs to the agency's default branch.
+
+  The demo seed gives Sam Torres no time off requests so this folder can
+  record for them; captures `timeOffRecordeeId`.
+
+  `403` — missing either permission.
+}

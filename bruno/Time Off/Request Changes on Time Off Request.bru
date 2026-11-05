@@ -1,0 +1,50 @@
+meta {
+  name: Request Changes on Time Off Request
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}/request-changes
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "note": "Could you take two days instead of three?"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("sends it back to the employee with the note", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("changes_requested");
+    const last = body.timeline[body.timeline.length - 1];
+    expect(last.action).to.equal("changes_requested");
+    expect(last.note).to.equal("Could you take two days instead of three?");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/request-changes — send it back (PAC-165)
+
+  Module `hr`, permission `hr:write`; the request must be in the caller's
+  data scope and not their own. Body `{ note }` — **required**: the note is
+  what the employee is asked to change.
+
+  Submitted → **Changes Requested**. The hours stay held against the balance.
+  The employee is notified (`time_off.changes_requested`), edits, and resends.
+
+  `400` — no note. `403 own_request` — the caller's own request.
+  `404` — outside the caller's scope. `409 already_decided` — no longer
+  Submitted; the body carries the record as it now stands.
+}

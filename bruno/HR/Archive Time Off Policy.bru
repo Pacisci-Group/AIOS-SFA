@@ -23,5 +23,7 @@ docs {
   # POST /hr/policies/:policyId/archive — tidy up the run's PTO policy (PAC-174)
 
   Soft archive: the row, its ledger and history stay. A time off policy with
-  a request still `Submitted` against it is a `409` — decide it first.
+  a request still waiting on a person — **Submitted or Changes Requested**
+  (PAC-165) — against it is a `409`: decide it first. Approved leave stays as
+  it is; a discarded draft and an imported row never count.
 }

@@ -1,0 +1,50 @@
+meta {
+  name: Send Own Time Off Request (as Manager)
+  type: http
+  seq: 25
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torFri}}",
+    "lastDay": "{{torFri}}",
+    "dayMode": "full",
+    "send": true
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffOwnId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("a reviewer's own time off is still a request", function () {
+    expect(res.getBody().status).to.equal("submitted");
+    expect(res.getBody().actions).to.eql(["cancel"]);
+  });
+}
+
+docs {
+  # POST /time-off/requests — a reviewer asking for their own time off
+
+  The Branch Manager is an employee too. Their own request goes to somebody
+  else — the `actions` they are offered on it are the employee's, never the
+  reviewer's. Captures `timeOffOwnId`.
+}

@@ -1,0 +1,43 @@
+meta {
+  name: Save Time Off Draft (To discard)
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torFri}}",
+    "lastDay": "{{torFri}}",
+    "dayMode": "full",
+    "send": false
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffDiscardId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /time-off/requests — a draft for the discard below
+
+  Captures `timeOffDiscardId`.
+}

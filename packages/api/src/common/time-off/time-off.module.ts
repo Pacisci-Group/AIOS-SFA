@@ -9,10 +9,15 @@ import {
   TimeOffPolicySchema,
 } from '../../hr/schemas/time-off-policy.schema';
 import { Agency, AgencySchema } from '../../platform/schemas/agency.schema';
+import {
+  TimeOffRequest,
+  TimeOffRequestSchema,
+} from '../../time-off-requests/schemas/time-off-request.schema';
 import { EmployeeProfilesModule } from '../hr/employee-profiles.module';
 import { HireDatesService } from './hire-dates.service';
 import { LeaveLedgerService } from './leave-ledger.service';
 import { TimeOffAccrualService } from './time-off-accrual.service';
+import { TimeOffBalanceService } from './time-off-balance.service';
 
 /**
  * Time off policies and their ledger (PAC-174): the two schemas and the
@@ -30,13 +35,21 @@ import { TimeOffAccrualService } from './time-off-accrual.service';
       { name: LeaveLedger.name, schema: LeaveLedgerSchema },
       // The accrual job reads each agency's time zone off its row.
       { name: Agency.name, schema: AgencySchema },
+      // "Other requested hours" counts requests still waiting (PAC-165).
+      { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
     ]),
   ],
-  providers: [LeaveLedgerService, HireDatesService, TimeOffAccrualService],
+  providers: [
+    LeaveLedgerService,
+    HireDatesService,
+    TimeOffAccrualService,
+    TimeOffBalanceService,
+  ],
   exports: [
     LeaveLedgerService,
     HireDatesService,
     TimeOffAccrualService,
+    TimeOffBalanceService,
     MongooseModule,
   ],
 })

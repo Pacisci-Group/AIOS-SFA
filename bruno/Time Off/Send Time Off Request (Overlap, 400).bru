@@ -1,0 +1,47 @@
+meta {
+  name: Send Time Off Request (Overlap, 400)
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torTue}}",
+    "lastDay": "{{torTue}}",
+    "dayMode": "full",
+    "send": true
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("names the check that failed", function () {
+    expect(res.getBody().code).to.equal("overlap");
+    expect(res.getBody().blockers.map((b) => b.code)).to.eql(["overlap"]);
+  });
+}
+
+docs {
+  # POST /time-off/requests — the own-date overlap block
+
+  A person cannot have time off twice on one day: any date carrying hours that
+  is already covered by one of their **Submitted, Changes Requested or
+  Approved** requests — on any policy — refuses the request with
+  `400 { code: "overlap" }`, the message naming the dates and the other
+  request's reference. A Draft does not hold its dates. The same block applies
+  to a recorded entry.
+}

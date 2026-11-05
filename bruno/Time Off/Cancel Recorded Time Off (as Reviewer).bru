@@ -1,0 +1,43 @@
+meta {
+  name: Cancel Recorded Time Off (as Reviewer)
+  type: http
+  seq: 31
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRecordId}}/cancel
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+body:json {
+  {
+    "note": "Recorded against the wrong day."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is Cancelled, with the reviewer's note on the timeline", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("cancelled");
+    const last = body.timeline[body.timeline.length - 1];
+    expect(last.note).to.equal("Recorded against the wrong day.");
+  });
+}
+
+docs {
+  # POST /time-off/requests/:requestId/cancel — a reviewer cancels approved leave
+
+  Leave that has already been taken can still be cancelled by a reviewer —
+  the note is required — and its hours are handed back with `reversal` rows.
+  Also what frees the day so this folder can run again. See
+  `Cancel Approved Time Off`.
+}

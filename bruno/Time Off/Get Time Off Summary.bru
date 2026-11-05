@@ -1,0 +1,53 @@
+meta {
+  name: Get Time Off Summary
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/time-off/summary
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("has a card for the run's policy with Gusto's numbers", function () {
+    const card = res.getBody().policies.find((p) => p.id === bru.getVar("timeOffPolicyId"));
+    expect(card.currentBalance).to.equal(80);
+    expect(card.otherRequestedHours).to.equal(0);
+    expect(card.availableHours).to.equal(80);
+    expect(card.unlimited).to.equal(false);
+  });
+
+  test("says how many people can review", function () {
+    expect(res.getBody().reviewerCount).to.be.a("number");
+  });
+}
+
+docs {
+  # GET /time-off/summary — the employee's cards (PAC-165)
+
+  Module `hr`, permission `hr:read`. **Always the caller's own** — a data
+  scope never widens it.
+
+  `policies[]`: one per time off policy the caller is in —
+  `{ id, name, timeOffType, unlimited, currentBalance, otherRequestedHours,
+  availableHours }`. The balance is never stored; it is derived from
+  `leaveLedger`:
+
+  - `currentBalance` — the ledger as of the end of today (agency calendar).
+  - `otherRequestedHours` — approved leave that has not happened yet, plus
+    requests still waiting for a decision (Submitted, Changes Requested).
+  - `availableHours` — `currentBalance − otherRequestedHours`.
+
+  All three are `null` on an Unlimited policy. `reviewerCount` is how many
+  other people can decide the caller's requests (`hr:write` holders whose
+  scope covers them); `0` means a request would wait with nobody to review it.
+}

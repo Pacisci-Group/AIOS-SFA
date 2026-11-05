@@ -76,11 +76,12 @@ export class HrPoliciesController {
   @Get(':policyId')
   @RequirePermissions(AgencyPermission.HrAdmin)
   get(
+    @Access() access: AccessContext,
     @AgencyId() agencyId: string,
     @Param('policyId', new ZodValidationPipe(policyIdParamSchema))
     policyId: string,
   ): Promise<HrPolicyView> {
-    return this.policies.get(agencyId, policyId);
+    return this.policies.get(agencyId, policyId, access.timeZone);
   }
 
   /**

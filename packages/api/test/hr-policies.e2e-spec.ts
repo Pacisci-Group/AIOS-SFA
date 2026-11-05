@@ -824,18 +824,45 @@ describe('HR policies (e2e)', () => {
       const waiting = await requests.create({
         agencyId: ctx.agencyId,
         branchId: ctx.branchId,
+        source: 'self',
         policyId: new Types.ObjectId(ptoId),
-        producerId: new Types.ObjectId(producerUserId),
-        status: 'Submitted',
-        hoursRequested: 8,
+        employeeId: new Types.ObjectId(producerUserId),
+        status: 'submitted',
+        totalHours: 8,
       });
       await api()
         .post(`/api/v1/hr/policies/${ptoId}/archive`)
         .set(auth(managerToken))
         .expect(409);
+      // Sent back for changes is still waiting on a person (PAC-165).
       await requests.updateOne(
         { _id: waiting._id },
-        { $set: { status: 'Approved' } },
+        { $set: { status: 'changes_requested' } },
+      );
+      await api()
+        .post(`/api/v1/hr/policies/${ptoId}/archive`)
+        .set(auth(managerToken))
+        .expect(409);
+      // An imported row has no status and no policy to wait on; a discarded
+      // draft is not a request.
+      await requests.create({
+        agencyId: ctx.agencyId,
+        branchId: ctx.branchId,
+        source: 'legacy',
+        legacy: { status: 'Submitted' },
+      });
+      await requests.create({
+        agencyId: ctx.agencyId,
+        branchId: ctx.branchId,
+        source: 'self',
+        policyId: new Types.ObjectId(ptoId),
+        employeeId: new Types.ObjectId(producerUserId),
+        status: 'submitted',
+        deletedAt: new Date(),
+      });
+      await requests.updateOne(
+        { _id: waiting._id },
+        { $set: { status: 'approved' } },
       );
       const before = (await rowsFor(ptoId)).length;
       await api()

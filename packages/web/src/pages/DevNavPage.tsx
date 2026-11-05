@@ -7,6 +7,7 @@ import {
   BarChart3,
   LogOut,
   KeyRound,
+  Plane,
   type LucideIcon,
 } from 'lucide-react';
 import { ModuleKey } from '@sfa/shared';
@@ -72,6 +73,19 @@ const navSections = [
         label: 'Household Details',
         icon: Building2,
         module: ModuleKey.Clients,
+      },
+    ],
+  },
+  {
+    title: 'HR',
+    items: [
+      {
+        // Every employee's own balances and requests; for a reviewer, the
+        // team's as well (PAC-165).
+        to: '/time-off',
+        label: 'Time off',
+        icon: Plane,
+        module: ModuleKey.Hr,
       },
     ],
   },

@@ -1,0 +1,66 @@
+meta {
+  name: Create Unlimited Policy (for adjustment)
+  type: http
+  seq: 33
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+script:pre-request {
+  bru.setVar("timeOffUnlimitedName", `Bruno unlimited ${Date.now()}`);
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{timeOffUnlimitedName}}",
+    "timeOff": {
+      "timeOffType": "custom",
+      "description": null,
+      "compensation": "unpaid",
+      "accrualType": "unlimited",
+      "hoursPerYear": null,
+      "accrualFrequency": null,
+      "resetDateKind": null,
+      "resetMonthDay": null,
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": null,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": null,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": null,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": false,
+      "autoApprove": { "enabled": false, "maxCalendarDays": null, "minNoticeHours": null }
+    },
+    "memberIds": ["{{timeOffRecordeeId}}"]
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("timeOffUnlimitedId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /hr/policies — an Unlimited policy for the refusal below
+
+  Custom and Unlimited, holding the one person. Archived at the end.
+}

@@ -125,7 +125,19 @@ export class TimeOffAccrualService {
       );
       if (!monthly && !due.length) continue;
 
-      const balances = await this.ledger.balances(policy._id, members);
+      // As of the start of today: a `used` row (PAC-165) is dated on its
+      // leave day, so approved leave from today on belongs to the period
+      // this run opens, not the one it closes. Summing every row would let
+      // next January's holiday shrink this December's carryover.
+      const ledger = await this.ledger.balances(
+        agencyKey,
+        policy._id,
+        members,
+        effectiveAt,
+      );
+      const balances = new Map(
+        [...ledger].map(([userId, balance]) => [userId, balance.current]),
+      );
       const source = (kind: 'accrual' | 'reset') => ({ kind, id: policy._id });
       const base = (userId: Types.ObjectId) =>
         balances.get(userId.toString()) ?? 0;

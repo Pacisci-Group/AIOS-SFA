@@ -1,0 +1,39 @@
+meta {
+  name: Record Time Off (as Producer, 403)
+  type: http
+  seq: 30
+}
+
+post {
+  url: {{baseUrl}}/time-off/records
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "employeeId": "{{timeOffRecordeeId}}",
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torPast}}",
+    "lastDay": "{{torPast}}",
+    "dayMode": "full"
+  }
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /time-off/records — both permissions, or nothing
+
+  A producer holds neither `hr:write` nor `agency:users:read`. Either one
+  missing is a `403` — a reviewer who may not see the directory cannot record
+  either.
+}

@@ -11,6 +11,7 @@ import {
   LOCKED_TIME_OFF_FIELDS,
   normalizeTimeOffPolicyRules,
   timeOffPolicyRulesError,
+  UNDECIDED_TIME_OFF_REQUEST_STATUSES,
   type CreatablePolicyType,
   type HolidayKey,
   type HrPoliciesResponse,
@@ -25,8 +26,10 @@ import {
 import { Model, Types } from 'mongoose';
 import { Branch } from '../branches/schemas/branch.schema';
 import { businessDateInstant } from '../common/dates/business-dates';
+import { balanceAsOf } from '../common/time-off/balance-as-of';
 import {
   LeaveLedgerService,
+  type LedgerBalance,
   type NewLedgerRow,
 } from '../common/time-off/leave-ledger.service';
 import {
@@ -82,9 +85,6 @@ type UserLean = {
 
 /** Spelled out on every read: archived policies stay as rows (PAC-155). */
 const ACTIVE = { archivedAt: null } as const;
-
-/** PAC-165's "waiting for a decision" status; migrated rows carry it too. */
-const SUBMITTED = 'Submitted';
 
 /**
  * HR policies (PAC-161 v3, PAC-174): list, read, create, edit and archive,
@@ -185,12 +185,16 @@ export class HrPoliciesService {
     };
   }
 
-  async get(agencyId: string, policyId: string): Promise<HrPolicyView> {
+  async get(
+    agencyId: string,
+    policyId: string,
+    timeZone: string,
+  ): Promise<HrPolicyView> {
     const [row, people] = await Promise.all([
       this.find(agencyId, policyId),
       this.enrollable(agencyId),
     ]);
-    return this.toView(row, people);
+    return this.toView(agencyId, row, people, timeZone);
   }
 
   async create(
@@ -234,7 +238,7 @@ export class HrPoliciesService {
           'activation',
         ),
       );
-      return this.get(agencyId, created._id.toString());
+      return this.get(agencyId, created._id.toString(), timeZone);
     }
 
     const created =
@@ -253,7 +257,7 @@ export class HrPoliciesService {
             memberIds,
           });
     await this.releaseFromOthers(agencyId, dto.type, created._id, memberIds);
-    return this.get(agencyId, created._id.toString());
+    return this.get(agencyId, created._id.toString(), timeZone);
   }
 
   async update(
@@ -333,7 +337,7 @@ export class HrPoliciesService {
         await this.releaseFromOthers(agencyId, row.type, row._id, memberIds);
       }
     }
-    return this.get(agencyId, policyId);
+    return this.get(agencyId, policyId, timeZone);
   }
 
   /**
@@ -364,7 +368,7 @@ export class HrPoliciesService {
           'That person is already in this policy; their balance cannot be set.',
         );
       }
-      return this.get(agencyId, policyId);
+      return this.get(agencyId, policyId, timeZone);
     }
     const memberIds = [...before, userObjectId];
     await this.store(row.type).updateOne(
@@ -385,7 +389,7 @@ export class HrPoliciesService {
     } else {
       await this.releaseFromOthers(agencyId, row.type, row._id, [userObjectId]);
     }
-    return this.get(agencyId, policyId);
+    return this.get(agencyId, policyId, timeZone);
   }
 
   /**
@@ -428,10 +432,14 @@ export class HrPoliciesService {
   ): Promise<void> {
     const row = await this.find(agencyId, policyId);
     if (row.type === 'time_off') {
+      // Waiting on a person: sent and undecided, or sent back for changes
+      // (PAC-165). A discarded draft is not a request; an imported row has
+      // no policy and no status, so it can never match.
       const waiting = await this.timeOffRequests.countDocuments({
         agencyId,
         policyId: row._id,
-        status: SUBMITTED,
+        status: { $in: UNDECIDED_TIME_OFF_REQUEST_STATUSES },
+        deletedAt: null,
       });
       if (waiting > 0) {
         throw new ConflictException(
@@ -502,25 +510,33 @@ export class HrPoliciesService {
   }
 
   private async toView(
+    agencyId: string,
     row: PolicyLean,
     people: ReadonlyMap<string, PolicyMemberView>,
+    timeZone: string,
   ): Promise<HrPolicyView> {
     const members = liveMembers(row, people);
     if (row.type !== 'time_off') {
       return { ...toSummary(row, people), members };
     }
     const unlimited = row.accrualType === 'unlimited';
+    // The current balance: approved leave that has not happened yet is not
+    // taken off it (PAC-165).
     const balances = unlimited
-      ? new Map<string, number>()
+      ? new Map<string, LedgerBalance>()
       : await this.ledger.balances(
+          agencyId,
           row._id,
           members.map((member) => new Types.ObjectId(member.id)),
+          balanceAsOf(timeZone),
         );
     return {
       ...toSummary(row, people),
       members: members.map((member) => ({
         ...member,
-        balanceHours: unlimited ? null : (balances.get(member.id) ?? 0),
+        balanceHours: unlimited
+          ? null
+          : (balances.get(member.id)?.current ?? 0),
       })),
     };
   }

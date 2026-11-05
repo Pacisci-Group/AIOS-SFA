@@ -1,0 +1,54 @@
+meta {
+  name: Login as Manager
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{managerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("timeOffManagerToken", res.getBody().accessToken);
+    bru.setVar("timeOffManagerId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("can review and can record", function () {
+    const permissions = res.getBody().user.permissions;
+    expect(permissions).to.include("hr:write");
+    expect(permissions).to.include("agency:users:read");
+    expect(permissions).to.include("agency:hr:admin");
+  });
+}
+
+docs {
+  # POST /auth/login — Time Off folder helper
+
+  The Branch Manager: holds `hr:write` (reviews the requests of their branch),
+  `agency:users:read` (with `hr:write`, may **record** time off for someone
+  else) and `agency:hr:admin` (creates the run's policy, adjusts a balance).
+  Captures `timeOffManagerToken` and `timeOffManagerId`.
+
+  If the permission test fails, the `hr_module` migration has not run on this
+  database.
+}

@@ -1,0 +1,51 @@
+meta {
+  name: Update Time Off Draft
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/time-off/requests/{{timeOffRequestId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torMon}}",
+    "lastDay": "{{torWed}}",
+    "dayMode": "full",
+    "note": "A long weekend away."
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("keeps it a draft and recomputes the provisional hours", function () {
+    const body = res.getBody();
+    expect(body.status).to.equal("draft");
+    expect(body.lastDay).to.equal(bru.getVar("torWed"));
+    expect(body.note).to.equal("A long weekend away.");
+    expect(body.days.length).to.equal(3);
+  });
+}
+
+docs {
+  # PATCH /time-off/requests/:requestId — edit a draft (PAC-165)
+
+  Module `hr`, permission `hr:read`. Only the caller's own request, and only
+  while it is a **Draft** or **Changes Requested**. The body is the full set
+  of inputs (`policyId, firstDay, lastDay, dayMode, hours?, note?`); it
+  replaces them. Sends nothing and writes no timeline entry.
+
+  `404` — not the caller's request. `409 already_decided` — it is no longer
+  editable (the body carries `request`, the record as it now stands).
+}

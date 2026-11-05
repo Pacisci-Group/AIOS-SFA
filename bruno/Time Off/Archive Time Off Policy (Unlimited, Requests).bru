@@ -1,0 +1,26 @@
+meta {
+  name: Archive Time Off Policy (Unlimited, Requests)
+  type: http
+  seq: 36
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{timeOffUnlimitedId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffManagerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — folder tidy-up
+
+  Archives the Unlimited policy.
+}

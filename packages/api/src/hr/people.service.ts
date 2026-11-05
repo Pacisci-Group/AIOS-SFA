@@ -1,20 +1,39 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import type { AccessContext, PersonProfileView } from '@sfa/shared';
+import type {
+  AccessContext,
+  BalanceAdjustmentResult,
+  PersonProfileView,
+} from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { businessDateInstant } from '../common/dates/business-dates';
 import {
   assertDateOfBirth,
   assertHireDate,
 } from '../common/hr/employee-profile.rules';
 import { EmployeeProfilesService } from '../common/hr/employee-profiles.service';
+import { balanceAsOf } from '../common/time-off/balance-as-of';
+import { LeaveLedgerService } from '../common/time-off/leave-ledger.service';
+import { notificationRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
 import { agencyTodayIso } from '../performance/performance.range';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
 import type {
+  BalanceAdjustmentDto,
   CompleteOnboardingDto,
   UpdatePersonFactsDto,
 } from './dto/people.dto';
 import { HrPoliciesService } from './hr-policies.service';
+import {
+  TimeOffPolicy,
+  type TimeOffPolicyDocument,
+} from './schemas/time-off-policy.schema';
 
 /**
  * The HR writes on a person (PAC-162): edit the facts, complete onboarding.
@@ -40,12 +59,116 @@ import { HrPoliciesService } from './hr-policies.service';
  */
 @Injectable()
 export class PeopleService {
+  private readonly logger = new Logger(PeopleService.name);
+
   constructor(
     @InjectModel(User.name) private readonly users: Model<UserDocument>,
+    @InjectModel(TimeOffPolicy.name)
+    private readonly timeOffPolicies: Model<TimeOffPolicyDocument>,
     private readonly profiles: EmployeeProfilesService,
     private readonly policies: HrPoliciesService,
     private readonly directory: UsersService,
+    private readonly ledger: LeaveLedgerService,
+    private readonly inngest: InngestService,
   ) {}
+
+  /**
+   * An HR admin's correction to a balance (PAC-165): a signed
+   * `manual_adjustment` row, effective today on the agency's calendar, with
+   * the reason kept on the row. The ledger is append-only — a wrong
+   * adjustment is corrected by another one, never edited.
+   *
+   * It is also the tool for the things the request flow refuses on purpose:
+   * leave in a period that has already reset, a day the accrual job never
+   * ran. Not offered on an Unlimited policy, which has no balance to move.
+   */
+  async adjustBalance(
+    access: AccessContext,
+    agencyId: string,
+    userId: string,
+    dto: BalanceAdjustmentDto,
+  ): Promise<BalanceAdjustmentResult> {
+    const user = await this.requireUser(agencyId, userId);
+    const policy = await this.timeOffPolicies
+      .findOne({
+        _id: new Types.ObjectId(dto.policyId),
+        agencyId,
+        archivedAt: null,
+      })
+      .select('name accrualType memberIds')
+      .lean<{
+        _id: Types.ObjectId;
+        name: string;
+        accrualType?: string;
+        memberIds?: Types.ObjectId[];
+      } | null>();
+    if (!policy) {
+      throw new NotFoundException('That time off policy does not exist.');
+    }
+    if (policy.accrualType === 'unlimited') {
+      throw new BadRequestException(
+        'An unlimited policy has no balance to adjust.',
+      );
+    }
+    if (!(policy.memberIds ?? []).some((id) => id.equals(user._id))) {
+      throw new BadRequestException('That person is not in this policy.');
+    }
+
+    const rowId = await this.ledger.postAdjustment({
+      agencyId,
+      policyId: policy._id,
+      userId: user._id,
+      hours: dto.hours,
+      note: dto.reason,
+      effectiveAt: businessDateInstant(
+        agencyTodayIso(access.timeZone),
+        access.timeZone,
+      ),
+    });
+    const balances = await this.ledger.balances(
+      agencyId,
+      policy._id,
+      [user._id],
+      balanceAsOf(access.timeZone),
+    );
+
+    // After the write, and never allowed to fail it. Nobody is told about
+    // an adjustment they made to their own balance.
+    if (userId !== access.userId) {
+      try {
+        const actor = await this.users
+          .findById(access.userId)
+          .select('firstName lastName email')
+          .lean<{
+            firstName?: string;
+            lastName?: string;
+            email: string;
+          } | null>();
+        await this.inngest.send(notificationRequested, {
+          type: 'time_off.balance_adjusted',
+          recipientIds: [userId],
+          agencyId,
+          actorId: access.userId,
+          entity: { kind: 'leaveLedger', id: rowId.toString() },
+          data: {
+            policyName: policy.name,
+            hours: dto.hours,
+            reason: dto.reason,
+            actorName: actor
+              ? [actor.firstName, actor.lastName].filter(Boolean).join(' ') ||
+                actor.email
+              : null,
+          },
+          dedupeKey: `time_off.balance_adjusted:${rowId.toString()}`,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Could not request the balance-adjusted notification for ${userId}: ${String(err)}`,
+        );
+      }
+    }
+    return { balanceHours: balances.get(userId)?.current ?? 0 };
+  }
 
   async updateFacts(
     access: AccessContext,

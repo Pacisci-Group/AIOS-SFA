@@ -1,0 +1,83 @@
+meta {
+  name: Preview Time Off Request
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/preview
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{timeOffProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{timeOffPolicyId}}",
+    "firstDay": "{{torMon}}",
+    "lastDay": "{{torTue}}",
+    "dayMode": "full"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("computes the hours per date from the person's schedule", function () {
+    const body = res.getBody();
+    expect(body.days.map((d) => d.date)).to.eql([bru.getVar("torMon"), bru.getVar("torTue")]);
+    expect(body.days[0]).to.have.keys(["date", "hours", "scheduledHours", "reason"]);
+    expect(body.totalHours).to.equal(body.days.reduce((sum, d) => sum + d.hours, 0));
+  });
+
+  test("returns the four balance lines", function () {
+    const { balance, totalHours } = res.getBody();
+    expect(balance.currentBalance).to.equal(80);
+    expect(balance.thisRequestHours).to.equal(totalHours);
+    expect(balance.remainingHours).to.equal(80 - balance.otherRequestedHours - totalHours);
+  });
+
+  test("nothing stops it being sent", function () {
+    expect(res.getBody().blockers).to.eql([]);
+  });
+}
+
+docs {
+  # POST /time-off/requests/preview — what a request would amount to (PAC-165)
+
+  Module `hr`, permission `hr:read`. The caller's own request. **Writes
+  nothing.**
+
+  Body `{ policyId, firstDay, lastDay, dayMode: "full" | "partial", hours?,
+  note?, requestId? }`. `hours` is typed hours by date (`{ "2026-11-12": 2.5 }`,
+  quarter hours) and only read on Partial days; `requestId` names the request
+  being edited so it is left out of "other requested hours".
+
+  Returns:
+
+  - `days[]` — one row per date from first to last: `{ date, hours,
+    scheduledHours, reason }`. Hours come from the person's Work week and
+    Holiday policies, not a flat eight; a weekend or holiday is a row at `0`
+    with `reason: "weekend" | "holiday" | …`. Partial days takes the typed
+    hours, capped at the date's schedule.
+  - `totalHours`.
+  - `balance` — `{ currentBalance, otherRequestedHours, thisRequestHours,
+    remainingHours }`; `null` on an Unlimited policy.
+  - `projection` — `{ lowestBalance, lowestOn, crossesAccrual }`: the balance
+    walked forward through every scheduled accrual and reset to the last leave
+    day. The "not below zero" check uses `lowestBalance`; `crossesAccrual`
+    says it differs from today's numbers.
+  - `blockers[]` — `{ code, message }` for each rule that stops the request
+    being sent: `not_enrolled`, `policy_unavailable`, `past_date`,
+    `no_scheduled_hours`, `span_too_long`, `overlap`, `waiting_period`,
+    `usage_cap`, `negative_balance`. A broken rule is information here, not a
+    `400`.
+  - `warnings[]` — always empty for a self request.
+
+  `404` — no such policy.
+}

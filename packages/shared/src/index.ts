@@ -19,6 +19,8 @@ export * from './domain/people';
 export * from './domain/time-off-policy';
 export * from './domain/time-off-accrual';
 export * from './domain/time-off-rules';
+export * from './domain/time-off-request';
+export * from './domain/time-off-projection';
 export * from './domain/us-holidays';
 export * from './domain/work-week';
 export * from './domain/household-membership';
