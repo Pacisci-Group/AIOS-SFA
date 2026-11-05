@@ -1,0 +1,78 @@
+meta {
+  name: Generate Payout Run
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/payouts/runs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "month": "{{payoutsMonth}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().run) {
+    bru.setVar("payoutsRunId", res.getBody().run.id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the month is calculated, by hand", function () {
+    const run = res.getBody().run;
+    expect(run.month).to.equal(bru.getVar("payoutsMonth"));
+    expect(run.status).to.equal("ready");
+    expect(run.trigger).to.equal("manual");
+    expect(run.counts.statements).to.be.at.least(0);
+  });
+}
+
+docs {
+  # POST /payouts/runs — generate or recalculate a month (PAC-178)
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin` (the
+  owner). A branch manager reviews but does not generate.
+
+  **Body** — `{ "month": "YYYY-MM" }`: any month that has started (the
+  current one is partial).
+
+  Drafts a statement for everyone on an active payment structure — someone
+  invited or removed only for a month with sales or chargebacks — with the
+  same engine as the 1st-of-month job. Run again, it **recalculates**: draft
+  and disputed statements are recomputed (their adjustments kept), **sent
+  and accepted ones are left exactly as they were**, and the run's
+  `warnings` say whose sent statement no longer matches the team split.
+  Drafts of people no longer on a structure are deleted. Computed inline;
+  the request returns when the month is ready.
+
+  The collection runs it on the current month: the structure **Create
+  Payment Structure** made has the demo producer on it when they were on no
+  structure before, so there is a statement to read below. The run and its
+  drafts stay on the tenant (a later Generate recomputes them).
+
+  **Response `200`** — as **Get Payout Run**.
+
+  **Errors**
+  - `400` — a malformed month, or one that has not started ("That month has
+    not started yet, …"). See **Generate Payout Run (Future Month, 400)**.
+  - `403` — without `agency:payouts:admin`.
+  - `409` `PAYOUT_RUN_GENERATING` — the month is being computed right now
+    (the job, or another Generate). Try again shortly.
+}

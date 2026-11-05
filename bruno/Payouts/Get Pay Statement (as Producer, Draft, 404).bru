@@ -1,0 +1,31 @@
+meta {
+  name: Get Pay Statement (as Producer, Draft, 404)
+  type: http
+  seq: 27
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 404", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id — a draft, as a producer
+
+  A draft is the reviewer's until it is sent, even the producer's own; and a
+  statement the caller may not see is a `404`, not a `403`.
+}

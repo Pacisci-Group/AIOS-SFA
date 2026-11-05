@@ -1,0 +1,74 @@
+meta {
+  name: Get Payout Activity
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/payouts/activity?month={{payoutsMonth}}&userId={{payoutsProducerUserId}}
+  auth: bearer
+}
+
+params:query {
+  month: {{payoutsMonth}}
+  userId: {{payoutsProducerUserId}}
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the producer's month with totals that add up", function () {
+    const body = res.getBody();
+    expect(body.userId).to.equal(bru.getVar("payoutsProducerUserId"));
+    const cents = function (n) { return Math.round(n * 100); };
+    const premium = body.deals.reduce(function (sum, d) { return sum + cents(d.premium); }, 0);
+    expect(premium).to.equal(cents(body.totals.premium));
+    expect(body.totals.deals).to.equal(body.deals.length);
+    expect(body.totals.chargebacks).to.equal(body.chargebacks.length);
+  });
+}
+
+docs {
+  # GET /payouts/activity — what one person sold and had charged back (PAC-179)
+
+  **Module** — `payouts`. **Permission** — `payouts:read`.
+
+  **Query** — `month` (`YYYY-MM`, required; a month that has started),
+  `userId` (optional; omitted = yourself).
+
+  Your own activity always. Anyone else's needs `payouts:write`, within your
+  data scope: the owner anyone in the agency, a branch manager anyone in
+  their branch. Works for **any month, statement or not** — computed by the
+  same loader as the statements, so for a month with a statement the totals
+  are its sold premium and chargebacks.
+
+  **Response `200`**
+  ```json
+  {
+    "userId": "…", "userName": "Pat Producer", "month": "2026-10",
+    "statementId": "…",
+    "deals": [{ "dealId": "…", "soldDate": "…", "soldDay": "2026-10-31", "clientName": "…",
+                "policyTypes": ["Auto", "Home"], "carriers": ["Allstate"], "policyCount": 2,
+                "premium": 3200, "leadSourceId": "…", "leadSourceName": "JYA", "isBundle": true }],
+    "chargebacks": [{ "chargebackId": "…", "policyId": "…", "policyNumber": "…",
+                      "policyType": "Auto", "carrier": "Allstate", "customerName": "…",
+                      "amount": 1500, "occurredAt": "…", "occurredDay": "2026-10-20",
+                      "reason": "cancellation", "source": "app" }],
+    "totals": { "deals": 1, "policies": 2, "premium": 3200, "bundles": 1,
+                "chargebacks": 1, "chargebackTotal": 1500 }
+  }
+  ```
+  `statementId` is set only when you may open that statement. A chargeback's
+  `reason` / `source` say where it came from (`cancellation`,
+  `cancel_rewrite`; carrier report rows arrive with PAC-180).
+
+  **Errors** — `400` for a month not yet started; `403` for someone else
+  without `payouts:write`; `404` for someone outside the agency or your
+  scope.
+}

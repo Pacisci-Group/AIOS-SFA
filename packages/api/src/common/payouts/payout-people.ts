@@ -1,9 +1,9 @@
 import type { PayoutPersonStatus } from '@sfa/shared';
 import { Types, type FilterQuery, type Model } from 'mongoose';
-import type { BranchDocument } from '../branches/schemas/branch.schema';
-import type { UserRole } from '../permissions/schemas/user-role.schema';
-import type { AgencyRoleDocument } from '../roles/schemas/agency-role.schema';
-import type { UserDocument } from '../users/schemas/user.schema';
+import type { BranchDocument } from '../../branches/schemas/branch.schema';
+import type { UserRole } from '../../permissions/schemas/user-role.schema';
+import type { AgencyRoleDocument } from '../../roles/schemas/agency-role.schema';
+import type { UserDocument } from '../../users/schemas/user.schema';
 
 export interface PayoutPeopleModels {
   userModel: Model<UserDocument>;
@@ -17,10 +17,15 @@ export interface PayoutPerson {
   id: string;
   name: string;
   email: string;
+  /** Role names, for display. */
   roles: string[];
+  /** Role slugs — what the statement engine reads (`payoutPoolFor`). */
+  roleSlugs: string[];
   status: PayoutPersonStatus;
   branchId: string | null;
   branchName: string | null;
+  /** The "SOK number" — the statement's Producer ID. */
+  allstateBindId: string | null;
 }
 
 interface LeanUser {
@@ -31,6 +36,7 @@ interface LeanUser {
   isActive?: boolean;
   deactivatedAt?: Date | null;
   branchId?: Types.ObjectId | null;
+  allstateBindId?: string | null;
 }
 
 /**
@@ -56,6 +62,11 @@ export function payoutPersonStatus(user: {
  *   invitees too, so a structure can be ready before someone's first day.
  *
  * Platform admins are never an agency's people.
+ *
+ * In `common/` (moved from `payouts/` in PAC-178) because the monthly
+ * statement job needs the same people — removed ones included, which
+ * `activeRoleHolders` leaves out — and the worker may not import a feature
+ * directory.
  */
 export async function loadPayoutPeople(
   models: PayoutPeopleModels,
@@ -75,7 +86,9 @@ export async function loadPayoutPeople(
   }
   const users = await models.userModel
     .find(where)
-    .select('firstName lastName email isActive deactivatedAt branchId')
+    .select(
+      'firstName lastName email isActive deactivatedAt branchId allstateBindId',
+    )
     .sort({ firstName: 1, lastName: 1, email: 1 })
     .lean<LeanUser[]>();
   if (!users.length) return new Map();
@@ -91,16 +104,18 @@ export async function loadPayoutPeople(
           agencyId: agencyOid,
           _id: { $in: [...new Set(links.map((link) => String(link.roleId)))] },
         })
-        .select('name')
-        .lean<{ _id: Types.ObjectId; name: string }[]>()
+        .select('name slug')
+        .lean<{ _id: Types.ObjectId; name: string; slug: string }[]>()
     : [];
-  const roleName = new Map(roles.map((role) => [String(role._id), role.name]));
+  const roleById = new Map(roles.map((role) => [String(role._id), role]));
   const rolesByUser = new Map<string, string[]>();
+  const slugsByUser = new Map<string, string[]>();
   for (const link of links) {
-    const name = roleName.get(String(link.roleId));
-    if (!name) continue;
+    const role = roleById.get(String(link.roleId));
+    if (!role) continue;
     const key = String(link.userId);
-    rolesByUser.set(key, [...(rolesByUser.get(key) ?? []), name]);
+    rolesByUser.set(key, [...(rolesByUser.get(key) ?? []), role.name]);
+    slugsByUser.set(key, [...(slugsByUser.get(key) ?? []), role.slug]);
   }
 
   const branchIds = [
@@ -132,9 +147,11 @@ export async function loadPayoutPeople(
         user.email,
       email: user.email,
       roles: (rolesByUser.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
+      roleSlugs: (slugsByUser.get(id) ?? []).sort(),
       status: payoutPersonStatus(user),
       branchId,
       branchName: branchId ? (branchName.get(branchId) ?? null) : null,
+      allstateBindId: user.allstateBindId?.trim() || null,
     });
   }
   return people;

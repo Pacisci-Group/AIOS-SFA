@@ -29,7 +29,8 @@ export type NotificationCategory =
   | 'goals'
   | 'service'
   | 'campaigns'
-  | 'attendance';
+  | 'attendance'
+  | 'payouts';
 
 export interface NotificationChannelDefaults {
   /** The email channel through the existing worker pipeline. */
@@ -67,6 +68,19 @@ export const NOTIFICATION_TYPES = {
   'reconciliation.row_assigned': {
     category: 'service',
     defaultChannels: { email: false, push: true },
+  },
+  /**
+   * The 1st-of-month job drafted an agency's pay statements for the month
+   * before (PAC-178). Recipients: the agency's active owners and branch
+   * managers — the people who review and send them. A manual Generate does
+   * not send it: whoever pressed the button is looking at the result.
+   * `data`: `{ runId, month, monthLabel, statements }` (`month` is
+   * `YYYY-MM`). Dedupe: `payout-run:<runId>:ready`. Email is on: the review
+   * is month-end work for someone who may not open the app that morning.
+   */
+  'payouts.run_ready': {
+    category: 'payouts',
+    defaultChannels: { email: true, push: true },
   },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 

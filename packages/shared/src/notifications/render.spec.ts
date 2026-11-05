@@ -23,6 +23,12 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       tabLabel: 'Premium differs',
       assignerName: 'Olive Owner',
     },
+    'payouts.run_ready': {
+      runId: '6ae1bceaa8d09054f813c0aa',
+      month: '2026-10',
+      monthLabel: 'October 2026',
+      statements: 7,
+    },
   };
 
 describe('renderNotification', () => {
@@ -66,6 +72,28 @@ describe('renderNotification', () => {
       body: '900200000 · LISA TAYLOR · Premium differs',
       href: '/reconciliation/assigned?row=6ae1bceaa8d09054f813c0f1',
     });
+  });
+
+  it('names the drafted month and opens it on the Payouts page', () => {
+    expect(
+      renderNotification('payouts.run_ready', FIXTURES['payouts.run_ready']),
+    ).toEqual({
+      title: 'Pay statements drafted for October 2026',
+      body: '7 statements are ready to review.',
+      href: '/payouts?month=2026-10',
+    });
+    const one = renderNotification('payouts.run_ready', {
+      month: '2026-10',
+      statements: 1,
+    });
+    expect(one.title).toBe('Pay statements drafted for 2026-10');
+    expect(one.body).toBe('1 statement is ready to review.');
+  });
+
+  it('opens the Payouts page when the month is missing or malformed', () => {
+    for (const data of [{}, { month: '../admin' }]) {
+      expect(renderNotification('payouts.run_ready', data).href).toBe('/payouts');
+    }
   });
 
   it('falls back to the assignee page when the row is missing or not an id', () => {

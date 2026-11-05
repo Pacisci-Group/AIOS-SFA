@@ -69,6 +69,25 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
         : '/reconciliation/assigned',
     };
   },
+  'payouts.run_ready': (data) => {
+    const month =
+      typeof data.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(data.month)
+        ? data.month
+        : null;
+    const label = text(data.monthLabel) ?? month;
+    const count =
+      typeof data.statements === 'number' && Number.isInteger(data.statements)
+        ? data.statements
+        : null;
+    return {
+      title: label ? `Pay statements drafted for ${label}` : 'Pay statements drafted',
+      body:
+        count === null
+          ? 'The statements are ready to review.'
+          : `${count} statement${count === 1 ? ' is' : 's are'} ready to review.`,
+      href: month ? `/payouts?month=${month}` : '/payouts',
+    };
+  },
 };
 
 /**

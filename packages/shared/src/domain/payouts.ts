@@ -1,4 +1,5 @@
 import { carrierSlug, normalizeCarrier } from './carrier';
+import type { ChargebackReason, ChargebackSource } from './chargeback';
 
 /**
  * Payouts (PAC-176) — payment structures and the agency's payout settings.
@@ -773,4 +774,424 @@ export function leadSourceRuleCarrierLabel(carrier: string): string {
   return carrier.trim() === ANY_CARRIER
     ? 'Any carrier'
     : normalizeCarrier(carrier);
+}
+
+// ── Statements (PAC-178) ────────────────────────────────────────────────
+//
+// A **pay statement** is one person's commission for one month: what they
+// sold, what was charged back, the rate each part was paid at, the bonuses
+// and the net. A **run** is one agency's month: the job that drafts the
+// statements on the 1st (or the owner's Generate), and the agency-wide facts
+// every statement shares — the agency's premium against the team threshold,
+// the team pools, the Salesperson of the Month. The math is
+// `domain/payout-math.ts`; this is its vocabulary and wire shape.
+
+/** A pay month on the agency's calendar, `YYYY-MM`. */
+export const PAYOUT_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/**
+ * `draft` → `sent` → `accepted` (final), or `sent` → `rejected` (disputed)
+ * → `sent` again as the next version. Only PAC-178's `draft` is written
+ * today; sending and sign-off arrive with PAC-181/182.
+ */
+export const PAY_STATEMENT_STATUSES = [
+  'draft',
+  'sent',
+  'accepted',
+  'rejected',
+] as const;
+export type PayStatementStatus = (typeof PAY_STATEMENT_STATUSES)[number];
+
+/**
+ * The statements a recalculation may rewrite. A sent or accepted statement is
+ * what the employee was shown, so it is never changed underneath them; a
+ * disputed one is waiting for the manager's correction.
+ */
+export const EDITABLE_PAY_STATEMENT_STATUSES = [
+  'draft',
+  'rejected',
+] as const satisfies readonly PayStatementStatus[];
+
+export function isEditableStatementStatus(status: PayStatementStatus): boolean {
+  return (EDITABLE_PAY_STATEMENT_STATUSES as readonly string[]).includes(
+    status,
+  );
+}
+
+export const PAYOUT_RUN_STATUSES = ['generating', 'ready', 'failed'] as const;
+export type PayoutRunStatus = (typeof PAYOUT_RUN_STATUSES)[number];
+
+/** `cron` — the 1st-of-month job; `manual` — the owner's Generate / Recalculate. */
+export const PAYOUT_RUN_TRIGGERS = ['cron', 'manual'] as const;
+export type PayoutRunTrigger = (typeof PAYOUT_RUN_TRIGGERS)[number];
+
+/**
+ * A run still `generating` after this long is taken to have died (a worker
+ * restart mid-run) and may be claimed again.
+ */
+export const STALE_PAYOUT_RUN_MINUTES = 30;
+
+/** 409 when a month is already being generated. */
+export const PAYOUT_RUN_GENERATING = 'PAYOUT_RUN_GENERATING';
+
+/** 409 when a statement that is not draft or disputed is asked to change. */
+export const PAYOUT_STATEMENT_NOT_EDITABLE = 'PAYOUT_STATEMENT_NOT_EDITABLE';
+
+/**
+ * Which half of the team pool a person shares in. CSRs are licensed and sell
+ * (owner, 4 Nov 2026), so both earn the same way; only the pool split is by
+ * role.
+ */
+export const PAYOUT_POOLS = ['csr', 'producer'] as const;
+export type PayoutPool = (typeof PAYOUT_POOLS)[number];
+
+/** A CSR role (slug `csr`) puts a person in the CSR pool; anyone else is a producer. */
+export function payoutPoolFor(roleSlugs: readonly string[]): PayoutPool {
+  return roleSlugs.includes('csr') ? 'csr' : 'producer';
+}
+
+/**
+ * The manager's corrections to a statement (PAC-182 adds the endpoints; the
+ * math applies them already): leave a chargeback out, add one, a SPIFF
+ * (≥ 0), a compliance adjustment (≤ 0), or any other line (±).
+ */
+export const STATEMENT_ADJUSTMENT_KINDS = [
+  'exclude_chargeback',
+  'add_chargeback',
+  'spiff',
+  'compliance',
+  'manual',
+] as const;
+export type StatementAdjustmentKind =
+  (typeof STATEMENT_ADJUSTMENT_KINDS)[number];
+
+/** Where a statement line's rate came from; `none` — no rule covers it, paid 0%. */
+export const STATEMENT_RATE_SOURCES = [...RATE_SOURCES, 'none'] as const;
+export type StatementRateSource = (typeof STATEMENT_RATE_SOURCES)[number];
+
+/** The carrier of a policy that records none, and of a sale with no policies. */
+export const PAYOUT_NO_CARRIER = '(no carrier)';
+
+export const PAY_STATEMENTS_PAGE_SIZE = 25;
+export const MAX_PAY_STATEMENTS_PAGE_SIZE = 100;
+
+export const SOM_STATUSES = ['winner', 'none', 'off'] as const;
+export type SomStatus = (typeof SOM_STATUSES)[number];
+
+export const COMPLIANCE_STATUSES = ['compliant', 'non_compliant'] as const;
+export type ComplianceStatus = (typeof COMPLIANCE_STATUSES)[number];
+
+/**
+ * One row of the Commission Statement's carrier production table.
+ *
+ * Premium is bucketed by carrier and, where a lead-source rate applies, by
+ * lead source too: a bucket paid a lead-source rate is a line of its own
+ * ("Allstate · JYA leads"); every other sale on the carrier is on the
+ * carrier's line (`leadSourceId: null`). Chargebacks land on the line of the
+ * sale they reverse.
+ */
+export interface PremiumLineView {
+  /** A carrier's display name, or {@link PAYOUT_NO_CARRIER}. */
+  carrier: string;
+  /** Set only on a lead-source-rate line. */
+  leadSourceId: string | null;
+  leadSourceName: string | null;
+  /** One of the agency's carrier appointments (listed even with no sales). */
+  appointed: boolean;
+  grossPremium: number;
+  /** Premium charged back (left-out chargebacks excluded). */
+  chargebacks: number;
+  netPremium: number;
+  ratePercent: number;
+  rateSource: StatementRateSource;
+  grossCommission: number;
+  /** The commission given back on the chargebacks. */
+  chargebackImpact: number;
+  netCommission: number;
+  /**
+   * The person's bundle rate on this carrier for the month (`null` with no
+   * sales on it), the minimum the structure asks for (`null` = not
+   * enforced), and whether it fell short. The same on every line of a
+   * carrier — a lead-source line is flagged with its carrier.
+   */
+  bundleRate: number | null;
+  minBundleRatePercent: number | null;
+  bundleShortfall: boolean;
+}
+
+/** One sale, as a statement and the activity view list it. */
+export interface StatementDealView {
+  dealId: string;
+  /** ISO-8601 instant. */
+  soldDate: string;
+  /** The agency-local day, `YYYY-MM-DD` — what the hat trick counts by. */
+  soldDay: string;
+  clientName: string;
+  policyTypes: string[];
+  /** Display names, sorted; empty for a sale with no carrier recorded. */
+  carriers: string[];
+  policyCount: number;
+  premium: number;
+  leadSourceId: string | null;
+  leadSourceName: string | null;
+  /** Two or more policies ({@link PAYOUT_BUNDLE_MIN_POLICIES}). */
+  isBundle: boolean;
+}
+
+/** One chargeback ledger row, as the activity view lists it. */
+export interface PayoutActivityChargebackView {
+  chargebackId: string;
+  policyId: string | null;
+  policyNumber: string | null;
+  policyType: string | null;
+  carrier: string;
+  customerName: string | null;
+  /** Premium dollars, positive. */
+  amount: number;
+  /** ISO-8601 instant. */
+  occurredAt: string;
+  /** The agency-local day, `YYYY-MM-DD`. */
+  occurredDay: string;
+  reason: ChargebackReason;
+  source: ChargebackSource;
+}
+
+/** A chargeback on a statement: the activity row plus what it cost in commission. */
+export interface StatementChargebackView extends PayoutActivityChargebackView {
+  /** Set when it reverses a sale paid a lead-source rate. */
+  leadSourceId: string | null;
+  ratePercent: number;
+  commissionDeduction: number;
+  /** Left out by the manager (an `exclude_chargeback` adjustment). */
+  excluded: boolean;
+  excludedNote: string | null;
+}
+
+export interface StatementBonusesView {
+  hatTrick: {
+    enabled: boolean;
+    dealsPerDay: number;
+    bonusAmount: number;
+    /** The agency-local days that qualified, `YYYY-MM-DD`. */
+    days: string[];
+    amount: number;
+  };
+  individual: {
+    stackable: boolean;
+    /** The tiers that pay: every one reached when stacking, else the highest. */
+    reached: BonusTier[];
+    amount: number;
+  };
+  team: {
+    /** The structure takes part in the team bonus. */
+    eligible: boolean;
+    /** The agency reached the first level. */
+    met: boolean;
+    /** The whole team pool for the month. */
+    poolAmount: number;
+    pool: PayoutPool;
+    /** This person's half of the pool (the CSR or the producer share). */
+    groupPool: number;
+    /** That half's sold premium — what the person's share is a share of. */
+    groupPremium: number;
+    amount: number;
+  };
+  salespersonOfMonth: { enabled: boolean; winner: boolean; amount: number };
+}
+
+export interface StatementIndicatorsView {
+  /** The highest monthly tier reached (1-based), stacking or not. */
+  tier: { level: number; thresholdPremium: number } | null;
+  /** Sales with 2+ policies ÷ sales; `null` with no sales. */
+  bundleRate: number | null;
+  /** Qualifying days; `null` when the structure has no hat trick. */
+  hatTricks: number | null;
+  somStatus: SomStatus;
+  complianceStatus: ComplianceStatus;
+  /** The month's sales whose deal audit failed. */
+  failedAudits: number;
+}
+
+/** The Commission Statement's summary grid. */
+export interface StatementTotalsView {
+  grossPremium: number;
+  chargebackTotal: number;
+  netPremium: number;
+  grossCommission: number;
+  chargebackImpact: number;
+  tierBonus: number;
+  teamBonus: number;
+  somBonus: number;
+  hatTrickBonus: number;
+  /** Other Bonuses / SPIFFs. */
+  spiffs: number;
+  complianceAdjustment: number;
+  otherAdjustments: number;
+  netCommission: number;
+}
+
+export interface StatementAdjustmentView {
+  id: string;
+  kind: StatementAdjustmentKind;
+  chargebackId: string | null;
+  amount: number | null;
+  note: string;
+  createdBy: string | null;
+  /** ISO-8601. */
+  createdAt: string;
+}
+
+/** The structure a statement was computed with, frozen on it. */
+export interface StatementStructureSnapshot {
+  id: string;
+  name: string;
+  rules: Required<RateRule>[];
+  leadSourceRules: LeadSourceRateRuleView[];
+  hatTrick: HatTrickRule;
+  individualTiers: BonusTier[];
+  tiersStackable: boolean;
+  teamBonusEligible: boolean;
+}
+
+export interface PayStatementSummary {
+  id: string;
+  runId: string;
+  month: string;
+  userId: string;
+  userName: string;
+  /** Role names, for display. */
+  roleNames: string[];
+  pool: PayoutPool;
+  /** The person's branch when the statement was computed. */
+  branchId: string | null;
+  branchName: string | null;
+  structureId: string;
+  structureName: string;
+  status: PayStatementStatus;
+  version: number;
+  totals: StatementTotalsView;
+  warningCount: number;
+  /** ISO-8601. */
+  computedAt: string;
+}
+
+export interface PayStatementView extends PayStatementSummary {
+  /** The Allstate Bind ID (the "SOK number"), the statement's Producer ID. */
+  allstateBindId: string | null;
+  timeZone: string;
+  structure: StatementStructureSnapshot;
+  premiumLines: PremiumLineView[];
+  deals: StatementDealView[];
+  chargebacks: StatementChargebackView[];
+  bonuses: StatementBonusesView;
+  indicators: StatementIndicatorsView;
+  adjustments: StatementAdjustmentView[];
+  warnings: string[];
+}
+
+export interface PayStatementsResponse {
+  statements: PayStatementSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+/** The agency-wide facts of a month, shared by every statement in it. */
+export interface PayoutRunTeamBonusView {
+  enabled: boolean;
+  stackable: boolean;
+  levels: TeamBonusLevel[];
+  /** The agency reached the first level. */
+  met: boolean;
+  poolAmount: number;
+  csrSharePercent: number;
+  producerSharePercent: number;
+  csrPool: number;
+  producerPool: number;
+  /** Sold premium of the team-eligible CSRs / producers. */
+  csrPremium: number;
+  producerPremium: number;
+}
+
+export interface PayoutRunView {
+  id: string;
+  month: string;
+  status: PayoutRunStatus;
+  trigger: PayoutRunTrigger;
+  timeZone: string;
+  /** The month's first instant and the next month's, on the agency's clock. */
+  window: { from: string; to: string };
+  /** Every producer's sold premium in the month — the team threshold's figure. */
+  agencyGrossPremium: number;
+  teamBonus: PayoutRunTeamBonusView;
+  salespersonOfMonth: {
+    enabled: boolean;
+    bonusAmount: number;
+    topGrossPremium: number | null;
+    winners: { userId: string; name: string }[];
+  };
+  /** The statements the caller may see. */
+  counts: {
+    statements: number;
+    draft: number;
+    sent: number;
+    accepted: number;
+    rejected: number;
+  };
+  /** Over the statements the caller may see. */
+  totals: { grossPremium: number; netCommission: number };
+  warnings: string[];
+  /** ISO-8601. */
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+}
+
+/** `GET /payouts/runs?month`: the month's run, or `null` before one exists. */
+export interface PayoutRunResponse {
+  month: string;
+  /** The agency's current month — a run for it is partial. */
+  currentMonth: string;
+  run: PayoutRunView | null;
+}
+
+/** `POST /payouts/runs`. */
+export interface GeneratePayoutRunInput {
+  month: string;
+}
+
+/** Someone whose activity a manager may open. */
+export interface PayoutActivityPerson {
+  id: string;
+  name: string;
+  roles: string[];
+  status: PayoutPersonStatus;
+  branchName: string | null;
+}
+
+export interface PayoutActivityPeopleResponse {
+  people: PayoutActivityPerson[];
+}
+
+/**
+ * `GET /payouts/activity` (PAC-179): everything one person sold and had
+ * charged back in a month, statement or not.
+ */
+export interface PayoutActivityView {
+  userId: string;
+  userName: string;
+  month: string;
+  /** The person's statement for the month, when the caller may open it. */
+  statementId: string | null;
+  deals: StatementDealView[];
+  chargebacks: PayoutActivityChargebackView[];
+  totals: {
+    deals: number;
+    policies: number;
+    premium: number;
+    bundles: number;
+    chargebacks: number;
+    chargebackTotal: number;
+  };
 }

@@ -103,6 +103,14 @@ const PayoutSettingsPage = lazy(
 const StructureEditorPage = lazy(
   () => import('@/features/payouts/settings/StructureEditorPage'),
 );
+const PayoutsPage = lazy(() => import('@/features/payouts/PayoutsPage'));
+const PayoutActivityPage = lazy(
+  () => import('@/features/payouts/PayoutActivityPage'),
+);
+const StatementDetailPage = lazy(
+  () => import('@/features/payouts/StatementDetailPage'),
+);
+const MyPayPage = lazy(() => import('@/features/payouts/MyPayPage'));
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -841,6 +849,57 @@ export function App() {
                     }
                   />
                 </Route>
+              </Route>
+
+              {/*
+                Payouts statements (PAC-178/179). The reviewer's pages need
+                `payouts:write` (owner, branch manager); a statement and My
+                Pay need only `payouts:read` — the API shows an employee
+                their own sent statements and nothing else.
+              */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.Payouts}:write`} />
+                }
+              >
+                <Route
+                  path="/payouts"
+                  element={
+                    <LazyPage>
+                      <PayoutsPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/payouts/activity"
+                  element={
+                    <LazyPage>
+                      <PayoutActivityPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.Payouts}:read`} />
+                }
+              >
+                <Route
+                  path="/payouts/statements/:id"
+                  element={
+                    <LazyPage>
+                      <StatementDetailPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/my-pay"
+                  element={
+                    <LazyPage>
+                      <MyPayPage />
+                    </LazyPage>
+                  }
+                />
               </Route>
 
               {/* Owner-only user directory */}
