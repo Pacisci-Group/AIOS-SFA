@@ -86,7 +86,6 @@ type UserLean = {
 /** Spelled out on every read: archived policies stay as rows (PAC-155). */
 const ACTIVE = { archivedAt: null } as const;
 
-
 /**
  * HR policies (PAC-161 v3, PAC-174): list, read, create, edit and archive,
  * and the people they can enrol. Every method is agency-wide — a policy

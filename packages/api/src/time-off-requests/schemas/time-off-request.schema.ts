@@ -166,7 +166,11 @@ export class TimeOffRequest extends TenantRecord {
   policyId: Types.ObjectId | null;
 
   /** The lifecycle status. Absent on an imported row — see the class docblock. */
-  @Prop({ type: String, enum: [...TIME_OFF_REQUEST_STATUSES, null], default: null })
+  @Prop({
+    type: String,
+    enum: [...TIME_OFF_REQUEST_STATUSES, null],
+    default: null,
+  })
   status: TimeOffRequestStatus | null;
 
   /** `YYYY-MM-DD`. */

@@ -63,6 +63,7 @@ import { StorageModule } from './storage/storage.module';
 import { AgencySetupModule } from './agency-setup/agency-setup.module';
 import { AgencyProfileModule } from './agency-profile/agency-profile.module';
 import { HrModule } from './hr/hr.module';
+import { TimeOffRequestsModule } from './time-off-requests/time-off-requests.module';
 import { AgencyCarrierAppointmentsModule } from './agency-carrier-appointments/agency-carrier-appointments.module';
 import { TenantBrandingModule } from './tenant-branding/tenant-branding.module';
 import { UsersModule } from './users/users.module';
@@ -161,6 +162,7 @@ const WORKER_INLINE = process.env.WORKER_INLINE !== 'false';
     // HR (PAC-161): time off policies (holidays, work weeks), under its own
     // `hr/*` prefix and the `hr` module entitlement.
     HrModule,
+    TimeOffRequestsModule,
     // The agency's carrier appointments (PAC-93). Same shape as the modules
     // above — its own `agency/carrier-appointments` prefix, its own
     // `agency:carrier_appointments:*` gate, no module entitlement.
