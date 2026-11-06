@@ -5,6 +5,7 @@ import {
   FileDown,
   Home,
   LayoutDashboard,
+  CalendarDays,
   Plane,
   SlidersHorizontal,
   Ticket,
@@ -166,6 +167,14 @@ export const NAV_SECTIONS: NavSection[] = [
         to: "/time-off",
         label: "Time off",
         icon: Plane,
+        module: ModuleKey.Hr,
+      },
+      {
+        // Every employee's (PAC-169): holidays, events, birthdays and their
+        // own time off — and, with `agency:hr:team_calendar`, the team's.
+        to: "/calendar",
+        label: "Calendar",
+        icon: CalendarDays,
         module: ModuleKey.Hr,
       },
     ],

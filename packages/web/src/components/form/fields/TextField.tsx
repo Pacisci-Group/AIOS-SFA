@@ -6,7 +6,7 @@ import { FieldShell, useFieldError } from "./FieldShell";
 interface TextFieldProps {
   label?: React.ReactNode;
   description?: React.ReactNode;
-  type?: "text" | "email" | "tel" | "date" | "url" | "password";
+  type?: "text" | "email" | "tel" | "date" | "time" | "url" | "password";
   inputMode?: React.ComponentProps<"input">["inputMode"];
   autoComplete?: string;
   placeholder?: string;

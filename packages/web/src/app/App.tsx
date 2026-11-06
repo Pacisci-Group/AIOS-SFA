@@ -78,6 +78,7 @@ const RolePermissionsPage = lazy(
 );
 const PeoplePage = lazy(() => import('@/features/people/PeoplePage'));
 const TimeOffPage = lazy(() => import('@/features/time-off/TimeOffPage'));
+const CalendarPage = lazy(() => import('@/features/hr/calendar/CalendarPage'));
 const PersonProfilePage = lazy(
   () => import('@/features/people/PersonProfilePage'),
 );
@@ -824,6 +825,20 @@ export function App() {
                   element={
                     <LazyPage>
                       <TimeOffPage />
+                    </LazyPage>
+                  }
+                />
+                {/*
+                  The HR calendar (PAC-169): holidays, the agency's events,
+                  birthdays, anniversaries and time off. `hr:read` like the
+                  page above — whose time off it shows is the API's decision
+                  (`agency:hr:team_calendar`), not this gate's.
+                */}
+                <Route
+                  path="/calendar"
+                  element={
+                    <LazyPage>
+                      <CalendarPage />
                     </LazyPage>
                   }
                 />
