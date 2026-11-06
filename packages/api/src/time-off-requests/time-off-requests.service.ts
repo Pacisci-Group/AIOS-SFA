@@ -15,6 +15,8 @@ import {
   evaluateAutoApproval,
   formatTimeOffRequestRef,
   hoursByDate,
+  datesWithHours,
+  leaveEventConflicts,
   LIVE_TIME_OFF_REQUEST_STATUSES,
   overlappingDates,
   periodStartFor,
@@ -50,10 +52,15 @@ import {
 import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import { Branch } from '../branches/schemas/branch.schema';
 import { businessDateInstant } from '../common/dates/business-dates';
+import { HomeBranchService } from '../common/hr/home-branch.service';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import { SequenceService } from '../common/mongo/sequence.service';
 import { TransactionRunner } from '../common/mongo/transaction.runner';
 import { LeaveLedgerService } from '../common/time-off/leave-ledger.service';
+import {
+  AgencyEventsReader,
+  effectOf,
+} from '../common/working-days/agency-events.reader';
 import {
   TimeOffBalanceService,
   type TimeOffPosition,
@@ -243,6 +250,8 @@ export class TimeOffRequestsService {
     private readonly transactions: TransactionRunner,
     private readonly inngest: InngestService,
     private readonly reviewers: TimeOffReviewersService,
+    private readonly agencyEvents: AgencyEventsReader,
+    private readonly homeBranches: HomeBranchService,
   ) {}
 
   // ── Reads ──────────────────────────────────────────────────────────────
@@ -1150,6 +1159,27 @@ export class TimeOffRequestsService {
       add('no_scheduled_hours', 'There are no scheduled hours in these dates.');
     }
 
+    // An agency event marked "no time off" (PAC-169), judged on the dates
+    // that carry hours — the overlap rule: a blocked weekend inside a
+    // Friday-to-Monday request blocks nothing. A blocker for the employee;
+    // `RECORD_WARNING_CODES` makes it a warning when it is recorded for them.
+    const blocked = datesWithHours(days).filter((date) =>
+      calendar.events.blackout.has(date),
+    );
+    if (blocked.length > 0) {
+      const names = [
+        ...new Set(
+          blocked.map((date) => calendar.events.blackout.get(date)!.name),
+        ),
+      ];
+      const shown = blocked.slice(0, 3).map(formatDay).join(', ');
+      const more = blocked.length > 3 ? ` and ${blocked.length - 3} more` : '';
+      add(
+        'blackout',
+        `Time off is not available on ${shown}${more} (${names.join(', ')}).`,
+      );
+    }
+
     const clash = await this.overlap(
       agencyId,
       employee._id,
@@ -1470,19 +1500,9 @@ export class TimeOffRequestsService {
     return branchId;
   }
 
-  private async defaultBranchId(agencyId: string): Promise<string | null> {
-    const agency = new Types.ObjectId(agencyId);
-    const branch =
-      (await this.branches
-        .findOne({ agencyId: agency, isDefault: true })
-        .select('_id')
-        .lean<{ _id: Types.ObjectId } | null>()) ??
-      (await this.branches
-        .findOne({ agencyId: agency })
-        .sort({ createdAt: 1 })
-        .select('_id')
-        .lean<{ _id: Types.ObjectId } | null>());
-    return branch?._id.toString() ?? null;
+  /** The one rule for it lives in `HomeBranchService` (PAC-169). */
+  private defaultBranchId(agencyId: string): Promise<string | null> {
+    return this.homeBranches.defaultBranchId(agencyId);
   }
 
   /** `TOR-2026-007`: the agency's next number for the year the request is made in. */
@@ -1669,6 +1689,45 @@ export class TimeOffRequestsService {
       ...(viewer.canReview
         ? { othersOff: await this.othersOff(agencyId, doc) }
         : {}),
+      ...(viewer.isEmployee || viewer.canReview
+        ? await this.eventConflictsOf(agencyId, doc)
+        : {}),
+    };
+  }
+
+  /**
+   * The agency events (PAC-169) a live request's charged days run into — a
+   * blackout, or a day off declared after its hours were frozen. Nothing
+   * about the request changes because of one; this is how the employee and
+   * the reviewer find out. Absent on a draft (the form's preview says it)
+   * and on anything decided against.
+   */
+  private async eventConflictsOf(
+    agencyId: string,
+    doc: RequestLean,
+  ): Promise<Pick<TimeOffRequestView, 'eventConflicts'>> {
+    const live = (
+      LIVE_TIME_OFF_REQUEST_STATUSES as readonly (string | null | undefined)[]
+    ).includes(doc.status);
+    if (!live || !doc.employeeId || !doc.firstDay || !doc.lastDay) return {};
+    const events = await this.agencyEvents.forPerson(
+      agencyId,
+      doc.employeeId.toString(),
+      doc.firstDay,
+      doc.lastDay,
+      { effects: ['day_off', 'blackout'] },
+    );
+    return {
+      eventConflicts: leaveEventConflicts(
+        doc.days ?? [],
+        events.map((event) => ({
+          id: event._id.toString(),
+          name: event.name,
+          effect: effectOf(event),
+          firstDay: event.firstDay,
+          lastDay: event.lastDay,
+        })),
+      ),
     };
   }
 

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
+  addIsoDays,
   DEFAULT_WORK_WEEK_DAYS,
   holidaysBetween,
   type ScheduledDay,
@@ -21,6 +22,7 @@ import {
   toIsoDate,
   zonedDate,
 } from '../../performance/performance.range';
+import { AgencyEventsReader, effectOf } from './agency-events.reader';
 import {
   addBusinessDays,
   type CalendarSnapshot,
@@ -31,13 +33,31 @@ import {
   workingDaysInMonth,
 } from './working-days';
 
-/** A person's week and holidays, as their two policies say. */
+/** The agency event behind a closed or blocked day. */
+export interface PersonCalendarEvent {
+  eventId: string;
+  name: string;
+}
+
+/**
+ * A person's week and holidays, as their two policies say, and the agency
+ * events that are for them (PAC-169).
+ */
 export interface PersonCalendar {
   snapshot: CalendarSnapshot;
   schedule: WorkSchedule;
   /** The policies it came from; `null` = the default (Mon–Fri / no holidays). */
   holidayPolicyId: string | null;
   workWeekPolicyId: string | null;
+  /**
+   * By `YYYY-MM-DD`, inside the range asked for. `dayOff` days are already
+   * in the snapshot as closures; `blackout` days are still working days —
+   * what they block is asking for time off, which is the caller's check.
+   */
+  events: {
+    dayOff: ReadonlyMap<string, PersonCalendarEvent>;
+    blackout: ReadonlyMap<string, PersonCalendarEvent>;
+  };
 }
 
 /**
@@ -50,6 +70,11 @@ export interface PersonCalendar {
  * in different Holiday policies and work different weeks. Someone in no Work
  * week policy works Mon–Fri 9–5; someone in no Holiday policy has no
  * holidays. Never throws for a person in neither — that is a working state.
+ *
+ * From PAC-169 a day is also closed by an agency event marked **day off**
+ * whose audience includes the person — the first closure that is not a
+ * holiday since the agency calendar went (PAC-161 v3). A holiday on the same
+ * date keeps its name: "Holiday" says more than "Office closed".
  */
 @Injectable()
 export class WorkingDaysService {
@@ -58,6 +83,7 @@ export class WorkingDaysService {
     private readonly holidayPolicies: Model<HolidayPolicyDocument>,
     @InjectModel(WorkWeekPolicy.name)
     private readonly workWeekPolicies: Model<WorkWeekPolicyDocument>,
+    private readonly agencyEvents: AgencyEventsReader,
   ) {}
 
   /**
@@ -76,7 +102,7 @@ export class WorkingDaysService {
       archivedAt: null,
       memberIds: new Types.ObjectId(userId),
     };
-    const [holidayPolicy, workWeekPolicy] = await Promise.all([
+    const [holidayPolicy, workWeekPolicy, events] = await Promise.all([
       this.holidayPolicies
         .findOne(member)
         .select('holidays customHolidays')
@@ -89,7 +115,24 @@ export class WorkingDaysService {
         .findOne(member)
         .select('days')
         .lean<{ _id: Types.ObjectId; days?: WorkWeekDay[] }>(),
+      this.agencyEvents.forPerson(agencyId, userId, range.from, range.to, {
+        effects: ['day_off', 'blackout'],
+      }),
     ]);
+
+    // Oldest event first, so the earliest one names a day two events share.
+    const dayOff = new Map<string, PersonCalendarEvent>();
+    const blackout = new Map<string, PersonCalendarEvent>();
+    for (const event of events) {
+      const target = effectOf(event) === 'day_off' ? dayOff : blackout;
+      const first = event.firstDay > range.from ? event.firstDay : range.from;
+      const last = event.lastDay < range.to ? event.lastDay : range.to;
+      for (let day = first; day <= last; day = addIsoDays(day, 1)) {
+        if (!target.has(day)) {
+          target.set(day, { eventId: event._id.toString(), name: event.name });
+        }
+      }
+    }
 
     const days = workWeekPolicy?.days?.length
       ? workWeekPolicy.days
@@ -106,13 +149,24 @@ export class WorkingDaysService {
       : [];
 
     return {
+      // Holidays last: the snapshot keeps the last row for a date.
       snapshot: snapshotFrom(
         days.map((day) => day.weekday),
-        holidays.map((row) => ({ date: row.date, kind: 'holiday' as const })),
+        [
+          ...[...dayOff.keys()].map((date) => ({
+            date,
+            kind: 'closure' as const,
+          })),
+          ...holidays.map((row) => ({
+            date: row.date,
+            kind: 'holiday' as const,
+          })),
+        ],
       ),
       schedule: toSchedule(days),
       holidayPolicyId: holidayPolicy?._id.toString() ?? null,
       workWeekPolicyId: workWeekPolicy?._id.toString() ?? null,
+      events: { dayOff, blackout },
     };
   }
 
