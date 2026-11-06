@@ -67,6 +67,7 @@ import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
 import { ServiceTicket } from '../../crm/schemas/service-ticket.schema';
 import { ProducerAssignment } from '../../producer-assignments/schemas/producer-assignment.schema';
 import { CrmRotation } from '../../crm-rotations/schemas/crm-rotation.schema';
+import { AgencyEvent } from '../../hr/schemas/agency-event.schema';
 import { TimeOffRequest } from '../../time-off-requests/schemas/time-off-request.schema';
 import { ProducerGoal } from '../../producer-goals/schemas/producer-goal.schema';
 import { Activity } from '../../activities/schemas/activity.schema';
@@ -95,6 +96,7 @@ import {
   CITIES,
   CitySpec,
   DEMO_CONFIG,
+  DEMO_AGENCY_EVENTS,
   DEMO_TIME_OFF_REQUESTS,
   FIRST_NAMES,
   LAST_NAMES,
@@ -309,6 +311,8 @@ export class DemoSeedService {
     private readonly crmRotationModel: Model<CrmRotation>,
     @InjectModel(TimeOffRequest.name)
     private readonly timeOffRequestModel: Model<TimeOffRequest>,
+    @InjectModel(AgencyEvent.name)
+    private readonly agencyEventModel: Model<AgencyEvent>,
     @InjectModel(ProducerGoal.name)
     private readonly producerGoalModel: Model<ProducerGoal>,
     @InjectModel(Activity.name) private readonly activityModel: Model<Activity>,
@@ -369,6 +373,9 @@ export class DemoSeedService {
     await this.seedAuditTemplates(ctx);
     await this.seedHrPolicies(ctx, team);
     await this.seedTimeOffRequests(ctx, team);
+    // After the requests, on purpose: an event seeded first would close or
+    // block the very days those requests need hours on.
+    await this.seedAgencyEvents(ctx, team);
     /*
      * Roll-ups **before** items (PAC-72): the board pages over `dealAudits`,
      * and an item needs its parent's `_id` to be loadable from a card. The
@@ -1685,6 +1692,52 @@ export class DemoSeedService {
     }
   }
 
+  /**
+   * The agency's events on the HR calendar (PAC-169): a party with a time,
+   * a blackout, a day off and one for the producers only. Idempotent by
+   * name — the collection has no `legacySmartSuiteId` — and never re-dated:
+   * an event seeded last month stays where it was, like the requests.
+   */
+  private async seedAgencyEvents(ctx: Ctx, team: TeamMember[]): Promise<void> {
+    const today = agencyTodayIso(ctx.timeZone);
+    const weekdayIndex = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
+    const thisMonday = isoAddDays(today, -weekdayIndex);
+    const manager = team.find((member) => member.spec.key === 'manager');
+
+    for (const spec of DEMO_AGENCY_EVENTS) {
+      const exists = await this.agencyEventModel.exists({
+        agencyId: ctx.agencyId,
+        name: spec.name,
+        deletedAt: null,
+      });
+      if (exists) continue;
+      const userIds = (spec.people ?? []).flatMap((key) => {
+        const member = team.find((candidate) => candidate.spec.key === key);
+        return member ? [member.userId] : [];
+      });
+      // An event for people nobody of whom exists here would read as empty.
+      if (spec.people && userIds.length === 0) continue;
+      const firstDay = isoAddDays(thisMonday, spec.week * 7 + spec.from);
+      await this.agencyEventModel.create({
+        agencyId: ctx.agencyId,
+        name: spec.name,
+        description: spec.description ?? null,
+        firstDay,
+        lastDay: isoAddDays(firstDay, spec.days - 1),
+        startTime: spec.startTime ?? null,
+        endTime: spec.endTime ?? null,
+        effect: spec.effect,
+        audience: spec.people
+          ? { kind: 'people', branchIds: [], userIds }
+          : { kind: 'agency', branchIds: [], userIds: [] },
+        // The seed has no request context; the office manager added these.
+        createdBy: manager?.userId ?? null,
+        updatedBy: manager?.userId ?? null,
+      });
+      this.inc('agencyEvents');
+    }
+  }
+
   private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],
@@ -2544,6 +2597,13 @@ export class DemoSeedService {
       await model.deleteMany(demoFilter as FilterQuery<unknown>);
     }
     await this.producerGoalModel.deleteMany({ agencyId, source: 'demo:seed' });
+    // `agencyEvents` has no `legacySmartSuiteId` either: the demo's events
+    // are the ones carrying the seed's names. An event added by hand in the
+    // demo tenant survives `--fresh`.
+    await this.agencyEventModel.deleteMany({
+      agencyId,
+      name: { $in: DEMO_AGENCY_EVENTS.map((event) => event.name) },
+    });
     // Same exception again: a membership is a *link*, not an imported record,
     // so it has no `legacySmartSuiteId` to match the filter above. Purged on
     // its provenance marker instead — which is also what keeps a membership

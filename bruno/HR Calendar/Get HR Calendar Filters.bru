@@ -1,0 +1,44 @@
+meta {
+  name: Get HR Calendar Filters
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar/filters
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("offers the branches and people in the caller's scope", function () {
+    const body = res.getBody();
+    expect(body.branches.length).to.be.greaterThan(0);
+    expect(body.people.map((p) => p.id)).to.include(bru.getVar("calProducerId"));
+    expect(body.people[0]).to.have.keys(["id", "name", "branchId"]);
+  });
+}
+
+docs {
+  # GET /hr/calendar/filters — what the page's filters offer (PAC-169)
+
+  Module `hr`, permission `hr:read`.
+
+  Returns `{ branches: [{ id, name }], people: [{ id, name, branchId }] }`:
+  the people whose time off the caller may see on the calendar, and the
+  branches they are in. Derived from the same scope rule as the calendar, so
+  it needs neither `agency:branches:read` nor `agency:users:read`. A person
+  with no branch of their own (an owner) is placed in the agency's default
+  one.
+
+  Both lists are **empty** for someone without `agency:hr:team_calendar` —
+  they see only themselves, so there is nothing to narrow (see the next
+  request).
+}

@@ -1,0 +1,27 @@
+meta {
+  name: Delete Day Off Event
+  type: http
+  seq: 21
+}
+
+delete {
+  url: {{baseUrl}}/hr/events/{{calDayOffId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /hr/events/:eventId — folder tidy-up
+
+  Removes the run's event so the folder can be run again. See
+  `Delete Agency Event`.
+}

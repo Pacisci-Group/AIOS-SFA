@@ -1,0 +1,26 @@
+meta {
+  name: Delete Agency Event (Again, 404)
+  type: http
+  seq: 22
+}
+
+delete {
+  url: {{baseUrl}}/hr/events/{{calEventId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # DELETE /hr/events/:eventId — a removed event is gone
+
+  Removing is not idempotent on purpose: the second call finds no live event.
+}

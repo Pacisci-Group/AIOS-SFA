@@ -1,0 +1,85 @@
+meta {
+  name: Create Agency Event
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/hr/events
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+body:json {
+  {
+    "name": "Christmas party",
+    "description": "Bring a dish to share.",
+    "firstDay": "{{calFri}}",
+    "startTime": "18:00",
+    "endTime": "21:00",
+    "effect": "none",
+    "audience": { "kind": "agency" }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("calEventId", res.getBody().event.id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("returns the event, one day, for everyone", function () {
+    const { event } = res.getBody();
+    expect(event.name).to.equal("Christmas party");
+    expect(event.firstDay).to.equal(bru.getVar("calFri"));
+    expect(event.lastDay).to.equal(bru.getVar("calFri"));
+    expect(event.startTime).to.equal("18:00");
+    expect(event.audience).to.eql({ kind: "agency", branchIds: [], userIds: [] });
+    expect(event.audienceLabel).to.equal("Everyone");
+  });
+
+  test("an event with no effect runs into nothing", function () {
+    expect(res.getBody().impact).to.eql({ requests: [], hiddenCount: 0 });
+  });
+}
+
+docs {
+  # POST /hr/events — add a date to the agency's calendar (PAC-169)
+
+  Module `hr`, permission `agency:hr:admin`. Agency-wide (`@SkipBranch()`).
+
+  Body:
+
+  - `name` — 1–120 characters.
+  - `description?` — up to 1000.
+  - `firstDay`, `lastDay?` — `YYYY-MM-DD`, inclusive; `lastDay` defaults to
+    `firstDay`. At most 31 days. Past dates are allowed.
+  - `startTime?`, `endTime?` — `HH:mm`. **Shown only**: the effect below is
+    always the whole day. An end needs a start; on a single day the end must
+    be after the start.
+  - `effect` — `none` (default; on the calendar only) · `blackout` (nobody in
+    the audience may ask for time off on those days; a manager recording it is
+    warned) · `day_off` (the office is closed for the audience: a request
+    charges nothing for the day).
+  - `audience` — `{ kind: "agency" }` (default), `{ kind: "branches",
+    branchIds: [...] }` or `{ kind: "people", userIds: [...] }`. The effect
+    and who sees the event follow it; a branch audience reaches the people
+    whose home branch is named.
+
+  Returns `201 { event, impact }`. `event` is the saved event with its
+  `audienceLabel` ("Everyone", a branch's or person's name, or a count).
+  `impact` is what `POST /hr/events/impact` returns for it. **No time off
+  request is changed** by saving an event.
+
+  `400` — a broken rule (the message says which), or a branch / person that
+  is not this agency's. `403` — without `agency:hr:admin`.
+}

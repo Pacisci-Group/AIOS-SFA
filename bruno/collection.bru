@@ -129,6 +129,13 @@ docs {
     adjustment. Self-contained: logs in as the Branch Manager and the
     producer, creates its own Custom policy, and tidies up after itself so
     it can be run again.
+  - **HR Calendar** — the HR calendar and the agency's events (PAC-169):
+    adding an event with an effect (`none` / `blackout` / `day_off`) and an
+    audience, the impact preview, what the two effects do to a time off
+    request, and the calendar read as an employee (their own leave only) and
+    as the Branch Manager (the team's, with `agency:hr:team_calendar`).
+    Self-contained: logs in as both, creates its own Custom policy and three
+    events, and removes them so it can be run again.
   - **CRM Service** — the service desk: the household ticket feed, the renewal
     outreach desk, and the full company-transfer chain (find a client → its
     active policy → open a ticket → presign → upload → book the transfer). The

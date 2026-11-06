@@ -1,0 +1,41 @@
+meta {
+  name: Create Agency Event (End before start, 400)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/hr/events
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+body:json {
+  {
+    "name": "Backwards",
+    "firstDay": "{{calFri}}",
+    "lastDay": "{{calMon}}"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("says which rule", function () {
+    expect(JSON.stringify(res.getBody())).to.contain("before the start");
+  });
+}
+
+docs {
+  # POST /hr/events — the rules are the shared `agencyEventError`
+
+  The form and the API read the same function, so the message here is the
+  one the form shows: a name, real dates, an end on or after the start, at
+  most 31 days, times as `HH:mm`, somebody in a branch or people audience.
+}

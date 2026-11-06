@@ -1,0 +1,48 @@
+meta {
+  name: List Event Audience Options
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/hr/events/audience-options
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().branches.length) {
+    bru.setVar("calBranchId", res.getBody().branches[0].id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the agency's branches and people", function () {
+    const body = res.getBody();
+    expect(body.branches.length).to.be.greaterThan(0);
+    expect(body.branches[0]).to.have.keys(["id", "name"]);
+    expect(body.people[0]).to.have.keys(["id", "name", "branchId"]);
+    expect(body.people.map((p) => p.id)).to.include(bru.getVar("calProducerId"));
+  });
+}
+
+docs {
+  # GET /hr/events/audience-options — who an event can be for (PAC-169)
+
+  Module `hr`, permission `agency:hr:admin`. Agency-wide (`@SkipBranch()`).
+
+  Returns `{ branches: [{ id, name }], people: [{ id, name, branchId }] }`:
+  every branch of the agency and every person who has not been removed
+  (active accounts and pending invites, never a platform admin). The event
+  form's two pickers; served here so the form needs neither
+  `agency:branches:read` nor `agency:users:read`.
+
+  `403` — without `agency:hr:admin`.
+}

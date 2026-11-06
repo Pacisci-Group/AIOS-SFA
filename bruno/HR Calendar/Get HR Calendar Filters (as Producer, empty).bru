@@ -1,0 +1,31 @@
+meta {
+  name: Get HR Calendar Filters (as Producer, empty)
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar/filters
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calProducerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("offers nothing to narrow", function () {
+    expect(res.getBody()).to.eql({ branches: [], people: [] });
+  });
+}
+
+docs {
+  # GET /hr/calendar/filters — without the team calendar
+
+  Not a `403`: the page is the producer's too. They simply have no team to
+  filter.
+}

@@ -1,0 +1,39 @@
+meta {
+  name: Get Agency Event
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/hr/events/{{calEventId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the event with its audience", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("calEventId"));
+    expect(body).to.include.keys([
+      "name", "description", "firstDay", "lastDay", "startTime", "endTime",
+      "effect", "audience", "audienceLabel",
+    ]);
+  });
+}
+
+docs {
+  # GET /hr/events/:eventId — one event, with who it is for (PAC-169)
+
+  Module `hr`, permission `agency:hr:admin`. What the edit form opens on: the
+  event with its `audience` ids (`branchIds`, `userIds`), which the calendar
+  read never returns.
+
+  `404` — no such event, or it was removed. `403` — without `agency:hr:admin`.
+}

@@ -1,0 +1,31 @@
+meta {
+  name: Delete Agency Event
+  type: http
+  seq: 19
+}
+
+delete {
+  url: {{baseUrl}}/hr/events/{{calEventId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # DELETE /hr/events/:eventId — remove an event (PAC-169)
+
+  Module `hr`, permission `agency:hr:admin`. A **soft delete**: the row stays
+  with `deletedAt` / `deletedBy` set and stops appearing, blocking and closing
+  from that moment. Time off requests sent while it stood keep the hours they
+  froze — a request that charged nothing for a day off still charges nothing.
+
+  `204` — removed. `404` — no such event, or already removed.
+}

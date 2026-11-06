@@ -67,4 +67,10 @@ docs {
     for a reviewer. Never both: nobody decides their own request.
   - `othersOff[]` — reviewers only: other people in the same branch with
     Submitted or Approved leave on overlapping dates. Information, not a rule.
+  - `eventConflicts[]` — on a live request (Submitted, Changes Requested,
+    Approved), for the employee and a reviewer (PAC-169): the agency events
+    its charged days run into — `{ eventId, name, effect: "blackout" |
+    "day_off", dates[] }`. A blackout over a day it takes hours on, or a day
+    off declared after its hours were frozen. Nothing about the request
+    changes because of one; it is how the two of them find out.
 }

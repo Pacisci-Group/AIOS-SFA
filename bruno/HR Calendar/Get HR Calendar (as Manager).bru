@@ -1,0 +1,47 @@
+meta {
+  name: Get HR Calendar (as Manager)
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar?from={{calMon}}&to={{calSun}}&branchId={{calBranchId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("sees the team, pending included, and manages events", function () {
+    expect(res.getBody().viewer).to.eql({ seesTeam: true, seesPending: true, managesEvents: true });
+  });
+
+  test("echoes the range", function () {
+    expect(res.getBody().from).to.equal(bru.getVar("calMon"));
+    expect(res.getBody().to).to.equal(bru.getVar("calSun"));
+  });
+
+  test("marks the event that is not for them", function () {
+    const blackout = res.getBody().entries.find(
+      (e) => e.kind === "event" && e.eventId === bru.getVar("calBlackoutId"),
+    );
+    expect(blackout.appliesToMe).to.equal(false);
+    expect(blackout.effect).to.equal("blackout");
+  });
+}
+
+docs {
+  # GET /hr/calendar — as someone who sees the team
+
+  The Branch Manager holds `agency:hr:team_calendar` and `hr:write`: other
+  people's Approved **and** pending time off for their branch, and — as an
+  `agency:hr:admin` holder — every event, with `appliesToMe: false` on the
+  ones they are not in. `branchId` narrows within that scope. See
+  `Get HR Calendar (as Producer)` for the full response shape.
+}

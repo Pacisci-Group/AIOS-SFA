@@ -1,0 +1,51 @@
+meta {
+  name: Login as Producer
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{producerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("calProducerToken", res.getBody().accessToken);
+    bru.setVar("calProducerId", res.getBody().user.id);
+  }
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("is an employee: the calendar page, not the team's leave", function () {
+    const permissions = res.getBody().user.permissions;
+    expect(permissions).to.include("hr:read");
+    expect(permissions).to.not.include("agency:hr:team_calendar");
+    expect(permissions).to.not.include("agency:hr:admin");
+  });
+}
+
+docs {
+  # POST /auth/login — HR Calendar folder helper
+
+  The producer: `hr:read` only. Gets the calendar with their own time off,
+  the holidays of their own Holiday policy, the events that are for them,
+  birthdays and anniversaries — and nobody else's leave. Captures
+  `calProducerToken` and `calProducerId`.
+}

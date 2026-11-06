@@ -1,0 +1,69 @@
+meta {
+  name: Create Time Off Policy (for the calendar)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+script:pre-request {
+  bru.setVar("calPolicyName", `Bruno calendar ${Date.now()}`);
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{calPolicyName}}",
+    "timeOff": {
+        "timeOffType": "custom",
+        "description": "Created by the Bruno HR Calendar folder.",
+        "compensation": "paid",
+        "accrualType": "fixed_amount",
+        "hoursPerYear": 80,
+        "accrualFrequency": "yearly",
+        "resetDateKind": "fixed",
+        "resetMonthDay": "{{calResetMonthDay}}",
+        "accrualRate": null,
+        "accrualRateUnit": null,
+        "maxBalanceHours": null,
+        "maxAccruedPerYearHours": null,
+        "carryoverCapHours": null,
+        "annualUsageCapHours": null,
+        "waitingPeriodDays": null,
+        "accrualWaitingPeriodDays": null,
+        "allowNegativeBalance": false,
+        "payOutOnTermination": false,
+        "autoApprove": { "enabled": false, "maxCalendarDays": null, "minNoticeHours": null }
+      },
+    "memberIds": ["{{calProducerId}}"]
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("calPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}
+
+docs {
+  # POST /hr/policies — the run's own policy
+
+  A **Custom** time off policy holding the producer, so the folder can show
+  what a blackout and a day off do to a request without depending on the demo
+  seed's policies. Archived at the end of the folder. See
+  `HR/Create Time Off Policy`.
+}

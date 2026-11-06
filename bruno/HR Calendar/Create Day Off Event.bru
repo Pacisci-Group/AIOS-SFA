@@ -1,0 +1,49 @@
+meta {
+  name: Create Day Off Event
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/hr/events
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+body:json {
+  {
+    "name": "Office move",
+    "firstDay": "{{calThu}}",
+    "effect": "day_off",
+    "audience": { "kind": "agency" }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("calDayOffId", res.getBody().event.id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is a day off for everyone", function () {
+    expect(res.getBody().event.effect).to.equal("day_off");
+    expect(res.getBody().event.audienceLabel).to.equal("Everyone");
+  });
+}
+
+docs {
+  # POST /hr/events — a day off for the whole agency
+
+  Thursday of the folder's week is closed. A time off request made from now
+  on charges nothing for it (`reason: "closure"`); a request already sent
+  keeps the hours it froze, and shows the event under `eventConflicts`.
+}
