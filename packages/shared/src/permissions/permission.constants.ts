@@ -201,6 +201,25 @@ export const AgencyPermission = {
    * may take a spreadsheet of everyone's attendance off the premises.
    */
   HrExport: 'agency:hr:export',
+  /**
+   * See **other people's** time off on the HR calendar (PAC-169). Everyone
+   * with `hr:read` gets the calendar page — their own leave, the holidays,
+   * the agency's events, birthdays and anniversaries; this is what adds
+   * colleagues' leave to it: the whole agency for a role with agency data
+   * scope, the holder's own branch for a branch one, nobody for `own`.
+   *
+   * Deliberately not `hr:write` (decided 2026-11-06): being told who is out
+   * next week is not the same job as deciding their requests, and an owner
+   * may want a team lead to have the first without the second. Pending
+   * requests still need `hr:write` on top — an undecided request is the
+   * reviewer's business. Role-only like every `agency:*` string.
+   *
+   * ⚠ Existing Branch Manager and Agency Owner roles received it from the
+   * `hr_team_calendar_permission_grant` migration, not from
+   * `DEFAULT_ROLE_TEMPLATES` — the template only reaches an agency when it
+   * is created (the PAC-133 lock-out).
+   */
+  HrTeamCalendar: 'agency:hr:team_calendar',
 } as const;
 
 export type ModuleAction = 'read' | 'write';
