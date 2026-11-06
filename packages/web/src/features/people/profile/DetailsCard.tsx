@@ -31,8 +31,8 @@ export function DetailsCard({
       icon={UserRound}
       action={
         onEdit ? (
-          <Button variant="ghost" size="sm" onClick={onEdit}>
-            <Pencil className="size-4" />
+          <Button variant="outline" size="sm" aria-label="Edit details" onClick={onEdit}>
+            <Pencil />
             Edit
           </Button>
         ) : undefined

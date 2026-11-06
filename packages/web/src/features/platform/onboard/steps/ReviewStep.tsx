@@ -1,6 +1,7 @@
 import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import type { CarrierOption } from "@sfa/shared";
+import { Pencil } from "lucide-react";
 import { FormSection } from "@/components/form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,10 +47,12 @@ export const ReviewStep = withForm({
     const editButton = (id: OnboardStepId) => (
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="sm"
+        aria-label={`Edit ${id}`}
         onClick={() => onEdit(ONBOARD_STEPS.findIndex((s) => s.id === id))}
       >
+        <Pencil />
         Edit
       </Button>
     );

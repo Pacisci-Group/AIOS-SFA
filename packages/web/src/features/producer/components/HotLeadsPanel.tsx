@@ -40,7 +40,7 @@ export function HotLeadsPanel() {
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-5 rounded-full bg-red-400" />
-          <h2 className="text-sm text-foreground font-semibold">
+          <h2 className="text-base text-foreground font-semibold">
             Priority Contact List
           </h2>
         </div>

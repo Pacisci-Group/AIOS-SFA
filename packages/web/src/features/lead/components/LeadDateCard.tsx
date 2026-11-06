@@ -44,16 +44,15 @@ export function LeadDateCard({
       action={
         canWrite("leads") && !editing ? (
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
-            className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
             aria-label="Edit lead date"
             onClick={() => {
               setDraft(lead.createdDate ?? "");
               setEditing(true);
             }}
           >
-            <Pencil size={12} />
+            <Pencil />
             Edit
           </Button>
         ) : undefined

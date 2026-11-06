@@ -98,7 +98,7 @@ export default function TimeOffPage() {
         )}
       </section>
       <section className="grid gap-3">
-        <h2 className="text-sm font-semibold text-foreground">My requests</h2>
+        <h2 className="text-base font-semibold text-foreground">My requests</h2>
         <MyRequests requestPath={requestPath} />
       </section>
     </div>

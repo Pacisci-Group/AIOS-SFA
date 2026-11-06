@@ -24,7 +24,7 @@ export function SuggestedPoliciesStrip({ policies }: { policies: readonly HrPoli
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold text-foreground">Suggested time off policies</h2>
+        <h2 className="text-base font-semibold text-foreground">Suggested time off policies</h2>
         <p className="text-sm text-muted-foreground">
           Common starting points. Each opens the wizard filled in; change anything before you
           activate.

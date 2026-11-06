@@ -31,9 +31,8 @@ export function EditQuoteRecapAction({ recapId }: EditQuoteRecapActionProps) {
   return (
     <Button
       asChild
-      variant="ghost"
+      variant="outline"
       size="sm"
-      className="text-muted-foreground hover:text-foreground"
     >
       <Link to={editQuoteRecapRoute(recapId)} aria-label="Edit quote recap">
         <Pencil />

@@ -83,20 +83,20 @@ export function TimeOffCard({
       bodyless
       action={
         canManage || onRecord || requestsHref ? (
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap items-center gap-2">
             {requestsHref && (
               <Button asChild variant="ghost" size="sm">
                 <Link to={requestsHref}>Requests</Link>
               </Button>
             )}
             {onRecord && policies.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={onRecord}>
+              <Button variant="outline" size="sm" onClick={onRecord}>
                 Record time off
               </Button>
             )}
             {canManage && (
-              <Button variant="ghost" size="sm" onClick={onAdd}>
-                <Plus className="size-4" />
+              <Button variant="outline" size="sm" onClick={onAdd}>
+                <Plus />
                 Add to policy
               </Button>
             )}

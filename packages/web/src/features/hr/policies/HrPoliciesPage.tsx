@@ -112,7 +112,7 @@ export default function HrPoliciesPage() {
 
         <section className="rounded-xl border border-border bg-card">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-3">
-            <h2 className="text-sm font-semibold text-card-foreground">
+            <h2 className="text-base font-semibold text-card-foreground">
               {filter ? POLICY_TYPE_META[filter].label : "All policies"}
             </h2>
             {filter && (

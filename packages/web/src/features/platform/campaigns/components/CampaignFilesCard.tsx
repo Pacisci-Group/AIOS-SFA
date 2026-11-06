@@ -54,7 +54,7 @@ export function CampaignFilesCard({
     <Card>
       <CardContent className="flex flex-col gap-3 px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-card-foreground">
+          <h3 className="text-base font-semibold text-card-foreground">
             {title}
           </h3>
           <p className="text-xs text-muted-foreground">

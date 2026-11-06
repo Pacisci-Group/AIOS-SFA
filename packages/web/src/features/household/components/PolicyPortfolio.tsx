@@ -312,7 +312,7 @@ export function PolicyPortfolio({
       {/* Summary bar */}
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-card-foreground">
+          <h2 className="text-base font-semibold text-card-foreground">
             Policy portfolio
           </h2>
           <p className="mt-0.5 text-sm text-muted-foreground">

@@ -94,7 +94,7 @@ export default function MailerCampaignsPage() {
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-card-foreground">
+          <h2 className="text-base font-semibold text-card-foreground">
             Mailer campaigns
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">

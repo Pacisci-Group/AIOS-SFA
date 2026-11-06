@@ -138,7 +138,7 @@ export default function PlatformUsersPage() {
       </Button>
 
       <div className="mb-6">
-        <h2 className="text-sm font-semibold text-card-foreground">
+        <h2 className="text-base font-semibold text-card-foreground">
           Find / Impersonate User
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">

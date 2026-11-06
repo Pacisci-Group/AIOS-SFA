@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-form";
 import { toast } from "sonner";
+import { Pencil } from "lucide-react";
 import {
   defaultStartingBalance,
   type CompleteOnboardingInput,
@@ -264,7 +265,8 @@ export function CompleteOnboardingSheet({
               <FormSection
                 title="Details"
                 action={
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setStep(0)}>
+                  <Button type="button" variant="outline" size="sm" aria-label="Edit details" onClick={() => setStep(0)}>
+                    <Pencil />
                     Edit
                   </Button>
                 }
@@ -285,7 +287,8 @@ export function CompleteOnboardingSheet({
               <FormSection
                 title="Policies"
                 action={
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setStep(1)}>
+                  <Button type="button" variant="outline" size="sm" aria-label="Edit policies" onClick={() => setStep(1)}>
+                    <Pencil />
                     Edit
                   </Button>
                 }

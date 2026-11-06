@@ -44,10 +44,11 @@ interface DetailCardProps {
  * grown a third and fourth card idiom of their own (`rounded-lg` + an uppercase
  * micro-label header, and inline `style` objects) rather than reusing this one.
  *
- * The title is a real heading — `text-sm font-semibold` in sentence case, not
+ * The title is a real heading — `text-base font-semibold` in sentence case, not
  * the 10px uppercase muted micro-label it used to be. That treatment made every
  * card read as a footnote; it survives only for the sub-labels *inside* a card
- * (see {@link SectionLabel}).
+ * (see {@link SectionLabel}). It was `text-sm` until the PAC-148 demo, where a
+ * 13px title was still being read as body text.
  */
 export function DetailCard({
   title,
@@ -83,7 +84,7 @@ export function DetailCard({
                       underline is the cue that there is one. */}
                   <h2
                     tabIndex={0}
-                    className="cursor-help truncate text-sm font-semibold text-card-foreground underline decoration-muted-foreground/50 decoration-dotted underline-offset-4"
+                    className="cursor-help truncate text-base font-semibold text-card-foreground underline decoration-muted-foreground/50 decoration-dotted underline-offset-4"
                   >
                     {title}
                   </h2>
@@ -91,7 +92,7 @@ export function DetailCard({
                 <TooltipContent className="max-w-72">{titleHint}</TooltipContent>
               </Tooltip>
             ) : (
-              <h2 className="truncate text-sm font-semibold text-card-foreground">
+              <h2 className="truncate text-base font-semibold text-card-foreground">
                 {title}
               </h2>
             )}
