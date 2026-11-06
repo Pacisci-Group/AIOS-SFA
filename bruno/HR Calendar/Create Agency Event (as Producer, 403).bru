@@ -1,0 +1,35 @@
+meta {
+  name: Create Agency Event (as Producer, 403)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/hr/events
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calProducerToken}}
+}
+
+body:json {
+  {
+    "name": "Not allowed",
+    "firstDay": "{{calFri}}"
+  }
+}
+
+tests {
+  test("returns 403 Forbidden", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /hr/events — needs `agency:hr:admin`
+
+  Every `/hr/events` route is the HR administrator's. An employee reads the
+  events that are for them through `GET /hr/calendar`.
+}

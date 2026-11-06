@@ -137,6 +137,11 @@ const ADMIN_COPY: Record<string, { label: string; description: string }> = {
     description:
       'Download HR datasets (requests, attendance, balances, points) through Data Export, with the same field restrictions as the screens.',
   },
+  [AgencyPermission.HrTeamCalendar]: {
+    label: 'View team calendar',
+    description:
+      'See other people’s time off on the HR calendar: the whole agency for a role with agency-wide data, their own branch for a branch role. Pending requests also need Edit on HR.',
+  },
   [AgencyPermission.ChangeLogsRead]: {
     label: 'View change history',
     description: 'See who changed a record and what they changed.',

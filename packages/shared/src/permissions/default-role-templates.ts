@@ -65,6 +65,10 @@ export const DEFAULT_ROLE_TEMPLATES: DefaultRoleTemplate[] = [
       ...permissionsForModule(ModuleKey.Hr),
       AgencyPermission.HrAdmin,
       AgencyPermission.HrExport,
+      // Other people's leave on the HR calendar (PAC-169). Added 2026-11-06;
+      // existing agencies get it from the `hr_team_calendar_permission_grant`
+      // migration, not from this line.
+      AgencyPermission.HrTeamCalendar,
     ],
   },
   {

@@ -1,0 +1,53 @@
+meta {
+  name: Create Blackout Event
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/hr/events
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+body:json {
+  {
+    "name": "Year-end audit",
+    "firstDay": "{{calMon}}",
+    "lastDay": "{{calTue}}",
+    "effect": "blackout",
+    "audience": { "kind": "people", "userIds": ["{{calProducerId}}"] }
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("calBlackoutId", res.getBody().event.id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("is for the one person named", function () {
+    const { event } = res.getBody();
+    expect(event.effect).to.equal("blackout");
+    expect(event.audience.kind).to.equal("people");
+    expect(event.audience.userIds).to.eql([bru.getVar("calProducerId")]);
+    expect(event.audienceLabel).to.not.equal("Everyone");
+  });
+}
+
+docs {
+  # POST /hr/events — a "no time off" event for chosen people
+
+  Monday and Tuesday of the folder's week are blocked for the producer only.
+  See `Create Agency Event` for the body and `Preview Time Off Request
+  (Blackout)` for what it does.
+}

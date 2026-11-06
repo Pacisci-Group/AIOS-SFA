@@ -1,0 +1,82 @@
+meta {
+  name: Get HR Calendar (as Producer)
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/hr/calendar?from={{calMon}}&to={{calSun}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calProducerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("sees no team", function () {
+    expect(res.getBody().viewer).to.eql({ seesTeam: false, seesPending: false, managesEvents: false });
+  });
+
+  test("shows the events that are for them", function () {
+    const events = res.getBody().entries.filter((e) => e.kind === "event");
+    const ids = events.map((e) => e.eventId);
+    expect(ids).to.include(bru.getVar("calEventId"));
+    expect(ids).to.include(bru.getVar("calBlackoutId"));
+    expect(ids).to.include(bru.getVar("calDayOffId"));
+    expect(events.every((e) => e.appliesToMe)).to.equal(true);
+    expect(JSON.stringify(events)).to.not.contain("userIds");
+  });
+
+  test("shows nobody else's time off", function () {
+    const leave = res.getBody().entries.filter((e) => e.kind === "leave");
+    expect(leave.every((e) => e.mine)).to.equal(true);
+  });
+
+  test("never carries a date of birth", function () {
+    expect(JSON.stringify(res.getBody())).to.not.contain("dateOfBirth");
+  });
+}
+
+docs {
+  # GET /hr/calendar — the HR calendar for a range of days (PAC-169)
+
+  Module `hr`, permission `hr:read` (every employee). `@SkipBranch()`.
+
+  Query:
+
+  - `from`, `to` — `YYYY-MM-DD`, inclusive, at most **92 days** apart.
+  - `branchId`, `employeeId` — repeatable or comma-separated. Narrow the
+    people-shaped layers (time off, birthdays, anniversaries, and whose
+    holidays). They never widen what the caller may see.
+
+  Returns `{ from, to, viewer: { seesTeam, seesPending, managesEvents },
+  entries[] }`. Every entry is whole days — `{ id, kind, firstDay, lastDay }`
+  — plus, by `kind`:
+
+  - `holiday` — `name`, `observedFor`, `mine`, `policies[]`. The closures of
+    the Holiday policies of the people in view (the caller alone without the
+    team calendar). One entry per name and run of days.
+  - `event` — `eventId`, `name`, `description`, `startTime`, `endTime`,
+    `effect`, `audienceLabel`, `appliesToMe`. The events whose audience
+    includes the caller; **all** of them for an `agency:hr:admin` holder.
+    Never the audience's ids.
+  - `leave` — `person`, `mine`, `status: "approved" | "pending"`, `partial`,
+    `detail`. The caller's own live requests always. Other people's only with
+    **`agency:hr:team_calendar`**, within the caller's data scope (every
+    branch for `agency`, their own for `branch`, nobody for `own`): Approved
+    for any holder, pending too for one who also holds `hr:write`. `detail`
+    (`requestId`, `reference`, `policyName`, `totalHours`, `conflicts[]`) is
+    present only for the employee and for a reviewer whose scope covers the
+    request; otherwise `null` — who is out, never why. Drafts, declined,
+    cancelled and imported rows never appear.
+  - `birthday` — `person`. Everyone active who has not switched it off; the
+    **day only**, never the year or an age.
+  - `anniversary` — `person`, `years` (1 or more).
+
+  `400` — a malformed or backwards range, more than 92 days, a bad id.
+}

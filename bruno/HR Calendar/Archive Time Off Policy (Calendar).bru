@@ -1,0 +1,27 @@
+meta {
+  name: Archive Time Off Policy (Calendar)
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{baseUrl}}/hr/policies/{{calPolicyId}}/archive
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+tests {
+  test("returns 204 No Content", function () {
+    expect(res.getStatus()).to.equal(204);
+  });
+}
+
+docs {
+  # POST /hr/policies/:policyId/archive — folder tidy-up
+
+  Archives the run's policy; nothing was requested against it. See
+  `HR/Archive Time Off Policy`.
+}

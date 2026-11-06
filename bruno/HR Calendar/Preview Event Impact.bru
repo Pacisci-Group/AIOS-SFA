@@ -1,0 +1,60 @@
+meta {
+  name: Preview Event Impact
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/hr/events/impact
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+body:json {
+  {
+    "name": "Year-end audit",
+    "firstDay": "{{calMon}}",
+    "lastDay": "{{calTue}}",
+    "effect": "blackout",
+    "audience": { "kind": "people", "userIds": ["{{calProducerId}}"] }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the affected requests and a count of hidden ones", function () {
+    const body = res.getBody();
+    expect(body).to.have.keys(["requests", "hiddenCount"]);
+    expect(body.requests).to.be.an("array");
+    expect(body.hiddenCount).to.be.a("number");
+  });
+}
+
+docs {
+  # POST /hr/events/impact — what an event would run into (PAC-169)
+
+  Module `hr`, permission `agency:hr:admin`. **Writes nothing.** The body is
+  an event, exactly as `POST /hr/events` takes it.
+
+  Returns `{ requests[], hiddenCount }`: the live time off requests
+  (Submitted, Changes Requested, Approved) of people in the event's audience
+  that take hours on a day it would block or close. Each row is
+  `{ requestId, reference, person: { id, name }, status: "pending" |
+  "approved", firstDay, lastDay, dates[], hours }` — `dates` are the event's
+  days the request takes hours on. An event with `effect: "none"` always
+  returns an empty list.
+
+  **Scoped.** `agency:hr:admin` is agency-wide, whose leave a person may see
+  is not: a request the caller could not see on the calendar (another
+  branch's, for a branch-scoped manager) is counted in `hiddenCount` and
+  never listed. `requestId` is set only when the caller may open the request.
+
+  `400` — a broken rule. `403` — without `agency:hr:admin`.
+}

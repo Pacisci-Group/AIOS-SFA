@@ -13,6 +13,8 @@ export * from './domain/contact';
 export * from './domain/deal-audit';
 export * from './domain/google-address';
 export * from './domain/hot-lead';
+export * from './domain/agency-event';
+export * from './domain/hr-calendar';
 export * from './domain/hr-policy';
 export * from './domain/leave-ledger';
 export * from './domain/people';

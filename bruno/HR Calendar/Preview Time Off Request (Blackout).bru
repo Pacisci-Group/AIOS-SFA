@@ -1,0 +1,59 @@
+meta {
+  name: Preview Time Off Request (Blackout)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/time-off/requests/preview
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calProducerToken}}
+}
+
+body:json {
+  {
+    "policyId": "{{calPolicyId}}",
+    "firstDay": "{{calTue}}",
+    "lastDay": "{{calThu}}",
+    "dayMode": "full"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the blocked day stops the request, by code", function () {
+    const { blockers } = res.getBody();
+    expect(blockers.map((b) => b.code)).to.include("blackout");
+    expect(blockers.find((b) => b.code === "blackout").message).to.contain("Year-end audit");
+  });
+
+  test("the day off costs nothing", function () {
+    const thursday = res.getBody().days.find((d) => d.date === bru.getVar("calThu"));
+    expect(thursday.hours).to.equal(0);
+    expect(thursday.reason).to.equal("closure");
+  });
+}
+
+docs {
+  # POST /time-off/requests/preview — what agency events do to a request (PAC-169)
+
+  The producer asks for Tuesday to Thursday of the folder's week.
+
+  - Tuesday is under a **blackout** that names them: `blockers[]` carries
+    `{ code: "blackout", message }`, and sending would be a `400` with the
+    same code. Judged on the dates that carry hours — a blocked weekend
+    inside a Friday-to-Monday request blocks nothing. For time off
+    **recorded** by a manager (`POST /time-off/records`) the same check is a
+    `warnings[]` entry instead, and the record may be saved.
+  - Thursday is a **day off** for everyone: its row is `{ hours: 0, reason:
+    "closure" }`, like a holiday.
+
+  See `Time Off/Preview Time Off Request` for the rest of the response.
+}

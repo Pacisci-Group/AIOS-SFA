@@ -25,6 +25,7 @@ export { CheckboxField } from "./CheckboxField";
 export { TextareaField } from "./TextareaField";
 export { SwitchField } from "./SwitchField";
 export { RadioGroupField } from "./RadioGroupField";
+export { MultiSelectField } from "./MultiSelectField";
 export { FieldShell, useFieldError } from "./FieldShell";
 export type { SelectOption } from "./SelectField";
 export type { ComboboxOption } from "./ComboboxField";

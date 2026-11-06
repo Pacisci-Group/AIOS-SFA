@@ -11,6 +11,11 @@ grid, time grid, list, interaction), never the premium scheduler.** It renders
 inside our tokens and must stay light + dark clean. Do not remove it as a stray
 dependency, and do not reach for it anywhere else — Settings → HR policies
 (`features/hr/policies/`) lists holidays as plain rows on purpose.
+It is installed the shadcn way: the `breezy` block from FullCalendar's registry
+(`components.json` → `registries`), copied into `components/event-calendar*.tsx`
+and `components/ui/event-calendar-views.tsx`, which we own and edit. The only
+importer is `features/hr/calendar/HrCalendar.tsx`; colours reach it as
+`theme.css` tokens on each event (`calendar-display.ts`).
 
 - **Primitives live in `src/components/ui/`** and are managed by the shadcn CLI —
   add new ones with `npx shadcn@latest add <component>` (from `packages/web`),

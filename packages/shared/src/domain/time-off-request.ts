@@ -1,3 +1,4 @@
+import type { LeaveEventConflict } from './hr-calendar';
 import { roundHours } from './time-off-accrual';
 import type { TimeOffTypeKey } from './time-off-policy';
 import type { ScheduledDay, ScheduledDayReason } from './work-week';
@@ -386,6 +387,8 @@ export const TIME_OFF_CHECK_CODES = [
   'no_scheduled_hours',
   'span_too_long',
   'overlap',
+  /** A day the request takes hours on is closed to time off (PAC-169). */
+  'blackout',
   'usage_cap',
   'negative_balance',
   'old_period',
@@ -395,11 +398,16 @@ export const TIME_OFF_CHECK_CODES = [
 ] as const;
 export type TimeOffCheckCode = (typeof TIME_OFF_CHECK_CODES)[number];
 
-/** The checks a recorded entry only warns about (decided 2026-11-05). */
+/**
+ * The checks a recorded entry only warns about (decided 2026-11-05). A
+ * blackout joined them on 2026-11-06 (PAC-169): an employee cannot ask for
+ * time off on a blocked day, a manager recording it is told and may go ahead.
+ */
 export const RECORD_WARNING_CODES = [
   'waiting_period',
   'usage_cap',
   'negative_balance',
+  'blackout',
 ] as const satisfies readonly TimeOffCheckCode[];
 
 export interface TimeOffCheck {
@@ -491,6 +499,11 @@ export interface TimeOffRequestView extends TimeOffRequestRow {
   actions: TimeOffRequestAction[];
   /** Present for a reviewer only. */
   othersOff?: TimeOffOtherOffView[];
+  /**
+   * Agency events (PAC-169) the request's charged days run into: a blackout,
+   * or a day off declared after it was sent. Present on a live request only.
+   */
+  eventConflicts?: LeaveEventConflict[];
 }
 
 /** `POST /time-off/requests/preview` and `…/records/preview`. Writes nothing. */

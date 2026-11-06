@@ -1,0 +1,70 @@
+meta {
+  name: Login as Manager
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "email": "{{managerEmail}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setVar("calManagerToken", res.getBody().accessToken);
+    bru.setVar("calManagerId", res.getBody().user.id);
+  }
+
+  // The dates every request below uses: a working week twenty weeks out, so
+  // the run never lands on leave the demo seed or the Time Off folder made.
+  const DAY = 86400000;
+  const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+  let monday = Date.now() + DAY;
+  while (new Date(monday).getUTCDay() !== 1) monday += DAY;
+  monday += 20 * 7 * DAY;
+  ["calMon", "calTue", "calWed", "calThu", "calFri", "calSat", "calSun"].forEach(
+    (name, index) => bru.setVar(name, iso(monday + index * DAY)),
+  );
+  bru.setVar("calTooFar", iso(monday + 92 * DAY));
+  const reset = iso(Date.now() + 180 * DAY).slice(5);
+  bru.setVar("calResetMonthDay", reset === "02-29" ? "02-28" : reset);
+}
+
+tests {
+  test("signs in", function () {
+    expect([200, 201]).to.include(res.getStatus());
+  });
+
+  test("manages events and sees the team calendar", function () {
+    const permissions = res.getBody().user.permissions;
+    expect(permissions).to.include("agency:hr:admin");
+    expect(permissions).to.include("agency:hr:team_calendar");
+    expect(permissions).to.include("hr:write");
+  });
+}
+
+docs {
+  # POST /auth/login — HR Calendar folder helper
+
+  The Branch Manager: holds `agency:hr:admin` (adds, changes and removes
+  agency events), `agency:hr:team_calendar` (sees other people's time off on
+  the calendar, for their branch) and `hr:write` (so pending requests are
+  included). Captures `calManagerToken`, `calManagerId` and the week of dates
+  the folder uses (`calMon` … `calSun`, twenty weeks out).
+
+  If the permission test fails, the `hr_team_calendar_permission_grant`
+  migration has not run on this database, or the session predates it — sign
+  in again.
+}

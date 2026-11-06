@@ -689,3 +689,77 @@ export const DEMO_TIME_OFF_REQUESTS: DemoTimeOffRequestSpec[] = [
     note: 'Moving day.',
   },
 ];
+
+/**
+ * The agency's own dates on the HR calendar (PAC-169), placed in weeks
+ * counted from the one the seed runs in — the same clock as
+ * {@link DEMO_TIME_OFF_REQUESTS}, and on purpose over some of them: a seeded
+ * blackout and a seeded day off each land on leave that is already approved
+ * or waiting, so the calendar and the request window have a conflict to show.
+ *
+ * `name` is the key: `agencyEvents` has no `legacySmartSuiteId`, so the seed
+ * finds and purges its events by these names within the demo agency.
+ */
+export interface DemoAgencyEventSpec {
+  name: string;
+  description?: string;
+  /** Weeks from this week's Monday. */
+  week: number;
+  /** Weekday offset from that Monday (0 = Monday). */
+  from: number;
+  days: number;
+  startTime?: string;
+  endTime?: string;
+  effect: 'none' | 'blackout' | 'day_off';
+  /** Team member keys; omitted = the whole agency. */
+  people?: string[];
+}
+
+export const DEMO_AGENCY_EVENTS: DemoAgencyEventSpec[] = [
+  {
+    name: 'Holiday party',
+    description: 'Dinner and awards at the office. Bring a guest.',
+    week: 1,
+    from: 4,
+    days: 1,
+    startTime: '18:00',
+    endTime: '21:00',
+    effect: 'none',
+  },
+  {
+    // Over `pat-auto` (approved, Mon–Tue) and `jordan-pending` (Tue–Fri).
+    name: 'Quarter-end close',
+    description:
+      'All hands for the quarter-end push. No time off these two days.',
+    week: 2,
+    from: 0,
+    days: 2,
+    effect: 'blackout',
+  },
+  {
+    // Over `casey-approved` (Tue–Wed) and `alex-pending` (Mon–Fri).
+    name: 'Office deep clean',
+    description: 'The office is closed for the day.',
+    week: 3,
+    from: 2,
+    days: 1,
+    effect: 'day_off',
+  },
+  {
+    name: 'Producers summit',
+    description: 'Two days of carrier training for the sales team.',
+    week: 5,
+    from: 3,
+    days: 2,
+    startTime: '09:00',
+    endTime: '16:00',
+    effect: 'none',
+    people: [
+      'producer',
+      'producer-alex',
+      'producer-jordan',
+      'producer-sam',
+      'producer-morgan',
+    ],
+  },
+];

@@ -74,9 +74,11 @@ docs {
     says it differs from today's numbers.
   - `blockers[]` — `{ code, message }` for each rule that stops the request
     being sent: `not_enrolled`, `policy_unavailable`, `past_date`,
-    `no_scheduled_hours`, `span_too_long`, `overlap`, `waiting_period`,
-    `usage_cap`, `negative_balance`. A broken rule is information here, not a
-    `400`.
+    `no_scheduled_hours`, `span_too_long`, `overlap`, `blackout`,
+    `waiting_period`, `usage_cap`, `negative_balance`. A broken rule is
+    information here, not a `400`. `blackout` (PAC-169) is an agency event
+    marked "no time off" on a day the request takes hours on — see
+    `HR Calendar/Preview Time Off Request (Blackout)`.
   - `warnings[]` — always empty for a self request.
 
   `404` — no such policy.

@@ -1,0 +1,52 @@
+meta {
+  name: Update Agency Event
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/hr/events/{{calEventId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{calManagerToken}}
+}
+
+body:json {
+  {
+    "name": "Holiday party",
+    "description": "Bring a dish to share.",
+    "firstDay": "{{calFri}}",
+    "startTime": "17:30",
+    "endTime": "21:00",
+    "effect": "none",
+    "audience": { "kind": "agency" }
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("replaces the event", function () {
+    const { event } = res.getBody();
+    expect(event.name).to.equal("Holiday party");
+    expect(event.startTime).to.equal("17:30");
+  });
+}
+
+docs {
+  # PATCH /hr/events/:eventId — change an event (PAC-169)
+
+  Module `hr`, permission `agency:hr:admin`. The body is the **whole event**,
+  as `POST /hr/events` takes it — a field left out goes back to its default
+  (no time, no description, everyone). Returns `{ event, impact }`.
+
+  Changing an event's dates, effect or audience changes what it blocks or
+  closes from that moment; requests already sent keep the hours they froze.
+
+  `400` — a broken rule or a foreign branch / person. `404` — no such event.
+}

@@ -7,6 +7,7 @@ import {
   BarChart3,
   LogOut,
   KeyRound,
+  CalendarDays,
   Plane,
   type LucideIcon,
 } from 'lucide-react';
@@ -85,6 +86,13 @@ const navSections = [
         to: '/time-off',
         label: 'Time off',
         icon: Plane,
+        module: ModuleKey.Hr,
+      },
+      {
+        // Holidays, the agency's events, birthdays and time off (PAC-169).
+        to: '/calendar',
+        label: 'Calendar',
+        icon: CalendarDays,
         module: ModuleKey.Hr,
       },
     ],

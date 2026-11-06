@@ -239,6 +239,17 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Time Off | Record Time Off (Past date) / (as Producer, 403) | `POST /time-off/records` | **PAC-165** — time off recorded for someone else: created **Approved** with its hours posted, both identities kept. `hr:write` **and** `agency:users:read`; never for yourself. |
 | Time Off | Adjust Time Off Balance / (Unlimited, 400) | `POST /hr/people/:userId/balance-adjustments` | **PAC-165** — a signed `manual_adjustment` ledger row with the reason; the employee is told. `agency:hr:admin`. |
 | Time Off | Archive Time Off Policy (Requests) / (Unlimited, Requests) | `POST /hr/policies/:policyId/archive` | **PAC-165** — tidy-up. |
+| HR Calendar | Login as Manager / Login as Producer | `POST /auth/login` | **PAC-169** — the Branch Manager holds `agency:hr:admin`, `agency:hr:team_calendar` and `hr:write`; the producer holds `hr:read` only. Captures the folder's tokens and a week of dates twenty weeks out. |
+| HR Calendar | Create Time Off Policy (for the calendar) / Archive Time Off Policy (Calendar) | `POST /hr/policies`, `…/archive` | **PAC-169** — the run's own Custom policy, so the event effects can be shown without the demo's policies. |
+| HR Calendar | List Event Audience Options | `GET /hr/events/audience-options` | **PAC-169** — every branch and person an event can be for. `agency:hr:admin`. |
+| HR Calendar | Create Agency Event / (as Producer, 403) / (End before start, 400) | `POST /hr/events` | **PAC-169** — a date on the agency's calendar: whole days, an optional display-only time, an effect (`none` / `blackout` / `day_off`) and an audience (agency / branches / people). Returns `{ event, impact }`. |
+| HR Calendar | Create Blackout Event / Create Day Off Event | `POST /hr/events` | **PAC-169** — the two effects, for one person and for everyone. |
+| HR Calendar | Preview Event Impact | `POST /hr/events/impact` | **PAC-169** — the live requests an event would run into; writes nothing; out-of-scope requests are counted in `hiddenCount`, never listed. |
+| HR Calendar | Preview Time Off Request (Blackout) | `POST /time-off/requests/preview` | **PAC-169** — a blocked day is a `blackout` blocker (a warning when recorded); a day off is a `closure` row at 0 hours. |
+| HR Calendar | Get Agency Event / Update Agency Event | `GET` / `PATCH /hr/events/:eventId` | **PAC-169** — the event with its audience ids; an edit sends the whole event. |
+| HR Calendar | Get HR Calendar (as Producer) / (as Manager) / (Range too long, 400) | `GET /hr/calendar?from&to&branchId&employeeId` | **PAC-169** — holidays, events, time off, birthdays and anniversaries for up to 92 days, scoped server-side: other people's leave only with `agency:hr:team_calendar`, the reason only for those who can open the request. `hr:read`. |
+| HR Calendar | Get HR Calendar Filters / (as Producer, empty) | `GET /hr/calendar/filters` | **PAC-169** — the branches and people in the caller's scope; empty without the team calendar. |
+| HR Calendar | Delete Agency Event / Blackout / Day Off / (Again, 404) | `DELETE /hr/events/:eventId` | **PAC-169** — soft delete; the folder removes what it made so it can be run again. |
 
 > ⚠ **This table is not exhaustive.** `Carriers`, `Households`, `Unlinked
 > Records` and `Users` are in the collection but were never added here; every
