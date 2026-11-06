@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, MouseEvent, ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,8 +41,21 @@ interface LeadActionButtonProps {
  * A `disabled` button is removed from the tab order, so `TooltipTrigger` never
  * fires for a keyboard user and the reason becomes unreachable — precisely the
  * users for whom "it looks grey" conveys nothing. `aria-disabled` keeps it
- * focusable and announced while `onClick`/`preventDefault` and
- * `pointer-events` on the icon keep it inert.
+ * focusable and announced while `onClick`/`preventDefault` keeps it inert.
+ *
+ * ## Why the tooltip hangs off a wrapper, not the button
+ *
+ * An inert button must not react to the pointer, and every variant brings its
+ * own `hover:` background. The first attempt cancelled that with
+ * `hover:bg-inherit`, which does not mean "keep my background" — it inherits
+ * the *parent's*, so the emerald Mark as Sold button went transparent under the
+ * pointer and flickered as the transition ran (PAC-148 demo feedback). Naming
+ * each variant's resting colour instead would be a list to keep in step with
+ * `button.tsx`. So the button takes `pointer-events-none`, which means it never
+ * matches `:hover` whatever the variant, and the wrapper is what the pointer
+ * hits and what `TooltipTrigger` listens on. The button is still the thing a
+ * keyboard focuses; its focus event bubbles to the wrapper, so the tooltip
+ * opens for a keyboard user exactly as before.
  */
 export function LeadActionButton({
   to,
@@ -59,29 +72,33 @@ export function LeadActionButton({
   const shared = cn("relative z-10", className);
 
   if (disabledReason) {
+    // Swallowed on both elements: the wrapper takes the pointer's click, the
+    // button takes Enter / Space. Stopping propagation keeps the click from
+    // falling through to the row link underneath.
+    const swallow = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant={variant}
-            size={size}
-            aria-disabled
-            aria-label={`${accessibleName} — ${disabledReason}`}
-            // Not `disabled`: see the docblock. Both handlers are needed —
-            // `onClick` for the pointer, and stopping propagation so the click
-            // does not fall through to the row link underneath.
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            className={cn(
-              shared,
-              "cursor-not-allowed opacity-50 hover:bg-inherit",
-            )}
+          <span
+            className={cn("inline-flex cursor-not-allowed", shared)}
+            onClick={swallow}
           >
-            {children}
-          </Button>
+            <Button
+              type="button"
+              variant={variant}
+              size={size}
+              aria-disabled
+              aria-label={`${accessibleName} — ${disabledReason}`}
+              // Not `disabled`: see the docblock.
+              onClick={swallow}
+              className="pointer-events-none opacity-50"
+            >
+              {children}
+            </Button>
+          </span>
         </TooltipTrigger>
         <TooltipContent>{disabledReason}</TooltipContent>
       </Tooltip>
