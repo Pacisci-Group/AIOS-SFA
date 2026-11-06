@@ -57,6 +57,8 @@ function warningLabel(code: string): string {
       return "the yearly usage cap";
     case "waiting_period":
       return "the waiting period";
+    case "blackout":
+      return "a day with no time off";
     default:
       return code;
   }

@@ -270,6 +270,32 @@ export function RequestViewSheet({
               </section>
             )}
 
+            {(request.eventConflicts?.length ?? 0) > 0 && (
+              <Alert>
+                <AlertCircle />
+                <AlertDescription>
+                  <ul className="space-y-1">
+                    {request.eventConflicts?.map((conflict) => (
+                      <li key={conflict.eventId} className="text-sm text-foreground">
+                        {conflict.effect === "day_off" ? (
+                          <>
+                            <span className="font-medium">{conflict.name}</span> is a day off on{" "}
+                            {conflict.dates.map(formatDay).join(", ")}. This request was sent before
+                            that and still takes hours for it. Send it again to take none.
+                          </>
+                        ) : (
+                          <>
+                            <span className="font-medium">{conflict.name}</span>: no time off on{" "}
+                            {conflict.dates.map(formatDay).join(", ")}.
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+
             {request.days.length > 0 && (
               <section>
                 <SectionLabel>Hours per date</SectionLabel>
