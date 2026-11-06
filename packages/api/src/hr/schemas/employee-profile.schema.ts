@@ -89,7 +89,12 @@ export class EmployeeProfile {
   @Prop({ type: String, default: null })
   terminationDate: string | null;
 
-  /** `YYYY-MM-DD`; readable by the person and `agency:hr:admin` only, never as an age. */
+  /**
+   * `YYYY-MM-DD`; readable by the person and `agency:hr:admin` only, never
+   * as an age. The one wider read is the HR calendar (PAC-169), which shows
+   * every employee the **month and day** — the occurrence date, never this
+   * value — and only while `showBirthday` is on.
+   */
   @Prop({ type: String, default: null })
   dateOfBirth: string | null;
 

@@ -217,3 +217,43 @@ Demo seed: events are seeded **after** time off requests (otherwise `forPerson` 
 - Day-grid week instead of a time grid (decision 18).
 
 The Linear ticket is not edited without a separate go-ahead.
+
+## As built (2026-11-06, branch `asad/pac-169-agency-calendar`)
+
+Ten commits off `asad/pac-148-hr-demo-feedback`. Decisions 1–19 stand as written; what differs from the plan:
+
+| Topic | Plan | Built | Why |
+|---|---|---|---|
+| Theme flavour | Start with `monarch` | `breezy` | Tailwind-shaped like the rest of the app; it tints each event from a colour token with `color-mix`, so light and dark need no second palette. A one-file swap (`ui/event-calendar-views.tsx`) if another is preferred. |
+| Install | `npx shadcn add` | The registry JSON fetched and the four files written by hand; `npm install` for the two packages | The CLI prompts to overwrite our `button` / `tabs`. Same files, same registry (`components.json` carries the `registries` entry). The multi-month plugin the block loads is removed: not on the allowed list. |
+| Impact body | Event + optional `eventId` | The event only | The id was never used: an event's own previous dates conflict with nothing. `POST /hr/events/impact` takes the same body as create. |
+| Entry details | `EntryPopover` | `EntryDialog` | A dialog is reachable by keyboard and works the same in the list view and on a phone. |
+| Legend and filters | Two components | One `CalendarToolbar` | The layer chips are the legend; the filters sit on the same row. |
+| Audience picker | `AudienceField` | `MultiSelectField`, a new registered field component | The forms rule: fields come from `components/form/fields`, never bound by hand. `TextField` also gained `type="time"`. |
+| Migration `up` | `$setOnInsert` only | Also `$set: { isDeprecated: false }` | `down` retires the catalog row; an `up` after it must un-retire it or the grants point at a retired key. Found in rehearsal. |
+| Permission-count docs | — | `packages/api/CLAUDE.md` says 63 strings | It still said 57 from before the HR module. |
+
+**Verification.**
+
+- Shared: 27 suites, 434 tests. API unit: 97 suites, 1476 tests. API build and web typecheck + build clean.
+- e2e: `hr-events` 10 / 10, `hr-calendar` 16 / 16; `time-off-requests`, `hr-policies`, `people` 73 / 73 after the working-day change.
+- Migration rehearsed on a throwaway copy of the local `permissions` / `roles` / `rolePermissions`: 26 grants on the first `up`, none on the second, removed by `down`, restored and un-retired by a third `up`, nothing written on a never-seeded copy.
+- Bruno: `HR Calendar` 23 requests / 45 tests, twice in a row; `Time Off` 36 / 36.
+- Browser, as the demo Branch Manager on the dev servers: month grid with all five layers and the seeded events; conflict rings on the four requests a seeded blackout or day off runs into; the entry dialog; the edit form with its impact list ("2 time off requests are on these days"); light and dark; 375 px opens on the list.
+- FullCalendar is in the lazy `CalendarPage` chunk only (344 kB, 94 kB gzipped).
+
+**Not run.**
+
+- The full Bruno collection and the full e2e suite (only the suites above).
+- The browser as a producer and as the owner; the scope rules for both are covered by `hr-calendar.e2e-spec.ts`, not by eye.
+- Creating, saving and removing an event through the form in the browser (covered by e2e and Bruno at the API; the form was opened and its impact list seen, not submitted).
+- `npm run lint -w @sfa/api` as a whole: eslint was run on the files this ticket touched.
+
+**Environment findings.**
+
+- `HR` run as a single Bruno folder fails `List HR Policies (as Producer, 403)` with a 401: that request inherits the collection token the `Auth` folder sets. Not from this ticket.
+- The page logs one React ref warning from `MobileNav` → `SheetContent`; it is on every `SettingsPage` and predates this.
+- The local `api:dev` applied the grant migration to the dev database as soon as the file existed; the rehearsal copy was made to start without it.
+
+**Open points taken as written:** decisions 6–18 and the three UI calls in §11 (flavour is now `breezy`).
+
