@@ -12,6 +12,8 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { UsersModule } from '../users/users.module';
 import { AgencyEventsController } from './agency-events.controller';
 import { AgencyEventsService } from './agency-events.service';
+import { HrCalendarController } from './hr-calendar.controller';
+import { HrCalendarService } from './hr-calendar.service';
 import { HrPoliciesController } from './hr-policies.controller';
 import { HrPoliciesService } from './hr-policies.service';
 import { PeopleController } from './people.controller';
@@ -42,7 +44,17 @@ import { PeopleService } from './people.service';
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
     ]),
   ],
-  controllers: [HrPoliciesController, PeopleController, AgencyEventsController],
-  providers: [HrPoliciesService, PeopleService, AgencyEventsService],
+  controllers: [
+    HrPoliciesController,
+    PeopleController,
+    AgencyEventsController,
+    HrCalendarController,
+  ],
+  providers: [
+    HrPoliciesService,
+    PeopleService,
+    AgencyEventsService,
+    HrCalendarService,
+  ],
 })
 export class HrModule {}
