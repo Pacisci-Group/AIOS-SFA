@@ -10,6 +10,8 @@ import {
 } from '../time-off-requests/schemas/time-off-request.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { UsersModule } from '../users/users.module';
+import { AgencyEventsController } from './agency-events.controller';
+import { AgencyEventsService } from './agency-events.service';
 import { HrPoliciesController } from './hr-policies.controller';
 import { HrPoliciesService } from './hr-policies.service';
 import { PeopleController } from './people.controller';
@@ -24,6 +26,9 @@ import { PeopleService } from './people.service';
  * page writes. `timeOffRequests` is read here only by the archive guard
  * (PAC-165 owns the collection). `UsersModule` supplies the profile read
  * every people write returns.
+ *
+ * PAC-169 adds the agency's events (`agencyEvents`, registered by
+ * `WorkingDaysModule` because a `day_off` event closes a working day).
  */
 @Module({
   imports: [
@@ -37,7 +42,7 @@ import { PeopleService } from './people.service';
       { name: TimeOffRequest.name, schema: TimeOffRequestSchema },
     ]),
   ],
-  controllers: [HrPoliciesController, PeopleController],
-  providers: [HrPoliciesService, PeopleService],
+  controllers: [HrPoliciesController, PeopleController, AgencyEventsController],
+  providers: [HrPoliciesService, PeopleService, AgencyEventsService],
 })
 export class HrModule {}
