@@ -1195,3 +1195,351 @@ export interface PayoutActivityView {
     chargebackTotal: number;
   };
 }
+
+// ── Chargeback report import (PAC-180) ──────────────────────────────────
+//
+// The owner uploads the month's chargeback report (.xlsx or .csv); each line
+// is matched to a person and, where the app holds it, a policy. The owner
+// previews the result, resolves what matched nobody, and commits: one
+// `chargebacks` row per charged line (`source: 'carrier_statement'`, counted
+// in the import's month), then the month's draft and disputed statements are
+// recalculated.
+//
+// **A policy is charged back once** (owner, 6 Nov 2026). A line whose policy
+// already has a chargeback — any month, any source — or that repeats an
+// earlier line of the same file is a `duplicate`: the original stands, the
+// line says which it is, and it is never charged.
+
+/** `preview` until committed (or discarded, which frees the file's hash). */
+export const CHARGEBACK_IMPORT_STATUSES = [
+  'preview',
+  'committed',
+  'discarded',
+] as const;
+export type ChargebackImportStatus =
+  (typeof CHARGEBACK_IMPORT_STATUSES)[number];
+
+/**
+ * What becomes of a report line.
+ *
+ * - `matched` — the app found who to charge.
+ * - `assigned` — the owner chose who to charge.
+ * - `unmatched` — needs a person; a commit is refused while any line is.
+ * - `skipped` — left out: by the owner, or because its amount has the
+ *   opposite sign to the rest of the report (a reversal, not a chargeback).
+ * - `duplicate` — the policy has already been charged back, or an earlier
+ *   line of the file charges it. Never charged, and the owner cannot change it.
+ */
+export const IMPORT_ROW_RESOLUTIONS = [
+  'matched',
+  'assigned',
+  'unmatched',
+  'skipped',
+  'duplicate',
+] as const;
+export type ImportRowResolution = (typeof IMPORT_ROW_RESOLUTIONS)[number];
+
+/** The lines a commit writes to the ledger. */
+export const CHARGED_IMPORT_ROW_RESOLUTIONS = [
+  'matched',
+  'assigned',
+] as const satisfies readonly ImportRowResolution[];
+
+export function isChargedResolution(resolution: ImportRowResolution): boolean {
+  return (CHARGED_IMPORT_ROW_RESOLUTIONS as readonly string[]).includes(
+    resolution,
+  );
+}
+
+/**
+ * Why a line matched the way it did, for the preview. The names involved
+ * travel on the row (`candidates`, `chargedTo`); a note is the reason.
+ */
+export const IMPORT_ROW_NOTES = [
+  'sok_unknown',
+  'name_unknown',
+  'name_ambiguous',
+  'name_seller_differ',
+  'sok_seller_differ',
+  'seller_used',
+  'policy_not_found',
+  'policy_no_sale',
+  'no_structure',
+  'already_charged',
+  'repeated_in_file',
+  'opposite_sign',
+] as const;
+export type ImportRowNote = (typeof IMPORT_ROW_NOTES)[number];
+
+export const IMPORT_ROW_NOTE_LABELS: Record<ImportRowNote, string> = {
+  sok_unknown: 'The SOK number is not on any user.',
+  name_unknown: 'The producer named in the file is not a user.',
+  name_ambiguous: 'More than one user has the name in the file.',
+  name_seller_differ:
+    "The file names one person and the app's sale another — choose who to charge.",
+  sok_seller_differ: "The app's sale is someone else's.",
+  seller_used: 'Charged to the person who sold the policy in the app.',
+  policy_not_found: 'The policy number is not in the app.',
+  policy_no_sale: 'The policy has no sale in the app.',
+  no_structure: 'Not on a payment structure, so no statement shows it.',
+  already_charged:
+    'This policy has already been charged back, so it is not charged again.',
+  repeated_in_file:
+    'An earlier line of this report charges the same policy, so this one is not charged.',
+  opposite_sign:
+    'The amount has the opposite sign to the rest of the report — a reversal? Left out; charge it only if it is a chargeback.',
+};
+
+/** How a candidate person was found: SOK number, the file's name, the app's sale. */
+export const IMPORT_MATCH_SIGNALS = ['sok', 'name', 'policy'] as const;
+export type ImportMatchSignal = (typeof IMPORT_MATCH_SIGNALS)[number];
+
+/** The report may be a spreadsheet or a CSV export of one. */
+export const PAYOUT_IMPORT_FILE_EXTENSIONS = ['.xlsx', '.csv'] as const;
+export const MAX_PAYOUT_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_PAYOUT_IMPORT_ROWS = 5_000;
+
+/** 409: these exact bytes were already imported (the body names the import). */
+export const PAYOUT_IMPORT_DUPLICATE_FILE = 'PAYOUT_IMPORT_DUPLICATE_FILE';
+/** 422: the file could not be read as a chargeback report (`reason` says why). */
+export const PAYOUT_IMPORT_UNREADABLE_FILE = 'PAYOUT_IMPORT_UNREADABLE_FILE';
+/** 400: a commit while some line still needs a person. */
+export const PAYOUT_IMPORT_UNRESOLVED_ROWS = 'PAYOUT_IMPORT_UNRESOLVED_ROWS';
+/** 409: the import was already committed or discarded. */
+export const PAYOUT_IMPORT_NOT_EDITABLE = 'PAYOUT_IMPORT_NOT_EDITABLE';
+/**
+ * 409: since the preview was made, some of its lines' policies were charged
+ * back (another import, or the app). Those lines are now duplicates; the body
+ * lists their `rowNumbers`. Review them and commit again.
+ */
+export const PAYOUT_IMPORT_CHARGED_SINCE = 'PAYOUT_IMPORT_CHARGED_SINCE';
+/** 400: a duplicate line cannot be charged — its policy is charged once. */
+export const PAYOUT_IMPORT_ALREADY_CHARGED = 'PAYOUT_IMPORT_ALREADY_CHARGED';
+
+/** Why a file was refused (`PAYOUT_IMPORT_UNREADABLE_FILE`). */
+export const CHARGEBACK_FILE_ERROR_REASONS = [
+  'unreadable',
+  'no_header',
+  'missing_columns',
+  'no_rows',
+  'too_many_rows',
+] as const;
+export type ChargebackFileErrorReason =
+  (typeof CHARGEBACK_FILE_ERROR_REASONS)[number];
+
+export interface ImportRowPersonView {
+  userId: string;
+  name: string;
+  status: PayoutPersonStatus;
+}
+
+export interface ImportRowCandidateView extends ImportRowPersonView {
+  via: ImportMatchSignal;
+}
+
+/** One line of the report, as read and as matched. */
+export interface ChargebackImportRowView {
+  /** The line's row in the sheet, 1-based — what the owner sees in Excel. */
+  rowNumber: number;
+  /** As the file says. */
+  bindId: string | null;
+  producerName: string | null;
+  policyNumber: string | null;
+  customerName: string | null;
+  policyType: string | null;
+  /** The policy's carrier when the app holds it, else the file's or the import's. */
+  carrier: string;
+  /** `YYYY-MM-DD`, when the file has the column. */
+  soldDay: string | null;
+  occurredDay: string | null;
+  terminationReason: string | null;
+  /** Premium dollars, positive. */
+  amount: number;
+  /** The app's policy with that number, when there is one. */
+  policy: {
+    id: string;
+    policyNumber: string;
+    policyType: string | null;
+    householdId: string | null;
+  } | null;
+  /** The people the signals point at (one per signal that found someone). */
+  candidates: ImportRowCandidateView[];
+  /** Who a commit charges: the owner's choice, else the match. */
+  chargedTo: ImportRowPersonView | null;
+  /** What matching decided, and what `reset` returns to. */
+  autoResolution: ImportRowResolution;
+  resolution: ImportRowResolution;
+  notes: ImportRowNote[];
+  /** The chargeback already on this policy — the original a duplicate keeps. */
+  existingChargeback: ImportExistingChargebackView | null;
+  /** The earlier line of this file that charges the same policy. */
+  repeatOfRow: number | null;
+  /** The ledger row a commit wrote. */
+  chargebackId: string | null;
+}
+
+/** The original chargeback a duplicate line leaves standing. */
+export interface ImportExistingChargebackView {
+  id: string;
+  reason: ChargebackReason;
+  source: ChargebackSource;
+  /** Premium dollars, positive. */
+  amount: number;
+  /** ISO-8601. */
+  occurredAt: string;
+  /** The pay month it counts in, `YYYY-MM` (report and manual rows only). */
+  statementMonth: string | null;
+  producerName: string;
+}
+
+export interface ImportRowCounts {
+  rows: number;
+  matched: number;
+  assigned: number;
+  unmatched: number;
+  skipped: number;
+  duplicate: number;
+  /** Lines a commit writes, and their premium total. */
+  toCharge: number;
+  amountToCharge: number;
+}
+
+/** Tallies the lines by resolution; the amount is summed in cents. */
+export function importRowCounts(
+  rows: readonly { resolution: ImportRowResolution; amount: number }[],
+): ImportRowCounts {
+  const counts: ImportRowCounts = {
+    rows: rows.length,
+    matched: 0,
+    assigned: 0,
+    unmatched: 0,
+    skipped: 0,
+    duplicate: 0,
+    toCharge: 0,
+    amountToCharge: 0,
+  };
+  let cents = 0;
+  for (const row of rows) {
+    counts[row.resolution] += 1;
+    if (isChargedResolution(row.resolution)) {
+      counts.toCharge += 1;
+      cents += Math.round(row.amount * 100);
+    }
+  }
+  counts.amountToCharge = cents / 100;
+  return counts;
+}
+
+/**
+ * What a commit did. It writes the ledger rows, then recalculates the month
+ * when it has been calculated: `no_run` — not yet (the chargebacks are picked
+ * up when it is); `busy` — a calculation was running; `failed` — it threw
+ * (the chargebacks stand; Recalculate from the Payouts page).
+ */
+export const IMPORT_RECALCULATION_OUTCOMES = [
+  'recalculated',
+  'no_run',
+  'busy',
+  'failed',
+] as const;
+export type ImportRecalculationOutcome =
+  (typeof IMPORT_RECALCULATION_OUTCOMES)[number];
+
+export interface ChargebackImportCommitResult {
+  written: number;
+  amount: number;
+  recalculation: ImportRecalculationOutcome;
+  runId: string | null;
+  /** Draft and disputed statements rewritten. */
+  recalculated: number;
+  /**
+   * Sent or accepted statements of people charged here, left as they were —
+   * the owner reopens any that must change.
+   */
+  untouched: {
+    statementId: string;
+    userName: string;
+    status: PayStatementStatus;
+  }[];
+}
+
+export interface ChargebackImportSummary {
+  id: string;
+  carrier: string;
+  /** The pay month the chargebacks count in, `YYYY-MM`. */
+  month: string;
+  status: ChargebackImportStatus;
+  filename: string;
+  format: 'xlsx' | 'csv';
+  counts: ImportRowCounts;
+  /** Lines left out while reading (no amount, …). */
+  warnings: string[];
+  /** ISO-8601. */
+  createdAt: string;
+  createdByName: string | null;
+  committedAt: string | null;
+  discardedAt: string | null;
+  result: ChargebackImportCommitResult | null;
+}
+
+export interface ChargebackImportView extends ChargebackImportSummary {
+  sheetName: string | null;
+  headerRowNumber: number;
+  /** Each field read, and the file's header it was read from. */
+  columns: { field: string; header: string }[];
+  rows: ChargebackImportRowView[];
+}
+
+export interface ChargebackImportsResponse {
+  imports: ChargebackImportSummary[];
+}
+
+/** `POST /payouts/imports/presign`. */
+export interface ChargebackImportPresignResponse {
+  key: string;
+  uploadUrl: string;
+  requiredHeaders: Record<string, string>;
+  expiresIn: number;
+}
+
+/** `POST /payouts/imports`. */
+export interface CreateChargebackImportInput {
+  storageKey: string;
+  uploadedFilename: string;
+  size: number;
+  /** For lines that name no carrier and match no policy. */
+  carrier: string;
+  month: string;
+}
+
+/**
+ * `PATCH /payouts/imports/:id/rows/:rowNumber`. A duplicate line takes none:
+ * its policy is charged once (400 `PAYOUT_IMPORT_ALREADY_CHARGED`).
+ */
+export type ImportRowAction =
+  | { action: 'assign'; userId: string }
+  | { action: 'skip' }
+  | { action: 'reset' };
+
+export interface UpdateImportRowResponse {
+  row: ChargebackImportRowView;
+  counts: ImportRowCounts;
+}
+
+export interface ChargebackImportCommitResponse {
+  import: ChargebackImportView;
+  result: ChargebackImportCommitResult;
+}
+
+/** Anyone a line may be charged to, people who have left included. */
+export interface ImportPersonOption {
+  id: string;
+  name: string;
+  status: PayoutPersonStatus;
+  branchName: string | null;
+  allstateBindId: string | null;
+}
+
+export interface ImportPeopleResponse {
+  people: ImportPersonOption[];
+}

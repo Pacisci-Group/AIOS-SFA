@@ -1,0 +1,33 @@
+meta {
+  name: Discard Chargeback Import (Committed, 409)
+  type: http
+  seq: 35
+}
+
+delete {
+  url: {{baseUrl}}/payouts/imports/{{payoutsImportId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 409", function () {
+    expect(res.getStatus()).to.equal(409);
+    expect(res.getBody().code).to.equal("PAYOUT_IMPORT_NOT_EDITABLE");
+  });
+}
+
+docs {
+  # DELETE /payouts/imports/:id — discard a preview (PAC-180)
+
+  **Permission** — `agency:payouts:admin`. A `preview` becomes `discarded`:
+  nothing was charged, the stored file is deleted and its hash released, so
+  the same file may be uploaded again. Response 200: the
+  `ChargebackImportSummary`.
+
+  Here the import is already committed: **409**
+  `PAYOUT_IMPORT_NOT_EDITABLE` — a committed report cannot be undone.
+}

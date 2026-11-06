@@ -1,0 +1,74 @@
+meta {
+  name: Commit Chargeback Import
+  type: http
+  seq: 34
+}
+
+post {
+  url: {{baseUrl}}/payouts/imports/{{payoutsImportId}}/commit
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("commits (409 once committed)", function () {
+    expect([200, 409]).to.include(res.getStatus());
+  });
+
+  test("writes the charged lines and recalculates the month", function () {
+    if (res.getStatus() !== 200) return;
+    const body = res.getBody();
+    expect(body.import.status).to.equal("committed");
+    expect(body.result.written).to.equal(body.import.counts.toCharge);
+    expect(body.result.written).to.be.at.least(3);
+    // The month was generated above; "busy" only if the hourly job is mid-run.
+    expect(["recalculated", "busy"]).to.include(body.result.recalculation);
+    expect(body.result.untouched).to.be.an("array");
+    body.import.rows
+      .filter(function (r) { return r.resolution === "matched" || r.resolution === "assigned"; })
+      .forEach(function (r) { expect(r.chargebackId).to.match(/^[a-f0-9]{24}$/); });
+  });
+
+  test("a second commit is refused", function () {
+    if (res.getStatus() !== 409) return;
+    expect(res.getBody().code).to.equal("PAYOUT_IMPORT_NOT_EDITABLE");
+  });
+}
+
+docs {
+  # POST /payouts/imports/:id/commit — charge the lines (PAC-180)
+
+  **Permission** — `agency:payouts:admin`.
+
+  In one transaction: one `chargebacks` row per `matched` / `assigned` line
+  (`source` and `reason` `carrier_statement`, `statementMonth` = the import's
+  month, `importId`, the line's `carrier` and `customerName`,
+  `soldAdjustment: 0`, no change to the sale), and the import marked
+  `committed` with each line's `chargebackId`. Skipped and duplicate lines
+  write nothing.
+
+  The ledger is read again inside the transaction: a policy charged back
+  since the preview (another report, or the app) refuses the commit with 409
+  `PAYOUT_IMPORT_CHARGED_SINCE` + `rowNumbers`, and those lines become
+  duplicates — commit again to charge the rest. Commits in one agency are
+  serialised, so two reports naming one policy cannot both charge it.
+
+  Then, when the month has been calculated, it is **recalculated as
+  Recalculate does** (claim + generate): draft and disputed statements are
+  rewritten; sent and accepted ones are left alone and listed in
+  `result.untouched` so the owner can reopen any that must change.
+
+  ## Response 200
+  `{ import: ChargebackImportView, result: { written, amount, recalculation
+  (recalculated | no_run | busy | failed), runId, recalculated, untouched[{
+  statementId, userName, status }] } }`. A failed recalculation does not
+  undo the chargebacks.
+
+  ## Errors
+  400 `PAYOUT_IMPORT_UNRESOLVED_ROWS` while a line needs a person · 409
+  `PAYOUT_IMPORT_CHARGED_SINCE` (see above) · 409
+  `PAYOUT_IMPORT_NOT_EDITABLE` once committed or discarded.
+}

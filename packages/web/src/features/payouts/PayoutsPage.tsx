@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   Calculator,
+  FileUp,
   ListChecks,
   Loader2,
   Wallet,
@@ -42,6 +43,8 @@ import {
   payStatementsKey,
 } from "@/lib/payouts-api";
 import { RunSummary } from "./components/RunSummary";
+import { ChargebackImportsPanel } from "./imports/ChargebackImportsPanel";
+import { ImportChargebacksDialog } from "./imports/ImportChargebacksDialog";
 import {
   StatementsTable,
   type StatementsFilter,
@@ -66,13 +69,16 @@ const URL_ALLOWED = {
  * start of a month. The current month can be generated too; it is partial
  * until it ends. Generate / Recalculate is the owner's
  * (`agency:payouts:admin`), and only ever rewrites draft and disputed
- * statements.
+ * statements. So is the chargeback report (PAC-180): Upload chargebacks
+ * opens its preview, and the month's reports are listed below.
  */
 export default function PayoutsPage() {
   const { user } = useAuth();
   const { can } = usePermissions();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const isAdmin = can(AgencyPermission.PayoutsAdmin);
+  const [uploading, setUploading] = useState(false);
   const currentMonth = agencyMonth(user?.timeZone);
   const [values, setValues] = useUrlState({
     defaults: URL_DEFAULTS,
@@ -161,6 +167,16 @@ export default function PayoutsPage() {
           </Button>
           {isAdmin && (
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setUploading(true)}
+            >
+              <FileUp aria-hidden />
+              Upload chargebacks
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
               size="sm"
               disabled={generating || run.isPending}
               onClick={() =>
@@ -247,8 +263,22 @@ export default function PayoutsPage() {
               />
             </>
           )}
+          {isAdmin && (
+            <ChargebackImportsPanel month={month} timeZone={user?.timeZone} />
+          )}
         </div>
       </main>
+
+      {isAdmin && (
+        <ImportChargebacksDialog
+          key={month}
+          open={uploading}
+          onOpenChange={setUploading}
+          month={month}
+          currentMonth={currentMonth}
+          onImported={(importId) => navigate(`/payouts/imports/${importId}`)}
+        />
+      )}
 
       <AlertDialog
         open={confirming}

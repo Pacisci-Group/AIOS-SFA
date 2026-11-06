@@ -1,0 +1,35 @@
+meta {
+  name: Presign Chargeback Report (as Producer, 403)
+  type: http
+  seq: 47
+}
+
+post {
+  url: {{baseUrl}}/payouts/imports/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+body:json {
+  {
+    "filename": "chargebacks.xlsx",
+    "size": 1000
+  }
+}
+
+tests {
+  test("returns 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /payouts/imports/presign — refused: a producer
+
+  Uploading and committing the chargeback report is `agency:payouts:admin`
+  only.
+}

@@ -5,6 +5,10 @@ import {
   bundleMinimumFor,
   compareRuleCarriers,
   hatTrickError,
+  importRowCounts,
+  IMPORT_ROW_NOTE_LABELS,
+  IMPORT_ROW_NOTES,
+  isChargedResolution,
   levelsReached,
   leadSourceRuleCarrierLabel,
   leadSourceRulesError,
@@ -626,5 +630,50 @@ describe('rateFor', () => {
   it('reads "any carrier" for a lead-source rule, not "any other carrier"', () => {
     expect(leadSourceRuleCarrierLabel(ANY_CARRIER)).toBe('Any carrier');
     expect(leadSourceRuleCarrierLabel('B4tEH')).toBe('Allstate');
+  });
+});
+
+describe('importRowCounts', () => {
+  it('tallies each resolution and totals only the lines a commit writes, in cents', () => {
+    const counts = importRowCounts([
+      { resolution: 'matched', amount: 0.1 },
+      { resolution: 'matched', amount: 0.2 },
+      { resolution: 'assigned', amount: 1829.93 },
+      { resolution: 'unmatched', amount: 500 },
+      { resolution: 'skipped', amount: 40 },
+      { resolution: 'duplicate', amount: 303.85 },
+    ]);
+    expect(counts).toEqual({
+      rows: 6,
+      matched: 2,
+      assigned: 1,
+      unmatched: 1,
+      skipped: 1,
+      duplicate: 1,
+      toCharge: 3,
+      amountToCharge: 1830.23,
+    });
+  });
+
+  it('is all zeros for an empty report', () => {
+    expect(importRowCounts([])).toMatchObject({
+      rows: 0,
+      toCharge: 0,
+      amountToCharge: 0,
+    });
+  });
+
+  it('charges matched and assigned lines only', () => {
+    expect(isChargedResolution('matched')).toBe(true);
+    expect(isChargedResolution('assigned')).toBe(true);
+    expect(isChargedResolution('duplicate')).toBe(false);
+    expect(isChargedResolution('skipped')).toBe(false);
+    expect(isChargedResolution('unmatched')).toBe(false);
+  });
+
+  it('labels every note', () => {
+    for (const note of IMPORT_ROW_NOTES) {
+      expect(IMPORT_ROW_NOTE_LABELS[note]).toBeTruthy();
+    }
   });
 });

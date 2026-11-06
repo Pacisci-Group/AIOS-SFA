@@ -1,0 +1,125 @@
+meta {
+  name: Create Chargeback Import
+  type: http
+  seq: 25
+}
+
+post {
+  url: {{baseUrl}}/payouts/imports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "storageKey": "{{payoutsImportKey}}",
+    "uploadedFilename": "payout-chargebacks-demo.xlsx",
+    "size": 19393,
+    "carrier": "Allstate",
+    "month": "{{payoutsMonth}}"
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  if (res.getStatus() === 201) bru.setVar("payoutsImportId", body.id);
+  if (res.getStatus() === 409) bru.setVar("payoutsImportId", body.importId);
+}
+
+tests {
+  test("reads the report into a preview, or finds it imported", function () {
+    expect([201, 409]).to.include(res.getStatus());
+  });
+
+  test("matches each line", function () {
+    if (res.getStatus() !== 201) return;
+    const body = res.getBody();
+    expect(body.status).to.equal("preview");
+    expect(body.counts.rows).to.equal(5);
+    const row = function (n) {
+      return body.rows.find(function (r) { return r.rowNumber === n; });
+    };
+    expect(row(2).resolution).to.equal("matched");
+    expect(row(2).chargedTo.userId).to.equal(bru.getVar("payoutsProducerUserId"));
+    expect(row(2).amount).to.equal(500);
+    expect(row(3).resolution).to.equal("matched");
+    expect(row(4).resolution).to.equal("unmatched");
+    expect(row(4).amount).to.equal(120);
+    expect(row(4).notes).to.include("sok_unknown");
+    // The only bracketed amount: a reversal, left out.
+    expect(row(6).resolution).to.equal("skipped");
+    expect(row(6).amount).to.equal(35);
+    expect(row(6).notes).to.include("opposite_sign");
+  });
+
+  test("a second upload of the same bytes is refused, naming the import", function () {
+    if (res.getStatus() !== 409) return;
+    expect(res.getBody().code).to.equal("PAYOUT_IMPORT_DUPLICATE_FILE");
+    expect(res.getBody().importId).to.match(/^[a-f0-9]{24}$/);
+  });
+}
+
+docs {
+  # POST /payouts/imports — read the uploaded report into a preview (PAC-180)
+
+  Step 3 of 3. Nothing is charged yet: the import is a `preview` until it is
+  committed.
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin`.
+
+  ## Body
+  | Field | |
+  |---|---|
+  | `storageKey` | the presigned key (must be this agency's `payout-chargebacks` key) |
+  | `uploadedFilename` | `.xlsx` / `.csv` |
+  | `size` | must equal the stored object's |
+  | `carrier` | for lines that name no carrier and match no policy |
+  | `month` | `YYYY-MM` — the pay month the chargebacks count in, whatever their dates; not a future month |
+
+  ## Reading
+  The header is the first row (any sheet, first 40 rows) with a policy-number
+  and an amount column, matched loosely by name. Needed: **Policy Number**
+  and **Prorated Amount** (or Chargeback Amount). Read when present: SOK,
+  Producer, Customer, Policy Type, Carrier, Sold Date, a cancel date,
+  Termination Reason. `($123.45)`, `-123.45` and `$123.45` all read 123.45.
+  Lines with no amount, and totals with no policy number, are left out with
+  a warning. At most 5,000 lines.
+
+  ## Matching
+  A SOK number on a user (people who left included) decides. Otherwise the
+  **Producer** name and the **policy's seller** (the producer on the app's
+  sale) are weighed together: agree, or only one found → matched (the notes
+  say which); disagree → needs a person, both offered.
+
+  ## Duplicates — a policy is charged back once
+  A line whose policy already has a chargeback — **any month, any source**
+  (an app cancellation or rewrite, an earlier report) — or that repeats a
+  policy an earlier line of the file charges is a `duplicate`: the original
+  stands (`existingChargeback` names it, or `repeatOfRow`), and the line is
+  never charged and cannot be changed. A line whose amount has the opposite
+  sign to the rest of the report is a reversal: `skipped`, note
+  `opposite_sign`.
+
+  ## Response 201
+  `ChargebackImportView` — `{ id, carrier, month, status, filename, format,
+  counts { rows, matched, assigned, unmatched, skipped, duplicate, toCharge,
+  amountToCharge }, warnings, sheetName, headerRowNumber, columns[{field,
+  header}], rows[{ rowNumber, bindId, producerName, policyNumber,
+  customerName, policyType, carrier, soldDay, occurredDay,
+  terminationReason, amount, policy, candidates[{userId, name, status, via}],
+  chargedTo, autoResolution, resolution, notes[], existingChargebackId,
+  chargebackId }], … }`.
+
+  ## Errors
+  400 a key that is not this agency's, upload missing, empty, or not the
+  declared size; a month that has not started · 409
+  `PAYOUT_IMPORT_DUPLICATE_FILE` + `importId` (these exact bytes were
+  imported; discarding an import frees them) · 413 over 10 MiB · 422
+  `PAYOUT_IMPORT_UNREADABLE_FILE` + `reason` (`unreadable`, `no_header`,
+  `missing_columns`, `no_rows`, `too_many_rows`) and a message naming what is
+  wrong. A refused upload is deleted from storage.
+}

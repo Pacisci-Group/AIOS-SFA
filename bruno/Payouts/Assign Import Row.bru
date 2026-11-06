@@ -1,0 +1,43 @@
+meta {
+  name: Assign Import Row
+  type: http
+  seq: 33
+}
+
+patch {
+  url: {{baseUrl}}/payouts/imports/{{payoutsImportId}}/rows/{{payoutsImportRowNumber}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "action": "assign",
+    "userId": "{{payoutsProducerUserId}}"
+  }
+}
+
+tests {
+  test("returns 200 (409 once committed)", function () {
+    expect([200, 409]).to.include(res.getStatus());
+  });
+
+  test("the line is charged to the producer", function () {
+    if (res.getStatus() !== 200) return;
+    const body = res.getBody();
+    expect(body.row.resolution).to.equal("assigned");
+    expect(body.row.chargedTo.userId).to.equal(bru.getVar("payoutsProducerUserId"));
+    expect(body.counts.unmatched).to.equal(0);
+  });
+}
+
+docs {
+  # PATCH /payouts/imports/:id/rows/:rowNumber — `{ "action": "assign", "userId" }`
+
+  Charges the line that needed a person to the demo producer, so the import
+  can be committed. See `Skip Import Row` for every action.
+}

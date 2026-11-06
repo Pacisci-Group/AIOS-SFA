@@ -98,6 +98,7 @@ export class PayoutActivityService {
     const [inputs, labels, statement] = await Promise.all([
       loadRunInputs(this.models, {
         agencyId,
+        month: query.month,
         window: monthWindow(query.month, timeZone),
         timeZone,
         memberIds: [userId],

@@ -1,4 +1,12 @@
 import type {
+  ChargebackImportCommitResponse,
+  ChargebackImportPresignResponse,
+  ChargebackImportsResponse,
+  ChargebackImportSummary,
+  ChargebackImportView,
+  ImportPeopleResponse,
+  ImportRowAction,
+  UpdateImportRowResponse,
   PayoutActivityPeopleResponse,
   PayoutActivityView,
   PayoutRunResponse,
@@ -15,11 +23,13 @@ import type {
   UpsertPaymentStructureInput,
 } from "@sfa/shared";
 import { apiFetch } from "@/lib/api-client";
+import { uploadToPresignedUrl } from "@/lib/presigned-upload";
 
 /**
  * Payouts (PAC-176). PAC-177: the agency's payout settings and its payment
  * structures, both behind `agency:payouts:admin`. PAC-178/179: the monthly
- * runs, the statements and the activity behind them.
+ * runs, the statements and the activity behind them. PAC-180: the carrier
+ * chargeback report import (admin).
  */
 
 export const payoutsKey = ["payouts"] as const;
@@ -182,4 +192,101 @@ export function getPayoutActivity(params: {
 /** Whose activity a reviewer may open. `payouts:write`. */
 export function listPayoutActivityPeople(): Promise<PayoutActivityPeopleResponse> {
   return apiFetch<PayoutActivityPeopleResponse>("/payouts/activity/people");
+}
+
+// ── Chargeback report import (PAC-180) ──────────────────────────────────
+
+export const payoutImportsKey = [...payoutsKey, "imports"] as const;
+export const payoutImportsListKey = (month: string) =>
+  [...payoutImportsKey, "list", month] as const;
+export const payoutImportKey = (id: string) =>
+  [...payoutImportsKey, "detail", id] as const;
+export const payoutImportPeopleKey = [...payoutImportsKey, "people"] as const;
+
+/**
+ * Presign → PUT the bytes straight to storage → create the preview. A 409
+ * `PAYOUT_IMPORT_DUPLICATE_FILE` names the import that already holds the
+ * file (`body.importId`); a 422 `PAYOUT_IMPORT_UNREADABLE_FILE` says why
+ * the file was refused.
+ */
+export async function uploadChargebackReport(
+  file: File,
+  { carrier, month }: { carrier: string; month: string },
+): Promise<ChargebackImportView> {
+  const presigned = await apiFetch<ChargebackImportPresignResponse>(
+    "/payouts/imports/presign",
+    {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, size: file.size }),
+    },
+  );
+  await uploadToPresignedUrl(
+    presigned.uploadUrl,
+    presigned.requiredHeaders,
+    file,
+  );
+  return apiFetch<ChargebackImportView>("/payouts/imports", {
+    method: "POST",
+    body: JSON.stringify({
+      storageKey: presigned.key,
+      uploadedFilename: file.name,
+      size: file.size,
+      carrier,
+      month,
+    }),
+  });
+}
+
+export function listChargebackImports(
+  month: string,
+): Promise<ChargebackImportsResponse> {
+  return apiFetch<ChargebackImportsResponse>(
+    `/payouts/imports?month=${encodeURIComponent(month)}`,
+  );
+}
+
+export function getChargebackImport(id: string): Promise<ChargebackImportView> {
+  return apiFetch<ChargebackImportView>(
+    `/payouts/imports/${encodeURIComponent(id)}`,
+  );
+}
+
+/** Everyone a line may be charged to, people who have left included. */
+export function listImportPeople(): Promise<ImportPeopleResponse> {
+  return apiFetch<ImportPeopleResponse>("/payouts/imports/people");
+}
+
+/** Assign / skip / include / reset one line of a preview. */
+export function updateImportRow(
+  id: string,
+  rowNumber: number,
+  action: ImportRowAction,
+): Promise<UpdateImportRowResponse> {
+  return apiFetch<UpdateImportRowResponse>(
+    `/payouts/imports/${encodeURIComponent(id)}/rows/${rowNumber}`,
+    { method: "PATCH", body: JSON.stringify(action) },
+  );
+}
+
+/**
+ * Write the charged lines and recalculate the month. 400
+ * `PAYOUT_IMPORT_UNRESOLVED_ROWS` while a line needs a person.
+ */
+export function commitChargebackImport(
+  id: string,
+): Promise<ChargebackImportCommitResponse> {
+  return apiFetch<ChargebackImportCommitResponse>(
+    `/payouts/imports/${encodeURIComponent(id)}/commit`,
+    { method: "POST" },
+  );
+}
+
+/** Discard a preview; the same file may then be uploaded again. */
+export function discardChargebackImport(
+  id: string,
+): Promise<ChargebackImportSummary> {
+  return apiFetch<ChargebackImportSummary>(
+    `/payouts/imports/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 }

@@ -828,3 +828,171 @@ producer's My Pay hides their draft and shows it once marked sent (no Recalculat
 them); the producer is redirected from `/payouts`; the branch manager sees their branch's
 5 of 7 and no Generate. Console: only the existing forwardRef warning. The check structure
 was archived, the demo payout settings restored and the runs it created deleted.
+
+---
+
+## As built — PAC-180, PR 3 (5 Nov 2026)
+
+Branch `awaris/pac-180-carrier-chargeback-report-upload-xlsx-match-by-sok-number`, cut from the
+PAC-178 branch (#171, `c94c7a9`); PR base = that branch.
+
+**The sample report (arrived 5 Nov).** `Chargebacks - June Chargebacks .csv` — the agency's own
+"Chargebacks" sheet exported as **CSV**, not a carrier .xlsx, with **no SOK column**: `Keep or
+Remove, Customer, Policy Type, Carrier, Producer, Sold Date, Premium, Zip Code, City, Report
+Month, Charge back (Y/N), Policy Number, Prorated Amount, Termination Reason, Send to
+Smartsuite`. 15 lines; `Producer` is a person's name. The owner (5 Nov): the amount is
+**Prorated Amount**; the real report holds only approved chargebacks, so Keep or Remove and
+Charge back (Y/N) are not read; match people by **the Producer name and the policy number
+together**. The sample is reference only — the fixtures reuse its header with invented values.
+
+**What landed**
+
+- **Shared.** `domain/chargeback.ts`: `CHARGEBACK_REASONS` + `carrier_statement`, `manual`;
+  `CHARGEBACK_SOURCES` + `carrier_statement`; `ChargebackView.policyId` nullable plus `carrier`,
+  `customerName`, `statementMonth`, `importId`, `statementId`; the docblock now says Payouts is
+  the model PAC-123 deferred. `domain/payouts.ts`: `CHARGEBACK_IMPORT_STATUSES`,
+  `IMPORT_ROW_RESOLUTIONS` (+ `CHARGED_IMPORT_ROW_RESOLUTIONS`, `isChargedResolution`),
+  `IMPORT_ROW_NOTES` + labels, `IMPORT_MATCH_SIGNALS`, `PAYOUT_IMPORT_FILE_EXTENSIONS` (.xlsx,
+  .csv), `MAX_PAYOUT_IMPORT_FILE_BYTES` (10 MiB), `MAX_PAYOUT_IMPORT_ROWS` (5,000), codes
+  `PAYOUT_IMPORT_DUPLICATE_FILE` / `_UNREADABLE_FILE` / `_UNRESOLVED_ROWS` / `_NOT_EDITABLE`,
+  `CHARGEBACK_FILE_ERROR_REASONS`, `IMPORT_RECALCULATION_OUTCOMES`, the view types and
+  `importRowCounts` (cents).
+- **API, `common/payouts/`.** `chargeback-file-reader.ts` `parseChargebackFile(bytes, { format,
+  maxRows })` — one **ordered alias table** at the top (the sample's names first; the first
+  alias a header has wins, so `Premium` is never the amount); header = first row on any sheet
+  (first 40) with a policy-number and an amount column, else the first header-like row (2+ known
+  columns) so the refusal names the missing column; CSV read as text through `csv-parse`.
+  `match-import-rows.ts` (`matchImportRows`, pure `resolvePerson`, `personNameKey`).
+  `chargeback-writers.ts` (`importedChargebackDoc`, `writeImportedChargebacks`).
+  `load-run-inputs.ts`: `loadRunInputs` takes `month`; `chargebacksInMonth(month, window)` =
+  `$or [{statementMonth: month}, {statementMonth: null, occurredAt in window}]` (also the
+  import's duplicate check); carrier = the row's, else the policy's; customer = the sale's, else
+  the household's, else the row's. `payout-people.ts` gains `{ includeRemoved }`;
+  `generate-run.ts` exports `peopleModels`.
+- **Collections.** `chargebacks`: `policyId` optional (`default: null`), new `carrier`,
+  `customerName`, `statementMonth`, `importId`, `statementId` (all `default: null`), index
+  `{agencyId, statementMonth, producerId}`; the `cancel_rewrite` partial unique index untouched.
+  New `chargebackImports` (agency-level; lines embedded; partial unique `{agencyId, fileSha256}`;
+  `{agencyId, month, createdAt:-1}`). **No migration**: enum widening and the optional
+  `policyId` are validator-only, the new fields are optional, and `autoIndex` (not overridden)
+  builds the new index and collection.
+- **Endpoints** — `PayoutsImportsController` (`/payouts/imports`, **every route
+  `agency:payouts:admin`**, `@SkipBranch`): `POST presign`, `POST /` (create a preview), `GET
+  /?month`, `GET /people`, `GET /:id`, `PATCH /:id/rows/:rowNumber` (`assign` / `skip` /
+  `reset`; `include` was removed in the review fixes below), `POST /:id/commit`, `DELETE /:id`
+  (discard).
+- **Elsewhere.** `policies/policy-rewrites.service.ts` (the policy history card) reads only
+  `cancel_rewrite` / `cancellation` rows — a report line would otherwise double the total and
+  hide "Cancelled policy · $X charged back".
+- **Web.** Payouts page: **Upload chargebacks** (admin) → `ImportChargebacksDialog` (`useAppForm`:
+  pay month `SelectField`, carrier `ComboboxField`; `FileDropzone` .xlsx/.csv) and a "Chargeback
+  reports" panel for the month. `/payouts/imports/:id` (admin + `payouts:read`):
+  `ImportPreviewPage` — notices, five tiles, `?show=` filter, lines table with a row menu,
+  `AssignRowDialog` (suggested people first, people who left included), Commit / Discard
+  confirmations, the commit result with the sent/accepted statements left alone.
+  `payout-format.ts` lost its casts. New files under `features/payouts/imports/`.
+- **Bruno.** 16 requests in `Payouts/` (seq 22–37 and 47; the archive and producer requests moved
+  to 38–46), fixture `bruno/fixtures/payout-chargebacks-demo.xlsx` (18,804 bytes), README rows.
+
+**Decisions taken while building** (state them in the PR)
+
+1. **Who is charged** — `resolvePerson`: a SOK number on a user decides (people who left
+   included). Otherwise the Producer name (exactly one user, "Last, First" too) and the
+   policy's seller (the deal's producer): agree, or only one found → `matched` with a note
+   saying which; disagree → `unmatched`, both offered as suggestions; neither → `unmatched`.
+2. ~~Duplicates against the month's ledger only, includable~~ — **superseded by the review
+   fixes below**: a policy is charged back once, any month, and a repeat within the file is a
+   duplicate too; duplicates cannot be included.
+3. **Commit** writes the ledger rows and marks the import committed in one `TransactionRunner`
+   transaction, then recalculates **the whole month** with `claimRun` + `generateRun` (user, 5
+   Nov) — `recomputeStatement` is not used, because `generateRun` is the one path that also
+   drafts a statement for a removed structure member whose only activity is the chargeback.
+   `no_run` / `busy` / `failed` are reported, never thrown: the chargebacks stand.
+   `untouched` = sent / accepted statements of the people charged.
+4. **422** `PAYOUT_IMPORT_UNREADABLE_FILE` + `reason` for an unreadable report (the plan said
+   400), like Dash's `RECONCILIATION_UNREADABLE_FILE`. A file named .xlsx that is not a zip is
+   refused rather than guessed at.
+5. **`customerName` on the ledger** (user, 5 Nov) — only report rows set it; the app's name wins
+   when the policy matched.
+6. `occurredAt` = the report's cancel date when it has one, else the first instant of the
+   statement month; display only for these rows (they count by `statementMonth`).
+7. A line with no policy number is left out (warned when it carries an amount — a total line);
+   so is a line with no or zero amount.
+8. ~~Policies without a stored `policyNumberKey` keyed in Node~~ — **superseded**: migration
+   `20261106120000-policy_number_keys` backfills the key and the demo seed now writes it.
+9. Every import route is the admin's, reads included (a report spans branches).
+10. `writeManualChargeback` arrives with its only caller (PAC-182 adjustments); this PR adds the
+    `manual` reason and `statementId` field.
+
+**Verified (5 Nov):** shared 444 tests, tsc clean; API tsc = 24-error baseline (none in touched
+files), eslint clean on `src/payouts src/common/payouts src/chargebacks
+src/policies/policy-rewrites.service.ts` + the e2e, unit 1632 (parser 21, matcher 14 new); e2e
+`payouts-import` 23 (new), `payouts-run` 18, `payouts-structures` 38,
+`worker/generate-pay-statements` 5, `reconciliation-outcomes` 54, `api.e2e` history / rewrite /
+cancel slice 45; the real June sample parses to 15 lines (amount from Prorated Amount, no
+warnings); web `npm run lint` clean, prettier clean on `features/payouts` + `lib/payouts-api.ts`;
+Bruno Payouts 47/47 (93 tests), twice (the rerun takes the 409 path). Headless Chrome on the demo
+agency (owner), dark + light: October generated from the page; Upload chargebacks (October +
+Allstate by default) with SOKDEMOP on 900200002, an unknown SOK / name / policy, and 900299990
+→ 1 matched, 1 needs a person, 1 duplicate; Commit disabled until the line was assigned (through
+the row menu and the picker) to Pat Producer; commit "Charge 2 lines totalling $630 to October
+2026?" → Pat's draft net **$6,250.80 → $6,187.80** (chargebacks $8,842 → $9,472), Chargeback
+detail and the Activity tab show "Carrier report"; the same file again opens the committed
+import; a CSV discarded leaves the panel and can be uploaded again. Console: only the existing
+forwardRef warning. Afterwards the test structures were archived, the demo payout settings are
+the defaults, and the runs, statements, imports, their ledger rows and the uploaded files were
+deleted.
+
+**Review fixes — PAC-180 (6 Nov 2026).** `/code-review` raised 15 findings on the uncommitted
+PR; all fixed.
+
+*Owner decision (6 Nov): "if the policy is already charged back, you can't charge back twice —
+keep the original and flag it to inform".*
+
+1. **A policy is charged back once.** A line is a `duplicate` when its policy already has any
+   chargeback — **any month, any source** (`existingChargebacks`: rows on the policy, plus
+   report rows with no policy, by number; both use the `policyId` index) — or when an earlier
+   line of the file charges it (`repeatOfRow`). The original is named on the line
+   (`existingChargeback`: reason, source, amount, date or pay month, producer) and the preview
+   shows "Kept: …" plus a notice. A duplicate is never charged and takes no action (400
+   `PAYOUT_IMPORT_ALREADY_CHARGED`); **`include` is gone** from the API, DTO, shared types, web
+   and Bruno. Duplicate beats needs-a-person, so it never blocks a commit.
+2. **Commit re-checks the ledger** inside its transaction. A policy charged back since the
+   preview refuses the commit with 409 `PAYOUT_IMPORT_CHARGED_SINCE` + `rowNumbers`, and those
+   lines are marked duplicates; a second commit charges the rest. Commits in one agency are
+   serialised by a first-write `$inc` of `Agency.chargebackImportsRevision`, so two reports
+   committed at once cannot both charge a policy (the e2e races two commits: one 200, one 409,
+   one ledger row). On the no-replica-set fallback the inserted rows are registered for
+   compensation.
+3. **Reversals.** Amounts still read positive (`($123.45)`, `-123.45`, `$123.45` → 123.45),
+   but when a report mixes signs the lines with the less common sign (negatives on a tie) are
+   `oppositeSign` → `skipped` with note `opposite_sign` and a warning; the owner may still
+   charge one by assigning it.
+4. **SOK aliases** no longer include `Producer Code` or `Agent ID` (a sub-producer code or an
+   agent number is not the Bind ID, and a SOK match decides alone).
+5. Carrier preference compares carrier slugs (`ALLSTATE` = `Allstate` = `B4tEH`).
+6. **Unkeyed policies:** migration `20261106120000-policy_number_keys.js` backfills
+   `policyNumberKey` (the writers' rule: ≥ 4 characters) and the demo seed writes it; the
+   matcher's scan of keyless policies is gone. Locally it was applied by the watched API on
+   :4000; no policy with a 4+ character number is left without a key.
+7. `Chargeback.policyId` is required again for every reason except `carrier_statement` and
+   `manual`.
+8. `create()` no longer deletes the file once the preview is saved.
+9. `recalculate` never throws (the run lookup and the sent-statement list are guarded), and the
+   commit's `result` write is guarded too.
+10. Row actions read and return one line (`$elemMatch`), update with `findOneAndUpdate`
+    projecting only resolutions and amounts, and check structure membership with `exists`.
+11. `chargebackSourceLabel` uses the shared `CHARGEBACK_REASON_LABELS` (a cancellation now reads
+    "Cancelled policy" on statements, as elsewhere in the app).
+12. `common/payouts/regenerate-month.ts` (`regenerateMonth`, `agencyTimeZone`) is the one
+    claim-and-generate path, used by Recalculate and by the import.
+13. The upload dialog's month picker includes the page's month when it is older than 12 months.
+
+**Verified (6 Nov):** shared 444, tsc clean; API tsc = 24 baseline, eslint clean, unit 1636
+(parser 25); e2e `payouts-import` 25 (5 consecutive runs, race included), `payouts-run` 18,
+`payouts-structures` 38, worker 5, `reconciliation-outcomes` 54, `api.e2e` history / rewrite /
+cancel 45; web lint + prettier; Bruno Payouts 47/47 (93 tests) twice — fixture rebuilt (19,393
+bytes) with a bracketed reversal line; headless Chrome dark + light: the duplicate names the
+kept charge ("Kept: Cancelled policy · $2,210.50 · Oct 20, 2026 · Pat Producer"), the reversal
+is skipped, Pat's October net $6,250.80 → $6,187.80 as before. Demo data, uploads and servers
+cleaned up afterwards.

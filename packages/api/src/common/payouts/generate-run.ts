@@ -119,7 +119,7 @@ interface LeanStatement {
   }[];
 }
 
-function peopleModels(models: PayoutModels) {
+export function peopleModels(models: PayoutModels) {
   return {
     userModel: models.user,
     roleModel: models.role,
@@ -271,7 +271,13 @@ async function computeRun(
     await Promise.all([
       loadPayoutPeople(peopleModels(models), agencyId, memberIds),
       leadSourceLabels(models.leadSource, agencyId),
-      loadRunInputs(models, { agencyId, window, timeZone, memberIds }),
+      loadRunInputs(models, {
+        agencyId,
+        month: run.month,
+        window,
+        timeZone,
+        memberIds,
+      }),
       agencyGrossPremium(models.deal, agencyId, window),
       appointedCarrierNames(models.carrier, agency?.carrierAppointments),
       models.payStatement.find({ agencyId, runId }).lean<LeanStatement[]>(),
@@ -501,7 +507,13 @@ export async function recomputeStatement(
       .lean<LeanStructure | null>(),
     loadPayoutPeople(peopleModels(models), agencyId, [userId]),
     leadSourceLabels(models.leadSource, agencyId),
-    loadRunInputs(models, { agencyId, window, timeZone, memberIds: [userId] }),
+    loadRunInputs(models, {
+      agencyId,
+      month: run.month,
+      window,
+      timeZone,
+      memberIds: [userId],
+    }),
     models.agency.findById(agencyId).select({ carrierAppointments: 1 }).lean<{
       carrierAppointments?: { carrierId?: Types.ObjectId; active?: boolean }[];
     } | null>(),

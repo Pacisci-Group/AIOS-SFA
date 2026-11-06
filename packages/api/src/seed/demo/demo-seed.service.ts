@@ -1179,6 +1179,10 @@ export class DemoSeedService {
             branchId: deal.producer.branchId,
             legacySmartSuiteId: legacyId,
             policyNumber,
+            // What every lookup by number reads (duplicate check, client
+            // search, the chargeback import); digits only, so the number is
+            // its own key.
+            policyNumberKey: policyNumber,
             policyType,
             carrier: 'Allstate',
             active: true,

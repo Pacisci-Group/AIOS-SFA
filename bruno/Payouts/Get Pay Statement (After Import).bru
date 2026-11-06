@@ -1,0 +1,43 @@
+meta {
+  name: Get Pay Statement (After Import)
+  type: http
+  seq: 37
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK (skipped when the run drafted nobody)", function () {
+    if (!bru.getVar("payoutsStatementId")) return;
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the draft carries the report's chargebacks under Chargeback detail", function () {
+    if (res.getStatus() !== 200) return;
+    const body = res.getBody();
+    if (body.userId !== bru.getVar("payoutsProducerUserId") || body.status !== "draft") return;
+    const fromReport = body.chargebacks.filter(function (c) { return c.source === "carrier_statement"; });
+    expect(fromReport.length).to.be.at.least(1);
+    const cents = function (n) { return Math.round(n * 100); };
+    const total = body.chargebacks
+      .filter(function (c) { return !c.excluded; })
+      .reduce(function (sum, c) { return sum + cents(c.amount); }, 0);
+    expect(total).to.equal(cents(body.totals.chargebackTotal));
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id — after the import (PAC-180)
+
+  The commit recalculated the month, so a draft statement for the demo
+  producer now lists the report's lines (`source: "carrier_statement"`) and
+  its chargeback total and net commission reflect them. Checked only when the
+  captured statement is the producer's draft.
+}

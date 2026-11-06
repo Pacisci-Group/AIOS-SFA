@@ -1,0 +1,51 @@
+meta {
+  name: Upload Chargeback Report
+  type: http
+  seq: 24
+}
+
+put {
+  url: {{payoutsImportUploadUrl}}
+  body: file
+  auth: none
+}
+
+body:file {
+  file: @file(fixtures/payout-chargebacks-demo.xlsx) @contentType(application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+}
+
+tests {
+  test("storage accepts the upload", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw chargeback report (step 2 of 3)
+
+  Not an API endpoint: this goes **straight to object storage** with the URL
+  from `Presign Chargeback Report`. `auth: none` — the collection's bearer
+  would break the S3 signature.
+
+  ## The fixture
+
+  `bruno/fixtures/payout-chargebacks-demo.xlsx` is laid out like the agency's
+  own "Chargebacks" sheet (the June 2026 sample: Keep or Remove, Customer,
+  Policy Type, Carrier, Producer, Sold Date, Premium, Zip Code, City, Report
+  Month, Charge back (Y/N), Policy Number, **Prorated Amount**, Termination
+  Reason, Send to Smartsuite) plus a `SOK` column. Invented customers; the
+  policy numbers are the demo seed's.
+
+  | Row | SOK | Producer | Policy | Prorated | Expected |
+  |---|---|---|---|---|---|
+  | 2 | SOKDEMOP | Pat Producer | 900200002 | 500.00 | matched → Pat (SOK) |
+  | 3 | | Pat Producer | 900200015 | 250.00 | matched → Pat (the name and the policy's seller agree) |
+  | 4 | SOKNOBODY | Nobody Known | 999999999 | 120.00 | needs a person |
+  | 5 | | Pat Producer | 900299990 | 2210.50 | duplicate when the policy already has a chargeback (the Dash folder records some) |
+  | 6 | | Pat Producer | 900200018 | (35.00) | skipped: the only bracketed amount — a reversal |
+
+  Built with `chargebackWorkbook` / `reportRows` from
+  `packages/api/src/common/payouts/__fixtures__/chargeback-workbook.ts`.
+  ⚠ Its size (**19393** bytes) is declared in `Presign Chargeback Report` and
+  `Create Chargeback Import`.
+}

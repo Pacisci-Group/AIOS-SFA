@@ -1,0 +1,41 @@
+meta {
+  name: List Chargeback Imports
+  type: http
+  seq: 27
+}
+
+get {
+  url: {{baseUrl}}/payouts/imports?month={{payoutsMonth}}
+  auth: bearer
+}
+
+params:query {
+  month: {{payoutsMonth}}
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the month's imports, this one included", function () {
+    const ids = res.getBody().imports.map(function (i) { return i.id; });
+    expect(ids).to.include(bru.getVar("payoutsImportId"));
+  });
+}
+
+docs {
+  # GET /payouts/imports?month — a month's chargeback reports (PAC-180)
+
+  **Permission** — `agency:payouts:admin`. `month` optional (`YYYY-MM`);
+  without it, the latest 50 of any month. Newest first.
+
+  ## Response 200
+  `{ imports: ChargebackImportSummary[] }` — `{ id, carrier, month, status
+  (preview | committed | discarded), filename, format, counts, warnings,
+  createdAt, createdByName, committedAt, discardedAt, result }` (no lines).
+}

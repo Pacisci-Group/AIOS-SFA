@@ -22,10 +22,26 @@
  * sold credit reversed only inside the first month — and it applies to a
  * cancellation *we* record rather than one a carrier file reports.
  *
- * **The two will have to be reconciled** when PAC-123 lands and the carrier feed
- * arrives. `source` exists so that reconciliation has something to key on rather
- * than having to guess which rows this app wrote. Do not widen this file into a
- * general commission model before then; it will be the wrong shape.
+ * ## Payouts reads it (PAC-176)
+ *
+ * The month-end calculation this file once deferred to PAC-123 is now Payouts
+ * (PAC-176): each month's commission statement takes its chargebacks from this
+ * ledger. Rows come from three places, told apart by `source` and `reason`:
+ *
+ * - **The app** (`source: 'app'`) — a cancel rewrite or a cancellation recorded
+ *   here. Full premium back; counted in the month of `occurredAt`.
+ * - **The chargeback report** (`source: 'carrier_statement'`, PAC-180) — the
+ *   agency's monthly list of approved chargebacks, uploaded on the Payouts page.
+ *   The amount is the report's (the carrier's **prorated** premium), and the row
+ *   counts in the month the owner imported it for (`statementMonth`), whatever
+ *   its date. It never touches the deal's sold figure (`soldAdjustment: 0`).
+ * - **A manager's line** on a statement (`reason: 'manual'`, PAC-182), tied to
+ *   that statement by `statementId`.
+ *
+ * The app's rule and the report's will often describe the same cancellation.
+ * They are kept from charging twice by the import, which marks a report row as a
+ * duplicate when the same policy already has a chargeback in that month — not by
+ * this ledger, which records what each source said.
  */
 
 /**
@@ -38,35 +54,56 @@
  *   a Dash row's Chargeback outcome. Dated on **the carrier's cancellation
  *   date**, which the person enters because it decides the one-month window
  *   (David, 27 Oct 2026). No replacement.
+ * - `carrier_statement` — a line of the chargeback report (PAC-180). May name
+ *   no policy the app knows.
+ * - `manual` — added by a manager on one statement (PAC-182).
  */
-export const CHARGEBACK_REASONS = ['cancel_rewrite', 'cancellation'] as const;
+export const CHARGEBACK_REASONS = [
+  'cancel_rewrite',
+  'cancellation',
+  'carrier_statement',
+  'manual',
+] as const;
 
 export type ChargebackReason = (typeof CHARGEBACK_REASONS)[number];
 
 export const CHARGEBACK_REASON_LABELS: Record<ChargebackReason, string> = {
   cancel_rewrite: 'Cancel Rewrite',
   cancellation: 'Cancelled policy',
+  carrier_statement: 'Carrier report',
+  manual: 'Manual',
 };
 
 /**
- * Who computed the row.
- *
- * Only `app` exists today. The value is written anyway, because the alternative
- * is a ledger that cannot tell its own rows from an imported carrier statement's
- * once PAC-123 starts writing `carrier_statement` rows beside them — and by then
- * backfilling provenance is guesswork.
+ * Who computed the row: `app` for every row this app works out itself
+ * (including a manager's manual line), `carrier_statement` for a row read off
+ * the chargeback report. Written from the start, so the two can always be told
+ * apart without guessing.
  */
-export const CHARGEBACK_SOURCES = ['app'] as const;
+export const CHARGEBACK_SOURCES = ['app', 'carrier_statement'] as const;
 
 export type ChargebackSource = (typeof CHARGEBACK_SOURCES)[number];
 
 /** One chargeback event, as the API serves it. */
 export interface ChargebackView {
   id: string;
-  /** The policy that went away, and whose premium is the amount. */
-  policyId: string;
+  /**
+   * The policy that went away, and whose premium is the amount. `null` for a
+   * chargeback-report line whose policy number the app does not hold.
+   */
+  policyId: string | null;
   policyNumber: string | null;
   policyType: string | null;
+  /** The carrier, when the row says (report rows); else the policy's. */
+  carrier: string | null;
+  /** The customer as the report names them (report rows only). */
+  customerName: string | null;
+  /** The pay month a report or manual row counts in, `YYYY-MM`. */
+  statementMonth: string | null;
+  /** The chargeback-report import that wrote it. */
+  importId: string | null;
+  /** The statement a manager's manual line belongs to. */
+  statementId: string | null;
   /** The deal the producer was originally credited on. */
   dealId: string | null;
   /** The replacement written by the rewrite, when there is one. */

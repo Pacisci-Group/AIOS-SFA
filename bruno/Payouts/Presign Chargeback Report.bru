@@ -1,0 +1,72 @@
+meta {
+  name: Presign Chargeback Report
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{baseUrl}}/payouts/imports/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "filename": "payout-chargebacks-demo.xlsx",
+    "size": 19393
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("payoutsImportUploadUrl", res.getBody().uploadUrl);
+    bru.setVar("payoutsImportKey", res.getBody().key);
+  }
+}
+
+tests {
+  test("returns 201", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("signs a PUT under the agency's payout-chargebacks prefix", function () {
+    const body = res.getBody();
+    expect(body.key).to.match(/^agencies\/[a-f0-9]{24}\/payout-chargebacks\//);
+    expect(body.requiredHeaders["Content-Type"]).to.equal(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+  });
+}
+
+docs {
+  # POST /payouts/imports/presign — sign the chargeback report upload (PAC-180)
+
+  Step 1 of 3: presign → PUT the bytes to storage → `Create Chargeback Import`.
+
+  **Module** — `payouts`. **Permission** — `agency:payouts:admin` (every
+  import route, reads included: a report spans branches). Branch header not
+  read.
+
+  ## Body
+  | Field | |
+  |---|---|
+  | `filename` | `.xlsx` or `.csv` (the agency's sheet exported as CSV is fine) |
+  | `size` | bytes, 1 – 10 MiB (`MAX_PAYOUT_IMPORT_FILE_BYTES`) |
+
+  ## Response 201
+  `{ key, uploadUrl, requiredHeaders: { "Content-Type" }, expiresIn }` — the
+  key is `agencies/<agencyId>/payout-chargebacks/<year>/<uuid>-<name>`; the
+  content type is the spreadsheet's or `text/csv`, by extension.
+
+  ## Errors
+  400 not .xlsx / .csv, empty or over 10 MiB · 403 without
+  `agency:payouts:admin` (branch managers included).
+
+  ⚠ The size (**19393**) is the fixture's; regenerating
+  `fixtures/payout-chargebacks-demo.xlsx` means updating this and `Create
+  Chargeback Import`.
+}

@@ -7,6 +7,12 @@ import { TenantRecord } from '../../common/schemas/tenant-record.schema';
 
 export type ChargebackDocument = HydratedDocument<Chargeback>;
 
+/** The reasons whose row may name no policy (see `policyId`). */
+const POLICYLESS_REASONS: readonly ChargebackReason[] = [
+  'carrier_statement',
+  'manual',
+];
+
 /**
  * One chargeback event — commission the agency gives back because a policy did
  * not stay on the books.
@@ -15,11 +21,12 @@ export type ChargebackDocument = HydratedDocument<Chargeback>;
  * the amount, the window verdict and the dates are all stamped at the moment of
  * cancellation, so a later correction to a deal's sold date cannot silently
  * rewrite what a producer was charged three months ago. Reversing a row means
- * writing the reversal, not deleting the row — which is also what makes the
- * ledger reconcilable against a carrier statement when PAC-123 lands.
+ * writing the reversal, not deleting the row.
  *
- * See `domain/chargeback.ts` for why this exists at all ahead of that epic, and
- * for how it differs from ApexReports' per-diem model.
+ * Rows come from the app (cancel rewrite, cancellation), from the chargeback
+ * report the owner imports on the Payouts page (PAC-180, `source:
+ * 'carrier_statement'`) and, with PAC-182, from a manager's line on a
+ * statement (`reason: 'manual'`). See `domain/chargeback.ts`.
  */
 @Schema({ timestamps: true, collection: 'chargebacks' })
 export class Chargeback extends TenantRecord {
@@ -28,9 +35,27 @@ export class Chargeback extends TenantRecord {
    *
    * Indexed because the policy page asks "what did this cost?" — one lookup by
    * policy is the only per-record read path.
+   *
+   * `null` only for a chargeback-report line whose policy number the app does
+   * not hold (PAC-180) — the report still says who to charge and how much —
+   * and, with PAC-182, a manager's manual line. The app's own rows (a cancel
+   * rewrite, a cancellation) always name their policy, so it stays required
+   * for them: a writer that forgot it fails here instead of saving a row the
+   * policy page and the rewrite index can never find.
    */
-  @Prop({ type: ObjectIdType, ref: 'Policy', required: true, index: true })
-  policyId: Types.ObjectId;
+  @Prop({
+    type: ObjectIdType,
+    ref: 'Policy',
+    default: null,
+    index: true,
+    required: [
+      function (this: { reason?: ChargebackReason }) {
+        return !POLICYLESS_REASONS.includes(this.reason as ChargebackReason);
+      },
+      'An app chargeback must name its policy.',
+    ],
+  })
+  policyId: Types.ObjectId | null;
 
   /** Denormalized so a ledger row renders without loading a dead policy. */
   @Prop({ trim: true })
@@ -113,6 +138,35 @@ export class Chargeback extends TenantRecord {
   /** The sold date the window was measured from, frozen for an auditor. */
   @Prop({ type: Date, default: null })
   soldDate: Date | null;
+
+  /**
+   * The carrier as the chargeback report gives it (PAC-180): the policy's
+   * when the app holds it, else the report's. Null on the app's own rows,
+   * whose carrier is the policy's.
+   */
+  @Prop({ type: String, trim: true, default: null })
+  carrier: string | null;
+
+  /** The customer as the report names them (PAC-180); null on app rows. */
+  @Prop({ type: String, trim: true, default: null })
+  customerName: string | null;
+
+  /**
+   * The pay month the row counts in, `YYYY-MM` — set on report rows (the month
+   * the owner imported it for) and manual ones. Null on the app's rows, which
+   * count in the month of `occurredAt`. A statement reads
+   * `statementMonth = month OR (statementMonth = null AND occurredAt in month)`.
+   */
+  @Prop({ type: String, default: null })
+  statementMonth: string | null;
+
+  /** The chargeback-report import that wrote it (PAC-180). */
+  @Prop({ type: ObjectIdType, ref: 'ChargebackImport', default: null })
+  importId: Types.ObjectId | null;
+
+  /** The statement a manager's manual line belongs to (PAC-182). */
+  @Prop({ type: ObjectIdType, ref: 'PayStatement', default: null })
+  statementId: Types.ObjectId | null;
 }
 
 export const ChargebackSchema = SchemaFactory.createForClass(Chargeback);
@@ -127,6 +181,12 @@ export const ChargebackSchema = SchemaFactory.createForClass(Chargeback);
 ChargebackSchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });
 
 /**
+ * A statement's read of the rows that count by pay month (report and manual
+ * lines), beside the `occurredAt` index above for the app's own.
+ */
+ChargebackSchema.index({ agencyId: 1, statementMonth: 1, producerId: 1 });
+
+/**
  * One chargeback per policy per rewrite.
  *
  * The rewrite runs in a transaction and its submission token already guards the
@@ -134,8 +194,9 @@ ChargebackSchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });
  * sent — a double-submitted rewrite would otherwise charge a producer twice for
  * the same cancellation, which is the one error nobody notices until payroll.
  *
- * Partial rather than plain-unique: `reason` will gain values, and a future
- * carrier-statement row for the same policy is a different fact, not a duplicate.
+ * Partial rather than plain-unique: `reason` has gained values, and a
+ * chargeback-report row for the same policy is a different fact, not a
+ * duplicate (the import flags that overlap for the owner instead).
  *
  * `cancellation` (PAC-173 PR 6) is deliberately outside it. One cancellation
  * cannot write two rows — `PoliciesService.applyCancellation` writes the row

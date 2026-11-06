@@ -256,7 +256,15 @@ temperature/aging that aren't first-class in legacy payloads. See
   (`GeneratePayStatementsFn`, claimed on the unique `payoutRuns`
   `{agencyId, month}`) and the owner's Generate; sales are read through the
   Owner dashboard's `linesPrefix`, so the two agree. A statement is a
-  snapshot: recalculating rewrites draft and disputed ones only.
+  snapshot: recalculating rewrites draft and disputed ones only. The carrier
+  chargeback report (PAC-180, `/payouts/imports`, admin only) is read by name
+  (`common/payouts/chargeback-file-reader.ts` — one alias table; the amount is
+  **Prorated Amount**), matched by SOK number or the Producer name weighed
+  against the policy's seller, and committed as `chargebacks` rows with
+  `source: 'carrier_statement'` that count in their `statementMonth`, not the
+  month of their date. ⚠ **A policy is charged back once**: a report line
+  whose policy already has any chargeback (any month, any source) is a
+  duplicate that is never charged, and the commit re-checks the ledger.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**
