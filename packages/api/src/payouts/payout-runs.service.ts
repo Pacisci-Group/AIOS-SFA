@@ -60,6 +60,7 @@ export class PayoutRunsService {
       count: number;
       grossPremium: number;
       netCommission: number;
+      netPay: number;
     }>([
       { $match: { ...statementVisibility(access, branchId), runId } },
       {
@@ -68,6 +69,10 @@ export class PayoutRunsService {
           count: { $sum: 1 },
           grossPremium: { $sum: '$totals.grossPremium' },
           netCommission: { $sum: '$totals.netCommission' },
+          // A statement computed before base pay existed: its net commission.
+          netPay: {
+            $sum: { $ifNull: ['$totals.netPay', '$totals.netCommission'] },
+          },
         },
       },
     ]);

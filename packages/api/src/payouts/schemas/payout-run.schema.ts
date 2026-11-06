@@ -131,6 +131,13 @@ export class PayoutRun {
   @Prop({ type: Object, default: null })
   salespersonOfMonth: PayoutRunSalespersonOfMonth | null;
 
+  /**
+   * Producer of the Year, on December's run only (`null` otherwise): the
+   * year's top compliant producer. Same shape as Salesperson of the Month.
+   */
+  @Prop({ type: Object, default: null })
+  producerOfYear: PayoutRunSalespersonOfMonth | null;
+
   @Prop({ type: [String], default: [] })
   warnings: string[];
 

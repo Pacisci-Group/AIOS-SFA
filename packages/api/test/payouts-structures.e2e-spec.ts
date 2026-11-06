@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import {
   ANY_CARRIER,
+  DEFAULT_PRODUCER_OF_YEAR,
   DEFAULT_SALESPERSON_OF_MONTH,
   DEFAULT_TEAM_BONUS,
   MAX_PAYOUT_AMOUNT,
@@ -43,6 +44,13 @@ import {
  * members). A person is on one structure at most; nobody below
  * `agency:payouts:admin` touches any of it — the Branch Manager included.
  */
+/** A flat rate as the API serves it: no steps (2026 comp plans). */
+const flat = <T extends object>(rule: T) => ({
+  ...rule,
+  stepBasis: 'premium',
+  steps: [],
+});
+
 describe('Payouts — settings and structures (e2e)', () => {
   let app: INestApplication<App>;
   let seed: TestSeedContext;
@@ -199,6 +207,7 @@ describe('Payouts — settings and structures (e2e)', () => {
       expect(body).toEqual({
         teamBonus: DEFAULT_TEAM_BONUS,
         salespersonOfMonth: DEFAULT_SALESPERSON_OF_MONTH,
+        producerOfYear: DEFAULT_PRODUCER_OF_YEAR,
       });
     });
 
@@ -364,10 +373,12 @@ describe('Payouts — settings and structures (e2e)', () => {
 
       expect(body.name).toBe('Producers');
       expect(body.status).toBe('active');
-      expect(body.rules).toEqual([
-        { carrier: 'Allstate', ratePercent: 10, minBundleRatePercent: null },
-        { carrier: ANY_CARRIER, ratePercent: 5, minBundleRatePercent: null },
-      ]);
+      expect(body.rules).toEqual(
+        [
+          { carrier: 'Allstate', ratePercent: 10, minBundleRatePercent: null },
+          { carrier: ANY_CARRIER, ratePercent: 5, minBundleRatePercent: null },
+        ].map(flat),
+      );
       expect(body.individualTiers.map((t) => t.thresholdPremium)).toEqual([
         25_000, 50_000,
       ]);
@@ -449,7 +460,11 @@ describe('Payouts — settings and structures (e2e)', () => {
       ).body as PaymentStructureView;
       expect(updated.name).toBe('B renamed');
       expect(updated.rules).toEqual([
-        { carrier: 'Allstate', ratePercent: 12.5, minBundleRatePercent: null },
+        flat({
+          carrier: 'Allstate',
+          ratePercent: 12.5,
+          minBundleRatePercent: null,
+        }),
       ]);
       expect(updated.memberCount).toBe(2);
       expect(updated.members.map((m) => m.id).sort()).toEqual(
@@ -703,10 +718,12 @@ describe('Payouts — settings and structures (e2e)', () => {
       ).body as PaymentStructureView;
       expect(created.tiersStackable).toBe(true);
       // A rule sent without a minimum reads back as `null`.
-      expect(created.rules).toEqual([
-        { carrier: 'Allstate', ratePercent: 10, minBundleRatePercent: 83 },
-        { carrier: ANY_CARRIER, ratePercent: 5, minBundleRatePercent: null },
-      ]);
+      expect(created.rules).toEqual(
+        [
+          { carrier: 'Allstate', ratePercent: 10, minBundleRatePercent: 83 },
+          { carrier: ANY_CARRIER, ratePercent: 5, minBundleRatePercent: null },
+        ].map(flat),
+      );
       expect(await fetchStructure(created.id)).toMatchObject({
         tiersStackable: true,
         rules: created.rules,
@@ -928,10 +945,9 @@ describe('Payouts — settings and structures (e2e)', () => {
       ]);
       // The carrier rates are untouched by the overrides.
       expect(body.rules).toEqual(
-        structureBody().rules.map((rule) => ({
-          ...rule,
-          minBundleRatePercent: null,
-        })),
+        structureBody().rules.map((rule) =>
+          flat({ ...rule, minBundleRatePercent: null }),
+        ),
       );
 
       // Stored by reference only: an ObjectId, never a copy of the name.

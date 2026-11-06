@@ -996,3 +996,127 @@ bytes) with a bracketed reversal line; headless Chrome dark + light: the duplica
 kept charge ("Kept: Cancelled policy · $2,210.50 · Oct 20, 2026 · Pat Producer"), the reversal
 is skipped, Pat's October net $6,250.80 → $6,187.80 as before. Demo data, uploads and servers
 cleaned up afterwards.
+
+---
+
+## As built — 2026 comp plans (6 Nov 2026)
+
+Branch `awaris/pac-176-comp-plans-2026-pay-rules`, cut from the PAC-180 branch
+(#172, 336bc5c); PR base = that branch. David's pay-plan documents (Inside
+Sales Commission Update 2026, 2026 Sales Compensation Plan, Client Relations
+Manager, Life Specialist 2026, Office Manager 2025) were compared with the
+build; the gaps and the owner's answers are on the PAC-176 epic, "Comp plans".
+
+**Owner's decisions (6 Nov).** The 2026 plans take effect; the bundle stays
+"a sale with 2+ policies" (not the document's auto + home); the 80/20 pool
+split stays; **base pay is on the statement**; everything else as the
+documents say (e.g. the Office Manager's 1% on all office premium).
+
+### Model (`@sfa/shared` `domain/payouts.ts`, "2026 comp plans")
+
+Every part is optional on a structure; a structure without them pays exactly
+as before (the 29 pre-existing engine tests are unchanged).
+
+| Part | Shape | Plan |
+|---|---|---|
+| Stepped rate | `RateRule.stepBasis: premium \| retention`, `steps[] { threshold, ratePercent, bonusAmount, minCompliancePercent, minBundleRatePercent }` | Inside 8% → 10% from $50,001; Outside 10/12/15% (15% gated: 95% compliance, 83% bundles); CRM 5/6/7.5% + $500 by retention |
+| Tier gate | `BonusTier.minCompliancePercent` | Inside $1,500 at $100,000 needs good standing |
+| Base pay | `basePay` | Inside $2,500; CRM, Life, OM $4,000 |
+| Stipend | `stipendAmounts[]` + `memberStarts[] { userId, startMonth }` | Outside "Launch Pad" 2,500 / 2,000 / 1,500 |
+| Compliance floor | `complianceFloor { minimumPercent, reductionPercent }` | below 85%: no SOM, hat trick, team or tier bonuses, base rates, −10% |
+| Overrides | `overrides[] { basis: agency \| lead_source, leadSourceId, carrier, ratePercent }` | OM 1% of all office premium; Outside 1% of overflow sold by others |
+| Agency-premium tiers | `agencyTiers[]` + `agencyTiersCarrier` | OM production bonus on Allstate premium |
+| Team requirements | `teamRequirements { soldLogWithinDays, meetingAttendance }` | CRM: Sold Log within 1 day + attendance |
+| Referral rule | `referralRule { minimum, shortfallDeduction, bonusThreshold, bonusAmount }` | CRM 15 / −$500, 40 / +$500 |
+| Chargeback window | `chargebackWindowMonths` | CRM: six months |
+| Producer of the Year | agency setting `producerOfYear { enabled, bonusAmount, minCompliantMonths, minCompliancePercent }` | $2,500, compliant 9 of 12 months |
+
+**Entered figures** (`StatementInputs` on each statement): compliance rate,
+retention, valid life referrals, meeting attendance — the app holds none of
+these. `null` = not entered. **A gate needing a figure is not met until it is
+entered** (pay is never unlocked on a guess); **a penalty applies only to an
+entered figure** (no floor reduction on a blank).
+
+### Engine (`payout-math.ts`)
+
+- `appliedRate(rule, month)`: the highest step reached whose gates are met,
+  else the base; below the floor always the base. Gated-out steps and a
+  missing retention figure become warnings ("Any other carrier: the 15% step
+  at $80,000 is not paid — it needs a 83% bundle rate (this month: 50%)").
+  The bundle gate uses the person's **overall** bundle rate.
+- Lines carry `rateStep`; a lead-source rate still replaces the rule's rate.
+- Chargebacks older than `chargebackWindowMonths` (cancellation month vs pay
+  month) are excluded with a note.
+- Variable pay = net carrier commission + overrides + step bonuses + tiers +
+  agency bonus + team + SOM + hat trick + POY. The floor's reduction is a
+  share of it (only when positive). Referral ± and the manager's adjustments
+  come after; base pay and stipend are never reduced.
+  `netPay = basePay + stipend + netCommission`.
+- `teamBlockReasons` (floor, late Sold Log entries — `Deal.createdAt`'s
+  agency day vs `soldDay` — and attendance) zero the person's team share;
+  `complianceBelowFloor` takes them out of Salesperson of the Month.
+- Base pay is left off (with a warning) for someone no longer active.
+
+### API
+
+- `paymentStructures` gains sub-schemas for every part (defaults = none;
+  reads still null-guard via `common/payouts/structure-plan.ts`, the one
+  mapper the settings page and the worker share). DTO fields are optional
+  (left out = none). Overrides' lead sources go through the same
+  `assertLeadSources` check as lead-source rates. Start months are kept only
+  for members.
+- `Agency.payouts.producerOfYear`; `PATCH /payouts/settings` takes it.
+- `payStatements.inputs` (Object, null = none entered). New
+  `PATCH /payouts/statements/:id/inputs` (`payouts:write`, scoped; 403
+  `PAYOUT_STATEMENT_OWN_INPUTS` on one's own without the admin permission;
+  409 once sent) saves the four figures whole and **recomputes the one
+  statement** against the month's stored split (decision 6 of #171); when the
+  person's team or SOM eligibility changed, the statement says to
+  recalculate the month. A month recalculation reads every statement's
+  figures before splitting the pool and choosing SOM / POY.
+- `generateRun` loads the agency's sales by seller × source × carrier
+  (`loadAgencySales`) for overrides and agency tiers; December runs pick
+  Producer of the Year from `grossByProducer` over the calendar year and the
+  year's statements' entered compliance (`run.producerOfYear`; `null` other
+  months).
+- Run totals gain `netPay` (`$ifNull` to net commission for old statements).
+- No migration: every stored field is new and optional.
+
+### Not built (needs sales-pipeline data the app does not record)
+
+- **Life Specialist**: term vs permanent (one "Life" policy type),
+  issued-and-paid date and annualized premium, a life-only bonus table, the
+  yearly $15,000 milestone, chargebacks clawing back bonuses.
+- **Contest premium** excluded from totals (needs a flag on the sale).
+- The CRM's yearly profit bonus is a manual adjustment (PAC-182).
+
+### Verification
+
+shared 465 tests (engine 46: 17 new plan scenarios; validators 4 new);
+API unit 1,636; API tsc at the 24-error baseline; eslint clean on payouts;
+e2e `payouts-comp-plans` 17 (new) + structures / run / import / worker /
+onboarding — 127 in all; Bruno Payouts 50/50 (98 tests, 3 new requests).
+Web: tsc and `npm run lint` clean (web files keep prettier's defaults —
+double quotes; only `packages/api/.prettierrc` is single-quoted). Headless
+Chrome on the demo agency, light and dark: Settings → Payouts (Producer of
+the Year card, structure summaries), the editor's three steps with every new
+part, the Payouts table, and a statement — entering a compliance rate from
+the "Entered figures" card saved and recalculated it; saving the structure
+from the editor changed nothing but `updatedAt` (lossless round trip). The
+check structure was archived and the settings restored afterwards.
+
+### Web (`packages/web/src/features/payouts/`)
+
+- Editor step 1 "Commission rates": per rate "Step up the rate" (basis,
+  steps with optional bonus and gates), "Overrides", "Chargebacks" window.
+- Step 2 "Pay and bonuses": base pay + stipend months, tier compliance gate,
+  agency premium bonus, team requirements (when the structure shares the
+  pool), life referrals, compliance floor.
+- Step 3 "People": a start month per member while the stipend has months.
+- Settings: Producer of the Year card; structure rows summarise the parts.
+- Statement: `StatementInputsCard` ("Entered figures", only the needed
+  ones; editable with `payouts:write` on a draft or disputed statement, not
+  one's own without the admin permission); the breakdown's new lines, notes
+  and the **Net pay** banner; "10% · step 1" on carrier lines. Tables, My
+  Pay and the run summary show net pay; the run summary names Producer of
+  the Year in December.

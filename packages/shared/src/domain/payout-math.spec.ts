@@ -17,10 +17,25 @@ import {
 import {
   ANY_CARRIER,
   DEFAULT_TEAM_BONUS,
+  DEFAULT_TEAM_REQUIREMENTS,
+  EMPTY_STATEMENT_INPUTS,
   PAYOUT_NO_CARRIER,
   payoutPoolFor,
   type TeamBonusSettings,
 } from './payouts';
+
+/** The 2026 comp-plan parts, all off: a structure that pays as before. */
+const PLAN_OFF = {
+  basePay: 0,
+  stipendAmounts: [],
+  complianceFloor: null,
+  overrides: [],
+  agencyTiers: [],
+  agencyTiersCarrier: ANY_CARRIER,
+  teamRequirements: DEFAULT_TEAM_REQUIREMENTS,
+  referralRule: null,
+  chargebackWindowMonths: null,
+} satisfies Partial<StatementRules>;
 
 /** `leadSources` ids, as the API stores them. */
 const JYA = '6ab279758bded56c719a429b';
@@ -49,6 +64,7 @@ const STRUCTURE: StatementRules = {
   ],
   tiersStackable: false,
   teamBonusEligible: true,
+  ...PLAN_OFF,
 };
 
 let nextId = 0;
@@ -110,6 +126,13 @@ function input(
   overrides: Partial<ComputeStatementInput> = {},
 ): ComputeStatementInput {
   return {
+    month: '2026-10',
+    userId: 'user-1',
+    inputs: EMPTY_STATEMENT_INPUTS,
+    startMonth: null,
+    basePayApplies: true,
+    agencySales: [],
+    producerOfYear: { enabled: false, bonusAmount: 0, winner: false },
     structure: STRUCTURE,
     sales: [],
     chargebacks: [],
@@ -820,5 +843,494 @@ describe('salespersonOfMonthWinners', () => {
       topGrossPremium: null,
       winnerIds: [],
     });
+  });
+});
+
+// ── The 2026 comp plans (6 Nov 2026) ────────────────────────────────────
+
+/** One sale of `premium` on `carrier`, with `policies` policies. */
+function bigSale(
+  day: string,
+  premium: number,
+  options: {
+    carrier?: string;
+    policies?: number;
+    enteredDay?: string;
+    leadSourceId?: string | null;
+  } = {},
+): PayoutSale {
+  const policies = options.policies ?? 1;
+  const each = premium / policies;
+  return {
+    ...sale(
+      day,
+      options.leadSourceId ?? null,
+      Array.from({ length: policies }, () => [
+        options.carrier ?? 'Allstate',
+        'Auto',
+        each,
+      ]),
+    ),
+    enteredDay: options.enteredDay ?? day,
+  };
+}
+
+/** Inside Sales 2026: $2,500 base, 8% / 10% past $50,000, $1,500 at $100,000. */
+const INSIDE: StatementRules = {
+  ...STRUCTURE,
+  rules: [
+    {
+      carrier: ANY_CARRIER,
+      ratePercent: 8,
+      minBundleRatePercent: null,
+      stepBasis: 'premium',
+      steps: [
+        {
+          threshold: 50_001,
+          ratePercent: 10,
+          bonusAmount: 0,
+          minCompliancePercent: null,
+          minBundleRatePercent: null,
+        },
+      ],
+    },
+  ],
+  leadSourceRules: [],
+  hatTrick: { enabled: false, dealsPerDay: 3, bonusAmount: 0 },
+  individualTiers: [
+    { thresholdPremium: 100_000, bonusAmount: 1500, minCompliancePercent: 95 },
+  ],
+  basePay: 2500,
+};
+
+/** Outside Sales 2026: 10% / 12% / 15%, the 15% gated on compliance and bundles. */
+const OUTSIDE: StatementRules = {
+  ...STRUCTURE,
+  rules: [
+    {
+      carrier: ANY_CARRIER,
+      ratePercent: 10,
+      minBundleRatePercent: null,
+      stepBasis: 'premium',
+      steps: [
+        {
+          threshold: 50_000,
+          ratePercent: 12,
+          bonusAmount: 0,
+          minCompliancePercent: null,
+          minBundleRatePercent: null,
+        },
+        {
+          threshold: 80_000,
+          ratePercent: 15,
+          bonusAmount: 0,
+          minCompliancePercent: 95,
+          minBundleRatePercent: 83,
+        },
+      ],
+    },
+  ],
+  leadSourceRules: [],
+  individualTiers: [],
+  stipendAmounts: [2500, 2000, 1500],
+};
+
+describe('computeStatement — 2026 comp plans', () => {
+  it('pays Inside Sales 8% on all of a $45,000 month, plus base pay', () => {
+    const result = computeStatement(
+      input({ structure: INSIDE, sales: [bigSale('2026-10-02', 45_000)] }),
+    );
+    expect(result.totals.grossCommission).toBe(3600);
+    expect(result.totals.basePay).toBe(2500);
+    expect(result.totals.netCommission).toBe(3600);
+    expect(result.totals.netPay).toBe(6100);
+    expect(result.premiumLines[0].rateStep).toBeNull();
+  });
+
+  it('pays 10% on all of a $76,000 month — not split-rate', () => {
+    const result = computeStatement(
+      input({ structure: INSIDE, sales: [bigSale('2026-10-02', 76_000)] }),
+    );
+    expect(result.premiumLines[0]).toMatchObject({
+      ratePercent: 10,
+      rateStep: 1,
+      grossCommission: 7600,
+    });
+  });
+
+  it('holds a compliance-gated tier back until the rate is entered', () => {
+    const sales = [bigSale('2026-10-02', 100_000)];
+    const pending = computeStatement(input({ structure: INSIDE, sales }));
+    expect(pending.totals.tierBonus).toBe(0);
+    expect(pending.warnings.join(' ')).toContain('$100,000 tier');
+    expect(pending.warnings.join(' ')).toContain('not entered');
+
+    const met = computeStatement(
+      input({
+        structure: INSIDE,
+        sales,
+        inputs: { ...EMPTY_STATEMENT_INPUTS, compliancePercent: 100 },
+      }),
+    );
+    expect(met.totals.tierBonus).toBe(1500);
+    expect(met.totals.netPay).toBe(2500 + 10_000 + 1500);
+  });
+
+  it("skips Outside's gated 15% step and pays the 12% step below it", () => {
+    const sales = [
+      bigSale('2026-10-02', 60_000),
+      bigSale('2026-10-03', 30_000, { policies: 2 }),
+    ];
+    const result = computeStatement(
+      input({
+        structure: OUTSIDE,
+        sales,
+        inputs: { ...EMPTY_STATEMENT_INPUTS, compliancePercent: 98 },
+      }),
+    );
+    expect(result.premiumLines[0]).toMatchObject({
+      ratePercent: 12,
+      rateStep: 1,
+    });
+    expect(result.warnings.join(' ')).toContain(
+      'the 15% step at $80,000 is not paid — it needs a 83% bundle rate (this month: 50%)',
+    );
+  });
+
+  it('pays the 15% step when compliance and bundles are both met', () => {
+    const result = computeStatement(
+      input({
+        structure: OUTSIDE,
+        sales: [
+          bigSale('2026-10-02', 50_000, { policies: 2 }),
+          bigSale('2026-10-03', 40_000, { policies: 3 }),
+        ],
+        inputs: { ...EMPTY_STATEMENT_INPUTS, compliancePercent: 95 },
+      }),
+    );
+    expect(result.premiumLines[0]).toMatchObject({
+      ratePercent: 15,
+      rateStep: 2,
+    });
+    expect(result.totals.grossCommission).toBe(13_500);
+  });
+
+  it('pays the Launch Pad stipend by month since the start, then none', () => {
+    const at = (month: string, startMonth: string | null) =>
+      computeStatement(input({ structure: OUTSIDE, month, startMonth })).totals
+        .stipend;
+    expect(at('2026-09', '2026-09')).toBe(2500);
+    expect(at('2026-10', '2026-09')).toBe(2000);
+    expect(at('2026-11', '2026-09')).toBe(1500);
+    expect(at('2026-12', '2026-09')).toBe(0);
+    expect(at('2026-08', '2026-09')).toBe(0);
+    const none = computeStatement(
+      input({ structure: OUTSIDE, startMonth: null }),
+    );
+    expect(none.totals.stipend).toBe(0);
+    expect(none.warnings).toContain(
+      'No start month is set, so no stipend is paid.',
+    );
+  });
+
+  it('below the compliance floor: base rates, no bonuses, 10% off variable pay', () => {
+    const structure: StatementRules = {
+      ...OUTSIDE,
+      hatTrick: { enabled: true, dealsPerDay: 2, bonusAmount: 50 },
+      individualTiers: [{ thresholdPremium: 10_000, bonusAmount: 300 }],
+      basePay: 1000,
+      complianceFloor: { minimumPercent: 85, reductionPercent: 10 },
+    };
+    const result = computeStatement(
+      input({
+        structure,
+        startMonth: '2026-10',
+        sales: [bigSale('2026-10-02', 30_000), bigSale('2026-10-02', 30_000)],
+        inputs: { ...EMPTY_STATEMENT_INPUTS, compliancePercent: 80 },
+        team: { ...NO_TEAM, eligible: true, met: true, amount: 400 },
+        salespersonOfMonth: { enabled: true, bonusAmount: 200, winner: true },
+      }),
+    );
+    // $60,000 at the 10% base, not the 12% step.
+    expect(result.premiumLines[0].ratePercent).toBe(10);
+    expect(result.totals).toMatchObject({
+      grossCommission: 6000,
+      hatTrickBonus: 0,
+      tierBonus: 0,
+      teamBonus: 0,
+      somBonus: 0,
+      complianceReduction: -600,
+      netCommission: 5400,
+      basePay: 1000,
+      stipend: 2500,
+      netPay: 8900,
+    });
+    expect(result.bonuses.teamBlocked?.[0]).toContain('below the 85% floor');
+    expect(result.indicators.complianceStatus).toBe('non_compliant');
+  });
+
+  it('applies no floor penalty while the compliance rate is not entered', () => {
+    const structure: StatementRules = {
+      ...OUTSIDE,
+      complianceFloor: { minimumPercent: 85, reductionPercent: 10 },
+    };
+    const result = computeStatement(
+      input({ structure, sales: [bigSale('2026-10-02', 60_000)] }),
+    );
+    expect(result.totals.complianceReduction).toBe(0);
+    expect(result.premiumLines[0].ratePercent).toBe(12);
+  });
+
+  describe('Client Relations Manager', () => {
+    const CRM: StatementRules = {
+      ...STRUCTURE,
+      rules: [
+        {
+          carrier: 'Allstate',
+          ratePercent: 0,
+          minBundleRatePercent: null,
+          stepBasis: 'retention',
+          steps: [83, 86, 90].map((threshold, index) => ({
+            threshold,
+            ratePercent: [5, 6, 7.5][index],
+            bonusAmount: threshold === 90 ? 500 : 0,
+            minCompliancePercent: null,
+            minBundleRatePercent: null,
+          })),
+        },
+      ],
+      leadSourceRules: [],
+      individualTiers: [],
+      basePay: 4000,
+      referralRule: {
+        minimum: 15,
+        shortfallDeduction: 500,
+        bonusThreshold: 40,
+        bonusAmount: 500,
+      },
+      teamRequirements: { soldLogWithinDays: 1, meetingAttendance: true },
+    };
+    const sales = [bigSale('2026-10-02', 10_000)];
+
+    it('pays the retention step reached, and its bonus at 90%', () => {
+      const result = computeStatement(
+        input({
+          structure: CRM,
+          sales,
+          inputs: {
+            ...EMPTY_STATEMENT_INPUTS,
+            retentionPercent: 91,
+            lifeReferrals: 20,
+          },
+        }),
+      );
+      expect(result.premiumLines[0]).toMatchObject({
+        ratePercent: 7.5,
+        rateStep: 3,
+      });
+      expect(result.totals.rateStepBonus).toBe(500);
+      expect(result.totals.netPay).toBe(4000 + 750 + 500);
+    });
+
+    it('pays the base rate while retention is not entered', () => {
+      const result = computeStatement(input({ structure: CRM, sales }));
+      expect(result.premiumLines[0].ratePercent).toBe(0);
+      expect(result.warnings.join(' ')).toContain('retention is not entered');
+    });
+
+    it('deducts $500 under 15 referrals and pays $500 at 40', () => {
+      const at = (lifeReferrals: number | null) =>
+        computeStatement(
+          input({
+            structure: CRM,
+            inputs: { ...EMPTY_STATEMENT_INPUTS, lifeReferrals },
+          }),
+        ).totals.referralAdjustment;
+      expect(at(14)).toBe(-500);
+      expect(at(15)).toBe(0);
+      expect(at(39)).toBe(0);
+      expect(at(40)).toBe(500);
+      expect(at(null)).toBe(0);
+    });
+
+    it('blocks the team share for a late Sold Log entry or no attendance', () => {
+      const team = { ...NO_TEAM, eligible: true, met: true, amount: 300 };
+      const late = computeStatement(
+        input({
+          structure: CRM,
+          team,
+          sales: [bigSale('2026-10-02', 5000, { enteredDay: '2026-10-05' })],
+          inputs: { ...EMPTY_STATEMENT_INPUTS, meetingAttendance: true },
+        }),
+      );
+      expect(late.totals.teamBonus).toBe(0);
+      expect(late.bonuses.teamBlocked).toEqual([
+        '1 sale was entered more than 1 day after the sold date.',
+      ]);
+      const onTime = computeStatement(
+        input({
+          structure: CRM,
+          team,
+          sales: [bigSale('2026-10-02', 5000, { enteredDay: '2026-10-03' })],
+          inputs: { ...EMPTY_STATEMENT_INPUTS, meetingAttendance: true },
+        }),
+      );
+      expect(onTime.totals.teamBonus).toBe(300);
+      const unticked = computeStatement(input({ structure: CRM, team, sales }));
+      expect(unticked.bonuses.teamBlocked).toEqual([
+        'Sales meeting attendance is not entered.',
+      ]);
+    });
+  });
+
+  it("pays the Office Manager 1% of the office's premium and a bonus on Allstate's", () => {
+    const structure: StatementRules = {
+      ...STRUCTURE,
+      rules: [
+        { carrier: ANY_CARRIER, ratePercent: 0, minBundleRatePercent: null },
+      ],
+      leadSourceRules: [],
+      individualTiers: [],
+      basePay: 4000,
+      overrides: [
+        {
+          basis: 'agency',
+          leadSourceId: null,
+          carrier: ANY_CARRIER,
+          ratePercent: 1,
+        },
+      ],
+      agencyTiers: [
+        { thresholdPremium: 200_000, bonusAmount: 2000 },
+        { thresholdPremium: 250_000, bonusAmount: 2500 },
+        { thresholdPremium: 300_000, bonusAmount: 3000 },
+      ],
+      agencyTiersCarrier: 'Allstate',
+    };
+    const result = computeStatement(
+      input({
+        structure,
+        agencySales: [
+          {
+            producerId: 'a',
+            leadSourceId: null,
+            carrier: 'Allstate',
+            premium: 180_000,
+          },
+          {
+            producerId: 'b',
+            leadSourceId: GOOGLE,
+            carrier: 'B4tEH',
+            premium: 80_000,
+          },
+          {
+            producerId: 'b',
+            leadSourceId: null,
+            carrier: 'Progressive',
+            premium: 40_000,
+          },
+        ],
+      }),
+    );
+    expect(result.totals.overrideCommission).toBe(3000);
+    expect(result.bonuses.agency).toMatchObject({
+      carrier: 'Allstate',
+      premium: 260_000,
+      reached: { thresholdPremium: 250_000, bonusAmount: 2500 },
+      amount: 2500,
+    });
+    expect(result.totals.netPay).toBe(4000 + 3000 + 2500);
+  });
+
+  it('pays Outside Sales 1% of overflow other people sold from their lead source', () => {
+    const structure: StatementRules = {
+      ...OUTSIDE,
+      overrides: [
+        {
+          basis: 'lead_source',
+          leadSourceId: JYA,
+          carrier: ANY_CARRIER,
+          ratePercent: 1,
+        },
+      ],
+    };
+    const result = computeStatement(
+      input({
+        structure,
+        userId: 'outside',
+        agencySales: [
+          {
+            producerId: 'inside',
+            leadSourceId: JYA,
+            carrier: 'Allstate',
+            premium: 20_000,
+          },
+          {
+            producerId: 'outside',
+            leadSourceId: JYA,
+            carrier: 'Allstate',
+            premium: 5000,
+          },
+          {
+            producerId: 'inside',
+            leadSourceId: GOOGLE,
+            carrier: 'Allstate',
+            premium: 9000,
+          },
+        ],
+      }),
+    );
+    expect(result.bonuses.overrides?.[0]).toMatchObject({
+      basis: 'lead_source',
+      leadSourceName: 'JYA',
+      premium: 20_000,
+      amount: 200,
+    });
+  });
+
+  it('leaves out a chargeback older than the structure window', () => {
+    const structure: StatementRules = {
+      ...STRUCTURE,
+      chargebackWindowMonths: 6,
+    };
+    const old = {
+      ...chargeback('cb-old', 'Allstate', null, 1000),
+      occurredDay: '2026-03-20',
+    };
+    const recent = {
+      ...chargeback('cb-new', 'Allstate', null, 500),
+      occurredDay: '2026-04-02',
+    };
+    const result = computeStatement(
+      input({ structure, chargebacks: [old, recent] }),
+    );
+    const byId = new Map(
+      result.chargebacks.map((row) => [row.chargebackId, row]),
+    );
+    expect(byId.get('cb-old')).toMatchObject({
+      excluded: true,
+      excludedNote:
+        'More than 6 months after the cancellation, so it is not charged.',
+    });
+    expect(byId.get('cb-new')?.excluded).toBe(false);
+    expect(result.totals.chargebackTotal).toBe(500);
+  });
+
+  it('leaves base pay off for someone no longer active, and says so', () => {
+    const result = computeStatement(
+      input({ structure: INSIDE, basePayApplies: false }),
+    );
+    expect(result.totals.basePay).toBe(0);
+    expect(result.warnings.join(' ')).toContain('Base pay is left off');
+  });
+
+  it('pays Producer of the Year to the winner', () => {
+    const result = computeStatement(
+      input({
+        producerOfYear: { enabled: true, bonusAmount: 2500, winner: true },
+      }),
+    );
+    expect(result.totals.producerOfYearBonus).toBe(2500);
+    expect(result.totals.netPay).toBe(2500);
   });
 });

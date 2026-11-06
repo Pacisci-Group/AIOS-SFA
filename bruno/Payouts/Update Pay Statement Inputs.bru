@@ -1,0 +1,92 @@
+meta {
+  name: Update Pay Statement Inputs
+  type: http
+  seq: 48
+}
+
+patch {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/inputs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "compliancePercent": 97,
+    "retentionPercent": null,
+    "lifeReferrals": null,
+    "meetingAttendance": null
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("stores the figures whole and says which the structure reads", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("payoutsStatementId"));
+    expect(body.inputs).to.eql({
+      compliancePercent: 97,
+      retentionPercent: null,
+      lifeReferrals: null,
+      meetingAttendance: null,
+    });
+    expect(body.inputsNeeded).to.have.keys(
+      "compliance",
+      "retention",
+      "referrals",
+      "attendance",
+    );
+    expect(body.indicators.compliancePercent).to.equal(97);
+  });
+
+  test("totals carry net pay", function () {
+    const totals = res.getBody().totals;
+    expect(totals.netPay).to.be.a("number");
+    expect(totals.basePay).to.be.a("number");
+  });
+}
+
+docs {
+  # PATCH /payouts/statements/:id/inputs — the figures the manager enters (2026 comp plans)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope (a statement outside it is a `404`). Not on your **own** statement
+  unless you also hold `agency:payouts:admin` — the figures decide your pay.
+
+  The 2026 pay plans depend on figures the app does not hold. The manager
+  enters them on each draft; `null` = not entered. A gate that needs a figure
+  is **not met** until it is entered; a penalty applies only to an entered one.
+
+  | Field | Read by |
+  |---|---|
+  | `compliancePercent` (0–100) | the compliance floor (below it: no Sales of the Month, hat trick, team or tier bonuses, base rates, a % off variable pay), compliance-gated rate steps and tiers, Producer of the Year |
+  | `retentionPercent` (0–100) | rate steps measured on retention (Client Relations Manager) |
+  | `lifeReferrals` (whole, 0–1000) | the referral rule (shortfall deduction / bonus) |
+  | `meetingAttendance` (boolean) | the team bonus's attendance requirement |
+
+  The body is all four, whole. The statement is then recalculated exactly as
+  **Recalculate Pay Statement** does — against the month's stored team split
+  and Salesperson of the Month. When the figures change who shares the pool
+  or can win the month, the warnings say to recalculate the month (**Generate
+  Payout Run**), which keeps every statement's figures.
+
+  `inputsNeeded` on the response says which figures this statement's
+  structure reads, so the page asks only for those.
+
+  **Response `200`** — the statement, as **Get Pay Statement**.
+
+  **Errors** — `400` a figure out of range; `403` without `payouts:write`, or
+  `PAYOUT_STATEMENT_OWN_INPUTS` on your own statement; `404` outside your
+  scope; `409` `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted.
+}

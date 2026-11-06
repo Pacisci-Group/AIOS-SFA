@@ -1,4 +1,14 @@
+import { PAYOUT_STATEMENT_OWN_INPUTS } from "@sfa/shared";
 import { ApiError } from "@/lib/api-client";
+
+/**
+ * The page's own words for a refusal whose cause the person may not see from
+ * the page. Keyed by `code`, never by the API's message.
+ */
+const CODE_MESSAGES: Record<string, string> = {
+  [PAYOUT_STATEMENT_OWN_INPUTS]:
+    "Someone else enters the figures on your own statement — they decide your pay.",
+};
 
 /**
  * What to tell someone when a Payouts request fails.
@@ -9,6 +19,8 @@ import { ApiError } from "@/lib/api-client";
  * but when it happens the rule is what the person needs to read.
  */
 export function payoutErrorMessage(error: unknown): string {
+  const code = payoutErrorCode(error);
+  if (code && CODE_MESSAGES[code]) return CODE_MESSAGES[code];
   if (error instanceof ApiError) {
     const body = error.body as
       | {

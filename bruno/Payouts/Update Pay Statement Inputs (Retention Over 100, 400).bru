@@ -1,0 +1,41 @@
+meta {
+  name: Update Pay Statement Inputs (Retention Over 100, 400)
+  type: http
+  seq: 49
+}
+
+patch {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/inputs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "compliancePercent": null,
+    "retentionPercent": 120,
+    "lifeReferrals": null,
+    "meetingAttendance": null
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH /payouts/statements/:id/inputs — a percentage over 100 is refused
+
+  Retention and the compliance rate are 0–100 with at most two decimals;
+  life referrals a whole number. See **Update Pay Statement Inputs**.
+}

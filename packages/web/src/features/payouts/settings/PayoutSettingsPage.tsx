@@ -5,6 +5,7 @@ import { Banknote, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import {
   ANY_CARRIER,
+  DEFAULT_PRODUCER_OF_YEAR,
   leadSourceRuleCarrierLabel,
   rateRuleCarrierLabel,
   type PaymentStructureSummary,
@@ -34,13 +35,17 @@ import {
 } from "@/lib/payouts-api";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { payoutErrorMessage } from "../payout-errors";
-import { SalespersonOfMonthForm, TeamBonusForm } from "./payout-settings-forms";
+import {
+  ProducerOfYearForm,
+  SalespersonOfMonthForm,
+  TeamBonusForm,
+} from "./payout-settings-forms";
 
 /**
  * Workspace Settings → Payouts (PAC-177): how the agency pays its people.
  *
- * Two agency-wide bonuses (the team pool, Salesperson of the Month) and the
- * payment structures — the per-person rules. All of it is
+ * Three agency-wide bonuses (the team pool, Salesperson of the Month,
+ * Producer of the Year) and the payment structures — the per-person rules. All of it is
  * `agency:payouts:admin`; the route and the API both enforce it.
  */
 export default function PayoutSettingsPage() {
@@ -74,12 +79,14 @@ function SettingsCards() {
    */
   const [teamSeed, setTeamSeed] = useState(0);
   const [somSeed, setSomSeed] = useState(0);
+  const [poySeed, setPoySeed] = useState(0);
 
   if (query.isPending) {
     return (
       <>
         <Skeleton className="h-80 w-full rounded-xl" />
         <Skeleton className="h-48 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
       </>
     );
   }
@@ -111,6 +118,16 @@ function SettingsCards() {
           key={`som-${somSeed}`}
           initial={query.data.salespersonOfMonth}
           onSaved={() => setSomSeed((previous) => previous + 1)}
+        />
+      </DetailCard>
+      <DetailCard
+        title="Producer of the Year"
+        subheading="A December bonus for the year's top producer who kept up their compliance."
+      >
+        <ProducerOfYearForm
+          key={`poy-${poySeed}`}
+          initial={query.data.producerOfYear ?? DEFAULT_PRODUCER_OF_YEAR}
+          onSaved={() => setPoySeed((previous) => previous + 1)}
         />
       </DetailCard>
     </>
@@ -224,9 +241,22 @@ function StructureRow({
   structure: PaymentStructureSummary;
   onArchive: () => void;
 }) {
+  // "Allstate 8% → 10% from $50,001 (min. bundle 83%)" — a stepped rate
+  // lists its steps after the base.
   const rates = structure.rules
     .map((rule) => {
-      const rate = `${rateRuleCarrierLabel(rule.carrier)} ${formatPercent(rule.ratePercent)}`;
+      const steps = (rule.steps ?? []).map(
+        (step) =>
+          `${formatPercent(step.ratePercent)} ${
+            rule.stepBasis === "retention"
+              ? `at ${formatPercent(step.threshold)} retention`
+              : `from ${formatMoney(step.threshold)}`
+          }`,
+      );
+      const rate = [
+        `${rateRuleCarrierLabel(rule.carrier)} ${formatPercent(rule.ratePercent)}`,
+        ...steps,
+      ].join(" → ");
       return rule.minBundleRatePercent === null ||
         rule.minBundleRatePercent === undefined
         ? rate
@@ -245,14 +275,47 @@ function StructureRow({
       return `${source}${carrier} ${formatPercent(rule.ratePercent)}`;
     })
     .join(" · ");
+  // "1% of agency premium on Allstate · 1% of others' OVF sales".
+  const payOnOthers = (structure.overrides ?? [])
+    .map((rule) =>
+      rule.basis === "agency"
+        ? `${formatPercent(rule.ratePercent)} of agency premium${rule.carrier === ANY_CARRIER ? "" : ` on ${leadSourceRuleCarrierLabel(rule.carrier)}`}`
+        : `${formatPercent(rule.ratePercent)} of others' ${rule.leadSourceName || NOT_AVAILABLE} sales${rule.carrier === ANY_CARRIER ? "" : ` on ${leadSourceRuleCarrierLabel(rule.carrier)}`}`,
+    )
+    .join(" · ");
+  const stipendMonths = structure.stipendAmounts?.length ?? 0;
+  const agencyTiers = structure.agencyTiers?.length ?? 0;
   const bonuses = [
+    structure.basePay ? `Base ${formatMoney(structure.basePay)}` : null,
+    stipendMonths
+      ? `Stipend ${stipendMonths} ${stipendMonths === 1 ? "month" : "months"}`
+      : null,
     structure.hatTrick.enabled
       ? `Hat trick ${structure.hatTrick.dealsPerDay} sales → ${formatMoney(structure.hatTrick.bonusAmount)}`
       : null,
     structure.individualTiers.length
       ? `${structure.individualTiers.length} monthly ${structure.individualTiers.length === 1 ? "tier" : "tiers"}${structure.tiersStackable && structure.individualTiers.length > 1 ? ", stacking" : ""}`
       : null,
+    agencyTiers
+      ? `Agency premium bonus${structure.agencyTiersCarrier && structure.agencyTiersCarrier !== ANY_CARRIER ? ` on ${leadSourceRuleCarrierLabel(structure.agencyTiersCarrier)}` : ""}`
+      : null,
     structure.teamBonusEligible ? "Team bonus" : null,
+    structure.referralRule ? "Life referrals" : null,
+  ].filter(Boolean);
+  const conditions = [
+    structure.complianceFloor
+      ? `Compliance floor ${formatPercent(structure.complianceFloor.minimumPercent)}`
+      : null,
+    structure.teamBonusEligible &&
+    structure.teamRequirements?.soldLogWithinDays != null
+      ? `Sales entered within ${structure.teamRequirements.soldLogWithinDays} ${structure.teamRequirements.soldLogWithinDays === 1 ? "day" : "days"}`
+      : null,
+    structure.teamBonusEligible && structure.teamRequirements?.meetingAttendance
+      ? "Sales meetings"
+      : null,
+    structure.chargebackWindowMonths
+      ? `Chargebacks within ${structure.chargebackWindowMonths} ${structure.chargebackWindowMonths === 1 ? "month" : "months"}`
+      : null,
   ].filter(Boolean);
 
   return (
@@ -270,9 +333,19 @@ function StructureRow({
             <span className="text-foreground">Lead sources:</span> {overrides}
           </p>
         ) : null}
+        {payOnOthers ? (
+          <p className="text-sm text-muted-foreground">
+            <span className="text-foreground">Overrides:</span> {payOnOthers}
+          </p>
+        ) : null}
         <p className="text-xs text-muted-foreground">
           {bonuses.length ? bonuses.join(" · ") : "No bonuses"}
         </p>
+        {conditions.length ? (
+          <p className="text-xs text-muted-foreground">
+            {conditions.join(" · ")}
+          </p>
+        ) : null}
       </div>
       <p className="text-sm text-muted-foreground">
         {structure.memberCount === 1

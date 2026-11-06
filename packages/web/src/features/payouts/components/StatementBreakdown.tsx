@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
-import type { PayStatementView } from "@sfa/shared";
+import {
+  ANY_CARRIER,
+  rateRuleCarrierLabel,
+  statementNetPay,
+  type PayStatementView,
+} from "@sfa/shared";
 import {
   DataRow,
   DetailCard,
@@ -39,13 +44,31 @@ import {
  * performance indicators, carrier production, the commission summary and
  * the chargeback detail — plus how each bonus was reached, which the PDF has
  * no room for.
+ *
+ * The 2026 comp-plan lines (base pay, stipend, rate steps, overrides, the
+ * agency premium bonus, Producer of the Year, referrals, the compliance
+ * floor) show only when the statement has them: one computed before they
+ * existed has none of those fields, and its net pay is its net commission.
  */
 export function StatementBreakdown({
   statement,
+  figures,
 }: {
   statement: PayStatementView;
+  /** The entered-figures card, shown under the warnings it answers. */
+  figures?: ReactNode;
 }) {
   const s = statement;
+  const t = s.totals;
+  const b = s.bonuses;
+  const belowFloor = b.compliance?.belowFloor ?? false;
+  const fixedPay = (t.basePay ?? 0) + (t.stipend ?? 0);
+  const referral = t.referralAdjustment ?? 0;
+  const floorPercent = b.compliance?.floor?.minimumPercent;
+  const stepped = s.structure.rules.some((rule) => rule.steps?.length);
+  const steppedLines = s.premiumLines.filter(
+    (line) => line.rateStep !== null && line.rateStep !== undefined,
+  );
   return (
     <div className="space-y-6">
       {s.warnings.length > 0 && (
@@ -68,6 +91,8 @@ export function StatementBreakdown({
           </AlertDescription>
         </Alert>
       )}
+
+      {figures}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <DetailCard title="Statement details">
@@ -137,6 +162,7 @@ export function StatementBreakdown({
                   {complianceLabel(
                     s.indicators.complianceStatus,
                     s.indicators.failedAudits,
+                    belowFloor,
                   )}
                 </span>
               }
@@ -179,6 +205,12 @@ export function StatementBreakdown({
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatPercent(line.ratePercent)}
+                  {line.rateStep !== null && line.rateStep !== undefined && (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · step {line.rateStep}
+                    </span>
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   <div className="flex items-center justify-end gap-1.5">
@@ -238,44 +270,75 @@ export function StatementBreakdown({
           <dl className="space-y-2">
             <SummaryLine
               label="Gross carrier commission"
-              amount={s.totals.grossCommission}
+              amount={t.grossCommission}
             />
-            <SummaryLine label="Tier bonus" amount={s.totals.tierBonus} />
-            <SummaryLine label="Team bonus" amount={s.totals.teamBonus} />
+            <OptionalLine label="Rate step bonus" amount={t.rateStepBonus} />
+            <OptionalLine
+              label="Override commission"
+              amount={t.overrideCommission}
+            />
+            <SummaryLine label="Tier bonus" amount={t.tierBonus} />
+            <OptionalLine label="Agency premium bonus" amount={t.agencyBonus} />
+            <SummaryLine label="Team bonus" amount={t.teamBonus} />
             <SummaryLine
               label="Salesperson of the Month bonus"
-              amount={s.totals.somBonus}
+              amount={t.somBonus}
             />
-            <SummaryLine
-              label="Hat trick bonus"
-              amount={s.totals.hatTrickBonus}
+            <SummaryLine label="Hat trick bonus" amount={t.hatTrickBonus} />
+            <OptionalLine
+              label="Producer of the Year bonus"
+              amount={t.producerOfYearBonus}
             />
           </dl>
           <dl className="space-y-2">
-            <SummaryLine
-              label="Other bonuses / SPIFFs"
-              amount={s.totals.spiffs}
+            <OptionalLine label="Base pay" amount={t.basePay} />
+            <OptionalLine label="Stipend" amount={t.stipend} />
+            <SummaryLine label="Other bonuses / SPIFFs" amount={t.spiffs} />
+            <OptionalLine
+              label={referral < 0 ? "Referral deduction" : "Referral bonus"}
+              amount={referral}
             />
             <SummaryLine
               label="Compliance adjustment"
-              amount={s.totals.complianceAdjustment}
+              amount={t.complianceAdjustment}
+            />
+            <OptionalLine
+              label={
+                floorPercent === undefined
+                  ? "Compliance reduction"
+                  : `Compliance reduction (below ${formatPercent(floorPercent)})`
+              }
+              amount={t.complianceReduction}
             />
             <SummaryLine
               label="Chargeback commission impact"
-              amount={deduction(s.totals.chargebackImpact)}
+              amount={deduction(t.chargebackImpact)}
             />
             <SummaryLine
               label="Other adjustments"
-              amount={s.totals.otherAdjustments}
+              amount={t.otherAdjustments}
             />
           </dl>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-primary px-4 py-3 text-primary-foreground">
-          <span className="text-sm font-semibold tracking-wide uppercase">
-            Net commission
-          </span>
+          <div>
+            <span className="text-sm font-semibold tracking-wide uppercase">
+              Net pay
+            </span>
+            {fixedPay !== 0 && (
+              <p className="text-xs text-primary-foreground/80 tabular-nums">
+                Net commission {formatMoney(t.netCommission)} +{" "}
+                {[
+                  t.basePay ? `base pay ${formatMoney(t.basePay)}` : null,
+                  t.stipend ? `stipend ${formatMoney(t.stipend)}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" + ")}
+              </p>
+            )}
+          </div>
           <span className="text-2xl font-bold tabular-nums">
-            {formatMoney(s.totals.netCommission)}
+            {formatMoney(statementNetPay(t))}
           </span>
         </div>
       </DetailCard>
@@ -360,54 +423,153 @@ export function StatementBreakdown({
 
       <DetailCard title="How the bonuses were reached">
         <div className="grid gap-4 md:grid-cols-2">
-          <BonusNote title="Hat trick" amount={s.bonuses.hatTrick.amount}>
-            {!s.bonuses.hatTrick.enabled
+          {stepped && (
+            <BonusNote title="Rate steps" amount={t.rateStepBonus ?? 0}>
+              {belowFloor
+                ? "Below the compliance floor, so every rate is paid at its base."
+                : steppedLines.length === 0
+                  ? "No step reached, so the base rates were paid."
+                  : `${steppedLines
+                      .map(
+                        (line) =>
+                          `${premiumLineLabel(line)} at step ${line.rateStep} (${formatPercent(line.ratePercent)} on all its premium)`,
+                      )
+                      .join(", ")}.${(b.rateSteps ?? [])
+                      .map(
+                        (step) =>
+                          ` ${step.carrier}, step ${step.step}: a ${formatMoney(step.bonusAmount)} bonus.`,
+                      )
+                      .join("")}`}
+            </BonusNote>
+          )}
+          {(b.overrides?.length ?? 0) > 0 && (
+            <BonusNote title="Overrides" amount={t.overrideCommission ?? 0}>
+              {`${(b.overrides ?? [])
+                .map(
+                  (row) =>
+                    `${formatPercent(row.ratePercent)} of ${formatMoney(row.premium)} ${
+                      row.basis === "agency"
+                        ? "agency premium"
+                        : `others sold from ${row.leadSourceName ?? NOT_AVAILABLE} leads`
+                    }${carrierPhrase(row.carrier)} (${formatMoney(row.amount)})`,
+                )
+                .join("; ")}.`}
+            </BonusNote>
+          )}
+          {b.agency && (
+            <BonusNote title="Agency premium bonus" amount={b.agency.amount}>
+              {`The agency sold ${formatMoney(b.agency.premium)}${carrierPhrase(b.agency.carrier)}, `}
+              {b.agency.reached
+                ? `reaching the ${formatMoney(b.agency.reached.thresholdPremium)} tier.`
+                : "short of the first tier."}
+            </BonusNote>
+          )}
+          <BonusNote title="Hat trick" amount={b.hatTrick.amount}>
+            {!b.hatTrick.enabled
               ? "This structure has no hat trick."
-              : s.bonuses.hatTrick.days.length === 0
-                ? `No day with ${s.bonuses.hatTrick.dealsPerDay} or more sales.`
-                : `${s.bonuses.hatTrick.dealsPerDay}+ sales on ${s.bonuses.hatTrick.days
+              : b.hatTrick.days.length === 0
+                ? `No day with ${b.hatTrick.dealsPerDay} or more sales.`
+                : `${b.hatTrick.dealsPerDay}+ sales on ${b.hatTrick.days
                     .map(formatDay)
                     .join(
                       ", ",
-                    )}, at ${formatMoney(s.bonuses.hatTrick.bonusAmount)} each.`}
+                    )}, at ${formatMoney(b.hatTrick.bonusAmount)} each.${belowFloor ? " Not paid below the compliance floor." : ""}`}
           </BonusNote>
-          <BonusNote title="Monthly tier" amount={s.bonuses.individual.amount}>
-            {s.bonuses.individual.reached.length === 0
-              ? `${formatMoney(s.totals.grossPremium)} sold reached no tier.`
-              : `${formatMoney(s.totals.grossPremium)} sold reached ${s.bonuses.individual.reached
-                  .map(
-                    (tier) =>
-                      `${formatMoney(tier.thresholdPremium)} (${formatMoney(tier.bonusAmount)})`,
-                  )
-                  .join(
-                    " + ",
-                  )}${s.bonuses.individual.stackable ? ", stacking" : ""}.`}
+          <BonusNote title="Monthly tier" amount={b.individual.amount}>
+            {belowFloor
+              ? `${formatMoney(t.grossPremium)} sold. Tiers are not paid below the compliance floor.`
+              : b.individual.reached.length === 0
+                ? `${formatMoney(t.grossPremium)} sold reached no tier.`
+                : `${formatMoney(t.grossPremium)} sold reached ${b.individual.reached
+                    .map(
+                      (tier) =>
+                        `${formatMoney(tier.thresholdPremium)} (${formatMoney(tier.bonusAmount)})`,
+                    )
+                    .join(
+                      " + ",
+                    )}${b.individual.stackable ? ", stacking" : ""}.`}
           </BonusNote>
-          <BonusNote title="Team bonus" amount={s.bonuses.team.amount}>
-            {!s.bonuses.team.eligible
+          <BonusNote title="Team bonus" amount={b.team.amount}>
+            {!b.team.eligible
               ? "This structure does not share the team bonus."
-              : !s.bonuses.team.met
+              : !b.team.met
                 ? "The agency did not reach the first team bonus level."
-                : `A share of the ${POOL_LABELS[s.bonuses.team.pool].toLowerCase()} pool (${formatMoney(
-                    s.bonuses.team.groupPool,
-                  )} of ${formatMoney(s.bonuses.team.poolAmount)}), by ${formatMoney(
-                    s.totals.grossPremium,
-                  )} of the group's ${formatMoney(s.bonuses.team.groupPremium)} sold.`}
+                : b.teamBlocked?.length
+                  ? `No share of the ${POOL_LABELS[b.team.pool].toLowerCase()} pool: ${b.teamBlocked.join(" ")}`
+                  : `A share of the ${POOL_LABELS[b.team.pool].toLowerCase()} pool (${formatMoney(
+                      b.team.groupPool,
+                    )} of ${formatMoney(b.team.poolAmount)}), by ${formatMoney(
+                      t.grossPremium,
+                    )} of the group's ${formatMoney(b.team.groupPremium)} sold.`}
           </BonusNote>
           <BonusNote
             title="Salesperson of the Month"
-            amount={s.bonuses.salespersonOfMonth.amount}
+            amount={b.salespersonOfMonth.amount}
           >
-            {!s.bonuses.salespersonOfMonth.enabled
+            {!b.salespersonOfMonth.enabled
               ? "Salesperson of the Month is off."
-              : s.bonuses.salespersonOfMonth.winner
+              : b.salespersonOfMonth.winner
                 ? "The month's top seller."
-                : "Someone else sold more this month."}
+                : belowFloor
+                  ? "Not paid below the compliance floor."
+                  : "Someone else sold more this month."}
           </BonusNote>
+          {b.producerOfYear?.enabled && (
+            <BonusNote
+              title="Producer of the Year"
+              amount={b.producerOfYear.amount}
+            >
+              {b.producerOfYear.winner
+                ? "The year's top producer who kept up their compliance."
+                : "Not this year's winner."}
+            </BonusNote>
+          )}
+          {b.referrals && (
+            <BonusNote title="Life referrals" amount={b.referrals.amount}>
+              {b.referrals.count === null
+                ? `Not entered yet. The minimum is ${b.referrals.minimum}.`
+                : `${b.referrals.count} valid ${b.referrals.count === 1 ? "referral" : "referrals"}: ${
+                    b.referrals.amount < 0
+                      ? `below the minimum of ${b.referrals.minimum}.`
+                      : b.referrals.amount > 0
+                        ? `${b.referrals.bonusThreshold} or more earns the bonus.`
+                        : `at least the minimum of ${b.referrals.minimum}.`
+                  }`}
+            </BonusNote>
+          )}
+          {b.compliance?.floor && (
+            <BonusNote title="Compliance floor" amount={b.compliance.reduction}>
+              {b.compliance.percent === null
+                ? `The compliance rate is not entered. The floor is ${formatPercent(b.compliance.floor.minimumPercent)}.`
+                : b.compliance.belowFloor
+                  ? `${formatPercent(b.compliance.percent)} is below the ${formatPercent(b.compliance.floor.minimumPercent)} floor: no Salesperson of the Month, hat trick, team or tier bonuses, every rate at its base, and ${formatPercent(b.compliance.floor.reductionPercent)} off variable pay.`
+                  : `${formatPercent(b.compliance.percent)} meets the ${formatPercent(b.compliance.floor.minimumPercent)} floor.`}
+            </BonusNote>
+          )}
         </div>
       </DetailCard>
     </div>
   );
+}
+
+/** " on Allstate", or "" for every carrier — the API labels `*` "Any other carrier". */
+function carrierPhrase(carrier: string): string {
+  return carrier === rateRuleCarrierLabel(ANY_CARRIER) ||
+    carrier === ANY_CARRIER
+    ? ""
+    : ` on ${carrier}`;
+}
+
+/** A comp-plan line: shown only when the statement has it and it is not zero. */
+function OptionalLine({
+  label,
+  amount,
+}: {
+  label: string;
+  amount: number | undefined;
+}) {
+  if (!amount) return null;
+  return <SummaryLine label={label} amount={amount} />;
 }
 
 function SummaryLine({ label, amount }: { label: string; amount: number }) {
@@ -439,7 +601,12 @@ function BonusNote({
     <div className="rounded-lg border border-border p-4">
       <div className="flex items-baseline justify-between gap-2">
         <SectionLabel>{title}</SectionLabel>
-        <span className="text-sm font-semibold tabular-nums">
+        <span
+          className={cn(
+            "text-sm font-semibold tabular-nums",
+            amount < 0 && "text-amber-700 dark:text-amber-500",
+          )}
+        >
           {formatMoney(amount)}
         </span>
       </div>

@@ -3,6 +3,14 @@ import {
   amountError,
   bonusTiersError,
   bundleMinimumFor,
+  chargebackWindowError,
+  memberStartsError,
+  overridesError,
+  referralRuleError,
+  statementInputsError,
+  statementInputsNeeded,
+  stipendError,
+  structurePlanDefaults,
   compareRuleCarriers,
   hatTrickError,
   importRowCounts,
@@ -359,11 +367,13 @@ describe('normalizeRateRules / sortBonusTiers', () => {
         },
         { carrier: 'B4tEH', ratePercent: 10, minBundleRatePercent: 83 },
       ]),
-    ).toEqual([
-      { carrier: 'Allstate', ratePercent: 10, minBundleRatePercent: 83 },
-      { carrier: 'Progressive', ratePercent: 7, minBundleRatePercent: null },
-      { carrier: ANY_CARRIER, ratePercent: 5, minBundleRatePercent: null },
-    ]);
+    ).toEqual(
+      [
+        { carrier: 'Allstate', ratePercent: 10, minBundleRatePercent: 83 },
+        { carrier: 'Progressive', ratePercent: 7, minBundleRatePercent: null },
+        { carrier: ANY_CARRIER, ratePercent: 5, minBundleRatePercent: null },
+      ].map((rule) => ({ ...rule, stepBasis: 'premium', steps: [] })),
+    );
   });
 
   it('sorts tiers by threshold', () => {
@@ -675,5 +685,153 @@ describe('importRowCounts', () => {
     for (const note of IMPORT_ROW_NOTES) {
       expect(IMPORT_ROW_NOTE_LABELS[note]).toBeTruthy();
     }
+  });
+});
+
+// ── The 2026 comp plans (6 Nov 2026) ────────────────────────────────────
+
+describe('2026 comp-plan validators', () => {
+  const step = (threshold: number, ratePercent: number) => ({
+    threshold,
+    ratePercent,
+    bonusAmount: 0,
+    minCompliancePercent: null,
+    minBundleRatePercent: null,
+  });
+
+  it('accepts a stepped rate and refuses one that steps down', () => {
+    expect(
+      rateRulesError([
+        {
+          carrier: ANY_CARRIER,
+          ratePercent: 10,
+          steps: [step(50_000, 12), step(80_000, 15)],
+        },
+      ]),
+    ).toBeNull();
+    expect(
+      rateRulesError([
+        {
+          carrier: ANY_CARRIER,
+          ratePercent: 10,
+          steps: [step(50_000, 15), step(80_000, 12)],
+        },
+      ]),
+    ).toBe(
+      'The "any other carrier" rate: a higher step cannot pay a lower rate than the step below it.',
+    );
+    expect(
+      rateRulesError([
+        { carrier: 'Allstate', ratePercent: 10, steps: [step(50_000, 8)] },
+      ]),
+    ).toBe(
+      'The Allstate rate, step 1 cannot pay less than the base rate of 10%.',
+    );
+    expect(
+      rateRulesError([
+        {
+          carrier: 'Allstate',
+          ratePercent: 0,
+          stepBasis: 'retention',
+          steps: [step(120, 5)],
+        },
+      ]),
+    ).toBe(
+      'The Allstate rate, step 1: the retention must be between 0 and 100.',
+    );
+  });
+
+  it('checks gates, overrides, referrals and windows', () => {
+    expect(
+      bonusTiersError(
+        [{ thresholdPremium: 1, bonusAmount: 1, minCompliancePercent: 0 }],
+        {
+          stackable: false,
+        },
+      ),
+    ).toBe('A tier minimum compliance rate must be more than 0%.');
+    expect(
+      overridesError([
+        {
+          basis: 'lead_source',
+          leadSourceId: null,
+          carrier: ANY_CARRIER,
+          ratePercent: 1,
+        },
+      ]),
+    ).toBe('Override 1 needs a lead source.');
+    expect(
+      overridesError([
+        {
+          basis: 'agency',
+          leadSourceId: null,
+          carrier: ANY_CARRIER,
+          ratePercent: 1,
+        },
+        { basis: 'agency', leadSourceId: null, carrier: '*', ratePercent: 2 },
+      ]),
+    ).toBe('Override 2 repeats an earlier override.');
+    expect(
+      referralRuleError({
+        minimum: 15,
+        shortfallDeduction: 500,
+        bonusThreshold: 10,
+        bonusAmount: 500,
+      }),
+    ).toBe('The referral bonus threshold must be above the minimum.');
+    expect(chargebackWindowError(6)).toBeNull();
+    expect(chargebackWindowError(0)).toContain('from 1 to 36');
+    expect(stipendError([2500, 2000, 1500])).toBeNull();
+    expect(memberStartsError([{ userId: 'a', startMonth: '2026-13' }])).toBe(
+      'A start month must be in YYYY-MM form.',
+    );
+    expect(
+      statementInputsError({
+        compliancePercent: 96,
+        retentionPercent: null,
+        lifeReferrals: 2.5,
+        meetingAttendance: null,
+      }),
+    ).toContain('Life referrals must be a whole number');
+  });
+
+  it('asks only for the figures a structure reads', () => {
+    expect(
+      statementInputsNeeded({
+        rules: [
+          {
+            carrier: 'Allstate',
+            ratePercent: 0,
+            stepBasis: 'retention',
+            steps: [{ ...step(83, 5) }],
+          },
+        ],
+        individualTiers: [],
+        complianceFloor: null,
+        referralRule: null,
+        teamRequirements: { soldLogWithinDays: 1, meetingAttendance: true },
+        teamBonusEligible: true,
+      }),
+    ).toEqual({
+      compliance: false,
+      retention: true,
+      referrals: false,
+      attendance: true,
+    });
+  });
+
+  it('fills defaults for a structure saved before the plan parts', () => {
+    expect(structurePlanDefaults({})).toEqual({
+      basePay: 0,
+      stipendAmounts: [],
+      memberStarts: [],
+      complianceFloor: null,
+      overrides: [],
+      agencyTiers: [],
+      agencyTiersCarrier: ANY_CARRIER,
+      teamRequirements: { soldLogWithinDays: null, meetingAttendance: false },
+      referralRule: null,
+      chargebackWindowMonths: null,
+    });
   });
 });

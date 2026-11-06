@@ -1,12 +1,16 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AgencyPermission,
   DataScope,
+  EDITABLE_PAY_STATEMENT_STATUSES,
   isEditableStatementStatus,
   PAYOUT_STATEMENT_NOT_EDITABLE,
+  PAYOUT_STATEMENT_OWN_INPUTS,
   type AccessContext,
   type PayStatementsResponse,
   type PayStatementView,
@@ -14,7 +18,10 @@ import {
 import { Types, type FilterQuery } from 'mongoose';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import { recomputeStatement } from '../common/payouts/generate-run';
-import type { ListPayStatementsQueryDto } from './dto/payouts.dto';
+import type {
+  ListPayStatementsQueryDto,
+  UpdateStatementInputsDto,
+} from './dto/payouts.dto';
 import { PayoutModelsService } from './payout-models.service';
 import {
   statementSummary,
@@ -135,6 +142,66 @@ export class PayStatementsService {
           'This statement has been sent, so it can no longer be recalculated.',
       });
     if (!isEditableStatementStatus(doc.status)) throw notEditable();
+    const done = await recomputeStatement(this.models, {
+      agencyId: agencyOf(access),
+      statementId: id,
+    });
+    if (!done) throw notEditable();
+    return this.detail(access, branchId, id);
+  }
+
+  /**
+   * The figures the manager enters (2026 comp plans) — compliance rate,
+   * retention, life referrals, meeting attendance — saved whole, then the
+   * statement is recalculated as Recalculate does: against the month's stored
+   * team split and Salesperson of the Month. When the figures change who
+   * shares the pool or can win the month, the statement says to recalculate
+   * the month.
+   *
+   * Draft and disputed statements only (409 `PAYOUT_STATEMENT_NOT_EDITABLE`).
+   * Not on one's own statement without `agency:payouts:admin` (403
+   * `PAYOUT_STATEMENT_OWN_INPUTS`): they decide one's own pay.
+   */
+  async updateInputs(
+    access: AccessContext,
+    branchId: string | null,
+    id: string,
+    dto: UpdateStatementInputsDto,
+  ): Promise<PayStatementView> {
+    const doc = await this.findVisible(access, branchId, id);
+    if (
+      String(doc.userId) === access.userId &&
+      !access.permissions.includes(AgencyPermission.PayoutsAdmin)
+    ) {
+      throw new ForbiddenException({
+        code: PAYOUT_STATEMENT_OWN_INPUTS,
+        message: 'Someone else enters the figures on your own statement.',
+      });
+    }
+    const notEditable = () =>
+      new ConflictException({
+        code: PAYOUT_STATEMENT_NOT_EDITABLE,
+        message:
+          'This statement has been sent, so its figures can no longer change.',
+      });
+    if (!isEditableStatementStatus(doc.status)) throw notEditable();
+    const saved = await this.models.payStatement.updateOne(
+      {
+        _id: doc._id,
+        status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
+      },
+      {
+        $set: {
+          inputs: {
+            compliancePercent: dto.compliancePercent,
+            retentionPercent: dto.retentionPercent,
+            lifeReferrals: dto.lifeReferrals,
+            meetingAttendance: dto.meetingAttendance,
+          },
+        },
+      },
+    );
+    if (saved.matchedCount !== 1) throw notEditable();
     const done = await recomputeStatement(this.models, {
       agencyId: agencyOf(access),
       statementId: id,

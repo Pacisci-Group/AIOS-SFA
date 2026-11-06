@@ -1,4 +1,5 @@
 import { hasAtMostTwoDecimals, MAX_PAYOUT_AMOUNT } from "@sfa/shared";
+import { z } from "zod";
 import { numericString } from "@/lib/zod-helpers";
 
 /**
@@ -30,6 +31,39 @@ export function percentString(required: string) {
     (value) => hasAtMostTwoDecimals(Number(value)),
     "At most two decimals",
   );
+}
+
+/** A whole number from `min` to `max` — a count of months, days or referrals. */
+export function wholeString(
+  required: string,
+  { min, max }: { min: number; max: number },
+) {
+  return numericString({
+    required,
+    min,
+    max,
+    tooSmall: `At least ${min}`,
+    tooLarge: `At most ${max}`,
+    integer: "Whole numbers only",
+  });
+}
+
+/**
+ * A field that may be left blank for "none": `""` passes, anything else must
+ * satisfy `schema`. Read it back with {@link blankNumber}.
+ */
+export function blankOr(schema: z.ZodType<string>) {
+  return z.string().superRefine((value, ctx) => {
+    if (value.trim() === "") return;
+    for (const issue of schema.safeParse(value).error?.issues ?? []) {
+      ctx.addIssue({ code: "custom", message: issue.message });
+    }
+  });
+}
+
+/** A blank-for-none field as sent: `null` when blank, else the number. */
+export function blankNumber(raw: string): number | null {
+  return raw.trim() === "" ? null : Number(raw);
 }
 
 /** A number for a form field: `""` for nothing, otherwise as typed back. */

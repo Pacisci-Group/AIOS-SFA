@@ -1,9 +1,25 @@
 import {
+  agencyTiersError,
   amountError,
+  basePayError,
   bonusTiersError,
+  chargebackWindowError,
+  complianceFloorError,
   hatTrickError,
   leadSourceRulesError,
   MAX_BONUS_TIERS,
+  MAX_OVERRIDE_RULES,
+  MAX_RATE_STEPS,
+  MAX_STIPEND_MONTHS,
+  memberStartsError,
+  OVERRIDE_BASES,
+  overridesError,
+  producerOfYearError,
+  RATE_STEP_BASES,
+  referralRuleError,
+  statementInputsError,
+  stipendError,
+  teamRequirementsError,
   MAX_PAY_STATEMENTS_PAGE_SIZE,
   MAX_PAYOUT_IMPORT_FILE_BYTES,
   MAX_RATE_RULES,
@@ -62,8 +78,21 @@ export const salespersonOfMonthSchema = z
     if (error) ctx.addIssue({ code: 'custom', message: error });
   });
 
+export const producerOfYearSchema = z
+  .object({
+    enabled: z.boolean(),
+    bonusAmount: money,
+    minCompliantMonths: z.number({ message: 'Enter a number of months.' }),
+    minCompliancePercent: percent,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const error = producerOfYearError(value);
+    if (error) ctx.addIssue({ code: 'custom', message: error });
+  });
+
 /**
- * `PATCH /payouts/settings`. Either section may be sent alone, but a section
+ * `PATCH /payouts/settings`. Any section may be sent alone, but a section
  * that is sent is sent whole — a half-written team bonus (a new pool with the
  * old split) is exactly the inconsistency the 100% check exists to stop.
  */
@@ -71,23 +100,45 @@ export const updatePayoutSettingsSchema = z
   .object({
     teamBonus: teamBonusSchema.optional(),
     salespersonOfMonth: salespersonOfMonthSchema.optional(),
+    producerOfYear: producerOfYearSchema.optional(),
   })
   .strict()
   .refine(
     (body) =>
-      body.teamBonus !== undefined || body.salespersonOfMonth !== undefined,
-    { message: 'Send teamBonus, salespersonOfMonth, or both.' },
+      body.teamBonus !== undefined ||
+      body.salespersonOfMonth !== undefined ||
+      body.producerOfYear !== undefined,
+    {
+      message:
+        'Send teamBonus, salespersonOfMonth, producerOfYear, or any of them.',
+    },
   );
 export type UpdatePayoutSettingsDto = z.infer<
   typeof updatePayoutSettingsSchema
 >;
+
+/** A gate or setting that is off as `null` (or left out). */
+const optionalPercent = percent.nullable().default(null);
+
+const rateStepSchema = z
+  .object({
+    threshold: z.number({ message: 'Enter a threshold.' }),
+    ratePercent: percent,
+    bonusAmount: money.default(0),
+    minCompliancePercent: optionalPercent,
+    minBundleRatePercent: optionalPercent,
+  })
+  .strict();
 
 const rateRuleSchema = z
   .object({
     carrier: z.string().trim().max(120),
     ratePercent: percent,
     // `null` (or left out) when no minimum bundle rate is enforced.
-    minBundleRatePercent: percent.nullable().default(null),
+    minBundleRatePercent: optionalPercent,
+    // Left out: a flat rate.
+    stepBasis: z.enum(RATE_STEP_BASES).default('premium'),
+    steps: z.array(rateStepSchema).max(MAX_RATE_STEPS).default([]),
   })
   .strict();
 
@@ -113,8 +164,27 @@ const hatTrickSchema = z
   .strict();
 
 const bonusTierSchema = z
+  .object({
+    thresholdPremium: money,
+    bonusAmount: money,
+    minCompliancePercent: optionalPercent,
+  })
+  .strict();
+
+const plainTierSchema = z
   .object({ thresholdPremium: money, bonusAmount: money })
   .strict();
+
+const overrideSchema = z
+  .object({
+    basis: z.enum(OVERRIDE_BASES),
+    leadSourceId: objectId.nullable().default(null),
+    carrier: z.string().trim().max(120),
+    ratePercent: percent,
+  })
+  .strict();
+
+const wholeNumber = (message: string) => z.number({ message });
 
 const structureFields = z
   .object({
@@ -135,6 +205,48 @@ const structureFields = z
     tiersStackable: z.boolean(),
     teamBonusEligible: z.boolean(),
     memberIds: z.array(objectId).max(500),
+    // The 2026 comp-plan parts (6 Nov 2026): each optional, left out = none.
+    basePay: money.default(0),
+    stipendAmounts: z.array(money).max(MAX_STIPEND_MONTHS).default([]),
+    memberStarts: z
+      .array(
+        z
+          .object({
+            userId: objectId,
+            startMonth: z.string().trim(),
+          })
+          .strict(),
+      )
+      .max(500)
+      .default([]),
+    complianceFloor: z
+      .object({ minimumPercent: percent, reductionPercent: percent })
+      .strict()
+      .nullable()
+      .default(null),
+    overrides: z.array(overrideSchema).max(MAX_OVERRIDE_RULES).default([]),
+    agencyTiers: z.array(plainTierSchema).max(MAX_BONUS_TIERS).default([]),
+    agencyTiersCarrier: z.string().trim().min(1).max(120).default('*'),
+    teamRequirements: z
+      .object({
+        soldLogWithinDays: wholeNumber('Enter a number of days.').nullable(),
+        meetingAttendance: z.boolean(),
+      })
+      .strict()
+      .default({ soldLogWithinDays: null, meetingAttendance: false }),
+    referralRule: z
+      .object({
+        minimum: wholeNumber('Enter a number of referrals.'),
+        shortfallDeduction: money,
+        bonusThreshold: wholeNumber('Enter a number of referrals.').nullable(),
+        bonusAmount: money,
+      })
+      .strict()
+      .nullable()
+      .default(null),
+    chargebackWindowMonths: wholeNumber('Enter a number of months.')
+      .nullable()
+      .default(null),
   })
   .strict();
 
@@ -166,6 +278,23 @@ function refineStructure(
       path: ['individualTiers'],
       message: tiers,
     });
+  }
+  const plan: [string, string | null][] = [
+    ['basePay', basePayError(value.basePay)],
+    ['stipendAmounts', stipendError(value.stipendAmounts)],
+    ['memberStarts', memberStartsError(value.memberStarts)],
+    ['complianceFloor', complianceFloorError(value.complianceFloor)],
+    ['overrides', overridesError(value.overrides)],
+    ['agencyTiers', agencyTiersError(value.agencyTiers)],
+    ['teamRequirements', teamRequirementsError(value.teamRequirements)],
+    ['referralRule', referralRuleError(value.referralRule)],
+    [
+      'chargebackWindowMonths',
+      chargebackWindowError(value.chargebackWindowMonths),
+    ],
+  ];
+  for (const [path, message] of plan) {
+    if (message) ctx.addIssue({ code: 'custom', path: [path], message });
   }
 }
 
@@ -249,6 +378,28 @@ export type ListPayStatementsQueryDto = z.infer<
 
 /** `:id` of a statement. */
 export const payStatementIdSchema = objectId;
+
+/**
+ * `PATCH /payouts/statements/:id/inputs` — the figures the manager enters,
+ * whole: each `null` when not entered.
+ */
+export const updateStatementInputsSchema = z
+  .object({
+    compliancePercent: percent.nullable(),
+    retentionPercent: percent.nullable(),
+    lifeReferrals: z
+      .number({ message: 'Enter a number of referrals.' })
+      .nullable(),
+    meetingAttendance: z.boolean().nullable(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const error = statementInputsError(value);
+    if (error) ctx.addIssue({ code: 'custom', message: error });
+  });
+export type UpdateStatementInputsDto = z.infer<
+  typeof updateStatementInputsSchema
+>;
 
 /** `GET /payouts/activity` (PAC-179). No `userId` = the caller. */
 export const payoutActivityQuerySchema = z

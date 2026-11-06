@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -31,7 +32,9 @@ import {
   listPayStatementsQuerySchema,
   payoutActivityQuerySchema,
   payStatementIdSchema,
+  updateStatementInputsSchema,
   type GeneratePayoutRunDto,
+  type UpdateStatementInputsDto,
   type GetPayoutRunQueryDto,
   type ListPayStatementsQueryDto,
   type PayoutActivityQueryDto,
@@ -129,6 +132,24 @@ export class PayoutsStatementsController {
     @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
   ): Promise<PayStatementView> {
     return this.statements.recalculate(access, branchId, id);
+  }
+
+  /**
+   * The figures the manager enters (compliance rate, retention, life
+   * referrals, meeting attendance), whole; the statement is recalculated.
+   * 409 `PAYOUT_STATEMENT_NOT_EDITABLE` once sent; 403
+   * `PAYOUT_STATEMENT_OWN_INPUTS` on one's own without the admin permission.
+   */
+  @Patch('statements/:id/inputs')
+  @RequireWrite(ModuleKey.Payouts)
+  updateStatementInputs(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Body(new ZodValidationPipe(updateStatementInputsSchema))
+    body: UpdateStatementInputsDto,
+  ): Promise<PayStatementView> {
+    return this.statements.updateInputs(access, branchId, id, body);
   }
 
   // --- Activity (PAC-179) ------------------------------------------------
