@@ -89,7 +89,185 @@ export interface RateRule {
    * checked separately. Views always send it (`null` when off).
    */
   minBundleRatePercent?: number | null;
+  /**
+   * What the rate's {@link steps} are measured on (2026 comp plans): the
+   * person's sold premium for the month, or their month-end retention (a
+   * figure the manager enters on the statement). Absent = `premium`.
+   */
+  stepBasis?: RateStepBasis;
+  /**
+   * The rate **steps up** as the month's measure rises: the highest step
+   * reached whose gates are met replaces `ratePercent` for **all** of the
+   * month's premium on this rule (not split-rate — the Inside Sales plan:
+   * "the applicable commission percentage is applied to the full amount
+   * sold"). `ratePercent` is the base: below the first step, and what a
+   * person below their structure's compliance floor is paid. Absent or `[]`
+   * = a flat rate.
+   */
+  steps?: RateStep[];
 }
+
+// ── 2026 comp plans (6 Nov 2026) ────────────────────────────────────────
+//
+// David's pay plans (Inside Sales, Outside Sales, Client Relations Manager,
+// Office Manager) need more than a flat rate per carrier. The additions are
+// all optional parts of a structure; a structure without them pays exactly as
+// before. The engine is `payout-math.ts`; the rules are on the PAC-176 epic.
+
+/** What a rate's steps are measured on. */
+export const RATE_STEP_BASES = ['premium', 'retention'] as const;
+export type RateStepBasis = (typeof RATE_STEP_BASES)[number];
+
+export const MAX_RATE_STEPS = 10;
+
+/**
+ * One step of a stepped rate: reach `threshold` (dollars of premium, or a
+ * retention percentage) and the rule pays `ratePercent` on all its premium.
+ * A step may also pay a one-off `bonusAmount` (the Client Relations
+ * Manager's $500 at 90% retention), and may be **gated**: it counts only
+ * when the person's compliance rate and overall bundle rate meet the
+ * minimums (Outside Sales' 15% needs 95% compliance and an 83% bundle rate).
+ * A step whose gate is not met is skipped, and the highest step below it that
+ * is met applies.
+ */
+export interface RateStep {
+  threshold: number;
+  ratePercent: number;
+  bonusAmount: number;
+  /** `null` = no compliance gate. */
+  minCompliancePercent: number | null;
+  /** `null` = no bundle gate. The person's overall bundle rate, all carriers. */
+  minBundleRatePercent: number | null;
+}
+
+/**
+ * The 2026 plan's compliance floor: below `minimumPercent` (the rate the
+ * manager enters on the statement), the person gets no Sales of the Month,
+ * hat trick, team bonus or tier bonuses, is paid every rate at its base, and
+ * loses `reductionPercent` of their variable pay. Base pay and stipends are
+ * not reduced.
+ */
+export interface ComplianceFloor {
+  minimumPercent: number;
+  reductionPercent: number;
+}
+
+/**
+ * Pay on premium other people sold.
+ *
+ * - `agency` — a percentage of every sale in the agency on `carrier` ("any"
+ *   for all), the person's own included: the Office Manager's 1% on all
+ *   premium sold in the office, whatever the source.
+ * - `lead_source` — a percentage of premium **other people** sold from one
+ *   lead source: Outside Sales' 1% on overflow leads they handed to Inside
+ *   Sales, tagged with their own lead source.
+ */
+export const OVERRIDE_BASES = ['agency', 'lead_source'] as const;
+export type OverrideBasis = (typeof OVERRIDE_BASES)[number];
+
+export interface OverrideRule {
+  basis: OverrideBasis;
+  /** Set for `lead_source`, `null` for `agency`. */
+  leadSourceId: string | null;
+  /** A carrier's name, or {@link ANY_CARRIER}. */
+  carrier: string;
+  ratePercent: number;
+}
+
+export interface OverrideRuleView extends OverrideRule {
+  leadSourceName: string | null;
+}
+
+export const MAX_OVERRIDE_RULES = 10;
+
+/**
+ * The Client Relations Manager's life referrals: fewer than `minimum` valid
+ * referrals in the month costs `shortfallDeduction`; `bonusThreshold` or more
+ * (when set) earns `bonusAmount`. The count is entered on the statement.
+ */
+export interface ReferralRule {
+  minimum: number;
+  shortfallDeduction: number;
+  bonusThreshold: number | null;
+  bonusAmount: number;
+}
+
+/**
+ * Extra conditions for the team bonus (Client Relations Manager plan): every
+ * sale of the month entered within `soldLogWithinDays` days of its sold date
+ * (`null` = not required), and on-time attendance at sales meetings (ticked
+ * by the manager on the statement). Not met = no share of the pool.
+ */
+export interface TeamRequirements {
+  soldLogWithinDays: number | null;
+  meetingAttendance: boolean;
+}
+
+export const DEFAULT_TEAM_REQUIREMENTS: TeamRequirements = {
+  soldLogWithinDays: null,
+  meetingAttendance: false,
+};
+
+/** When a member started, for the stipend schedule: month 1 is `startMonth`. */
+export interface MemberStart {
+  userId: string;
+  /** `YYYY-MM`. */
+  startMonth: string;
+}
+
+export const MAX_STIPEND_MONTHS = 12;
+export const MAX_SOLD_LOG_DAYS = 31;
+export const MAX_CHARGEBACK_WINDOW_MONTHS = 36;
+export const MAX_REFERRAL_COUNT = 1_000;
+
+/**
+ * The figures the app cannot know, entered by the manager on each draft:
+ * the compliance rate, month-end retention, valid life referrals, and
+ * whether the person attended the sales meetings. `null` = not entered. A
+ * gate that needs a figure is **not met** until it is entered (pay is not
+ * unlocked on a guess); a penalty is applied only from an entered figure.
+ */
+export interface StatementInputs {
+  compliancePercent: number | null;
+  retentionPercent: number | null;
+  lifeReferrals: number | null;
+  meetingAttendance: boolean | null;
+}
+
+export const EMPTY_STATEMENT_INPUTS: StatementInputs = {
+  compliancePercent: null,
+  retentionPercent: null,
+  lifeReferrals: null,
+  meetingAttendance: null,
+};
+
+/** Which {@link StatementInputs} a structure reads — the ones the page asks for. */
+export interface StatementInputsNeeded {
+  compliance: boolean;
+  retention: boolean;
+  referrals: boolean;
+  attendance: boolean;
+}
+
+/**
+ * Producer of the Year (2026 plan): a bonus on the December statement to the
+ * year's top producer by sold premium who was compliant — an entered
+ * compliance rate of at least `minCompliancePercent` — in at least
+ * `minCompliantMonths` months of the year.
+ */
+export interface ProducerOfYearSettings {
+  enabled: boolean;
+  bonusAmount: number;
+  minCompliantMonths: number;
+  minCompliancePercent: number;
+}
+
+export const DEFAULT_PRODUCER_OF_YEAR: ProducerOfYearSettings = {
+  enabled: false,
+  bonusAmount: 0,
+  minCompliantMonths: 9,
+  minCompliancePercent: 95,
+};
 
 /**
  * A **bundle** is a sale with at least this many policies, whatever they are
@@ -159,6 +337,12 @@ export interface HatTrickRule {
 export interface BonusTier {
   thresholdPremium: number;
   bonusAmount: number;
+  /**
+   * The tier pays only with an entered compliance rate at least this high
+   * (Inside Sales' $1,500 at $100,000 needs good standing); `null` or absent =
+   * no gate. Used on a structure's monthly tiers only.
+   */
+  minCompliancePercent?: number | null;
 }
 
 export const DEFAULT_HAT_TRICK: HatTrickRule = {
@@ -216,12 +400,14 @@ export const DEFAULT_SALESPERSON_OF_MONTH: SalespersonOfMonthSettings = {
 export interface PayoutSettingsView {
   teamBonus: TeamBonusSettings;
   salespersonOfMonth: SalespersonOfMonthSettings;
+  producerOfYear: ProducerOfYearSettings;
 }
 
-/** Either section may be sent alone; a section that is sent is sent whole. */
+/** Any section may be sent alone; a section that is sent is sent whole. */
 export interface UpdatePayoutSettingsInput {
   teamBonus?: TeamBonusSettings;
   salespersonOfMonth?: SalespersonOfMonthSettings;
+  producerOfYear?: ProducerOfYearSettings;
 }
 
 // ── Structures over the wire ────────────────────────────────────────────
@@ -252,6 +438,32 @@ export interface PaymentStructureSummary {
   /** Every tier reached pays (amounts add up), rather than only the highest. */
   tiersStackable: boolean;
   teamBonusEligible: boolean;
+  /** Monthly base pay, on every member's statement. `0` = none. */
+  basePay: number;
+  /**
+   * A stipend by month of the member's start (the Outside Sales "Launch
+   * Pad"): month 1 pays `stipendAmounts[0]`, and so on; `[]` = none.
+   */
+  stipendAmounts: number[];
+  /** Members' start months, for the stipend. */
+  memberStarts: MemberStart[];
+  complianceFloor: ComplianceFloor | null;
+  overrides: OverrideRuleView[];
+  /**
+   * A personal bonus measured on the **agency's** sold premium on
+   * {@link agencyTiersCarrier} (the Office Manager's production bonus on
+   * total Allstate premium): the highest tier reached pays.
+   */
+  agencyTiers: BonusTier[];
+  /** A carrier's name, or {@link ANY_CARRIER} for all premium. */
+  agencyTiersCarrier: string;
+  teamRequirements: TeamRequirements;
+  referralRule: ReferralRule | null;
+  /**
+   * A chargeback counts only within this many months of the cancellation
+   * (Client Relations Manager plan: six); `null` = no limit.
+   */
+  chargebackWindowMonths: number | null;
   /** Members who have not been removed from the agency. */
   memberCount: number;
   /** ISO-8601. */
@@ -290,6 +502,18 @@ export interface UpsertPaymentStructureInput {
   teamBonusEligible: boolean;
   /** The whole member list, replacing the stored one. */
   memberIds: string[];
+  // The 2026 comp-plan parts: each optional, and left out = none.
+  basePay?: number;
+  stipendAmounts?: number[];
+  /** Only members' entries are kept. */
+  memberStarts?: MemberStart[];
+  complianceFloor?: ComplianceFloor | null;
+  overrides?: OverrideRule[];
+  agencyTiers?: BonusTier[];
+  agencyTiersCarrier?: string;
+  teamRequirements?: TeamRequirements;
+  referralRule?: ReferralRule | null;
+  chargebackWindowMonths?: number | null;
 }
 
 /**
@@ -359,6 +583,8 @@ export function rateRulesError(rules: readonly RateRule[]): string | null {
     if (error) return error;
     const minimum = minBundleRateError(rule, key, name);
     if (minimum) return minimum;
+    const steps = rateStepsError(rule, label);
+    if (steps) return steps;
     const first = seen.get(key);
     if (first !== undefined) {
       return key === ANY_CARRIER
@@ -385,6 +611,75 @@ function minBundleRateError(
   const error = percentError(minimum, label);
   if (error) return error;
   return minimum > 0 ? null : `${label} must be more than 0%.`;
+}
+
+/** A gate's minimum: off (`null`), or a percentage above 0%. */
+function gateError(
+  value: number | null | undefined,
+  label: string,
+): string | null {
+  if (value === null || value === undefined) return null;
+  const error = percentError(value, label);
+  if (error) return error;
+  return value > 0 ? null : `${label} must be more than 0%.`;
+}
+
+/**
+ * Why a rule's steps cannot be stored, or `null` when they can (or it has
+ * none): at most {@link MAX_RATE_STEPS}, thresholds above zero and distinct
+ * (dollars on a premium basis, a percentage on a retention basis), rates and
+ * bonuses valid, gates above 0%. A higher step may not pay a lower rate than
+ * the one below it, nor any step less than the base rate — reaching a step
+ * must never lower the rate.
+ */
+function rateStepsError(rule: RateRule, label: string): string | null {
+  const steps = rule.steps ?? [];
+  if (!steps.length) return null;
+  const basis = rule.stepBasis ?? 'premium';
+  if (!(RATE_STEP_BASES as readonly string[]).includes(basis)) {
+    return `${label} steps must be measured on premium or retention.`;
+  }
+  if (steps.length > MAX_RATE_STEPS) {
+    return `${label} has at most ${MAX_RATE_STEPS} steps.`;
+  }
+  for (const [index, step] of steps.entries()) {
+    const stepLabel = `${label}, step ${index + 1}`;
+    const threshold =
+      basis === 'premium'
+        ? amountError(step.threshold, `${stepLabel}: the premium`)
+        : percentError(step.threshold, `${stepLabel}: the retention`);
+    if (threshold) return threshold;
+    if (step.threshold <= 0) {
+      return basis === 'premium'
+        ? `${stepLabel}: the premium must be more than $0.`
+        : `${stepLabel}: the retention must be more than 0%.`;
+    }
+    const error =
+      percentError(step.ratePercent, `${stepLabel}: the rate`) ??
+      amountError(step.bonusAmount, `${stepLabel}: the bonus`) ??
+      gateError(
+        step.minCompliancePercent,
+        `${stepLabel}: the minimum compliance rate`,
+      ) ??
+      gateError(
+        step.minBundleRatePercent,
+        `${stepLabel}: the minimum bundle rate`,
+      );
+    if (error) return error;
+    if (step.ratePercent < rule.ratePercent) {
+      return `${stepLabel} cannot pay less than the base rate of ${rule.ratePercent}%.`;
+    }
+  }
+  const sorted = [...steps].sort((a, b) => a.threshold - b.threshold);
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (sorted[index].threshold === sorted[index - 1].threshold) {
+      return `${label} has two steps with the same threshold.`;
+    }
+    if (sorted[index].ratePercent < sorted[index - 1].ratePercent) {
+      return `${label}: a higher step cannot pay a lower rate than the step below it.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -492,6 +787,13 @@ export function bonusTiersError(
   tiers: readonly BonusTier[],
   options: { stackable: boolean },
 ): string | null {
+  for (const tier of tiers) {
+    const gate = gateError(
+      tier.minCompliancePercent,
+      'A tier minimum compliance rate',
+    );
+    if (gate) return gate;
+  }
   return levelsError(
     tiers.map((tier) => ({
       thresholdPremium: tier.thresholdPremium,
@@ -566,6 +868,284 @@ export function teamBonusError(settings: TeamBonusSettings): string | null {
     }) ??
     teamSplitError(settings.csrSharePercent, settings.producerSharePercent)
   );
+}
+
+// ── 2026 comp plans: validators ─────────────────────────────────────────
+
+const isWholeIn = (value: number, min: number, max: number) =>
+  Number.isInteger(value) && value >= min && value <= max;
+
+/** Why a structure's base pay cannot be stored, or `null` when it can. */
+export function basePayError(basePay: number): string | null {
+  return amountError(basePay, 'Base pay');
+}
+
+/** Why a stipend schedule cannot be stored, or `null` when it can. */
+export function stipendError(amounts: readonly number[]): string | null {
+  if (amounts.length > MAX_STIPEND_MONTHS) {
+    return `A stipend runs for at most ${MAX_STIPEND_MONTHS} months.`;
+  }
+  for (const [index, amount] of amounts.entries()) {
+    const error = amountError(amount, `The month ${index + 1} stipend`);
+    if (error) return error;
+  }
+  return null;
+}
+
+/** Why members' start months cannot be stored, or `null` when they can. */
+export function memberStartsError(
+  starts: readonly MemberStart[],
+): string | null {
+  const seen = new Set<string>();
+  for (const start of starts) {
+    if (!PAYOUT_MONTH_PATTERN.test(start.startMonth)) {
+      return 'A start month must be in YYYY-MM form.';
+    }
+    const key = start.userId.trim().toLowerCase();
+    if (!key) return 'A start month needs a person.';
+    if (seen.has(key)) return 'A person has two start months.';
+    seen.add(key);
+  }
+  return null;
+}
+
+/** Why a compliance floor cannot be stored, or `null` when it can (or is off). */
+export function complianceFloorError(
+  floor: ComplianceFloor | null | undefined,
+): string | null {
+  if (!floor) return null;
+  return (
+    gateError(floor.minimumPercent, 'The minimum compliance rate') ??
+    percentError(floor.reductionPercent, 'The pay reduction')
+  );
+}
+
+/** Why a structure's overrides cannot be stored, or `null` when they can. */
+export function overridesError(
+  overrides: readonly OverrideRule[],
+): string | null {
+  if (overrides.length > MAX_OVERRIDE_RULES) {
+    return `A structure has at most ${MAX_OVERRIDE_RULES} overrides.`;
+  }
+  const seen = new Set<string>();
+  for (const [index, rule] of overrides.entries()) {
+    const label = `Override ${index + 1}`;
+    if (!(OVERRIDE_BASES as readonly string[]).includes(rule.basis)) {
+      return `${label} must be on agency premium or a lead source.`;
+    }
+    const source = rule.leadSourceId ? leadSourceKey(rule.leadSourceId) : '';
+    if (rule.basis === 'lead_source' && !source) {
+      return `${label} needs a lead source.`;
+    }
+    if (rule.basis === 'agency' && source) {
+      return `${label} is on agency premium, so it takes no lead source.`;
+    }
+    const carrier = rateRuleKey(rule.carrier);
+    if (!carrier) return `${label} needs a carrier.`;
+    const error = percentError(rule.ratePercent, `${label}'s rate`);
+    if (error) return error;
+    const key = `${rule.basis}|${source}|${carrier}`;
+    if (seen.has(key)) return `${label} repeats an earlier override.`;
+    seen.add(key);
+  }
+  return null;
+}
+
+/** Why agency-premium tiers cannot be stored, or `null` when they can. */
+export function agencyTiersError(tiers: readonly BonusTier[]): string | null {
+  return levelsError(
+    tiers.map((tier) => ({
+      thresholdPremium: tier.thresholdPremium,
+      amount: tier.bonusAmount,
+    })),
+    false,
+    {
+      noun: 'agency tier',
+      owner: 'A structure',
+      threshold: 'An agency tier threshold',
+      amount: 'An agency tier bonus',
+    },
+  );
+}
+
+/** Why team-bonus requirements cannot be stored, or `null` when they can. */
+export function teamRequirementsError(
+  requirements: TeamRequirements,
+): string | null {
+  const days = requirements.soldLogWithinDays;
+  if (days !== null && !isWholeIn(days, 0, MAX_SOLD_LOG_DAYS)) {
+    return `Days to enter a sale must be a whole number from 0 to ${MAX_SOLD_LOG_DAYS}.`;
+  }
+  return null;
+}
+
+/** Why a referral rule cannot be stored, or `null` when it can (or is off). */
+export function referralRuleError(
+  rule: ReferralRule | null | undefined,
+): string | null {
+  if (!rule) return null;
+  if (!isWholeIn(rule.minimum, 0, MAX_REFERRAL_COUNT)) {
+    return `The referral minimum must be a whole number from 0 to ${MAX_REFERRAL_COUNT}.`;
+  }
+  const deduction = amountError(
+    rule.shortfallDeduction,
+    'The shortfall deduction',
+  );
+  if (deduction) return deduction;
+  if (rule.bonusThreshold !== null) {
+    if (!isWholeIn(rule.bonusThreshold, 1, MAX_REFERRAL_COUNT)) {
+      return `The referral bonus threshold must be a whole number from 1 to ${MAX_REFERRAL_COUNT}.`;
+    }
+    if (rule.bonusThreshold <= rule.minimum) {
+      return 'The referral bonus threshold must be above the minimum.';
+    }
+  }
+  return amountError(rule.bonusAmount, 'The referral bonus');
+}
+
+/** Why a chargeback window cannot be stored, or `null` when it can (or is off). */
+export function chargebackWindowError(
+  months: number | null | undefined,
+): string | null {
+  if (months === null || months === undefined) return null;
+  return isWholeIn(months, 1, MAX_CHARGEBACK_WINDOW_MONTHS)
+    ? null
+    : `The chargeback window must be a whole number of months from 1 to ${MAX_CHARGEBACK_WINDOW_MONTHS}.`;
+}
+
+/** Why a statement's entered figures cannot be stored, or `null` when they can. */
+export function statementInputsError(inputs: StatementInputs): string | null {
+  if (inputs.compliancePercent !== null) {
+    const error = percentError(inputs.compliancePercent, 'The compliance rate');
+    if (error) return error;
+  }
+  if (inputs.retentionPercent !== null) {
+    const error = percentError(inputs.retentionPercent, 'Retention');
+    if (error) return error;
+  }
+  if (
+    inputs.lifeReferrals !== null &&
+    !isWholeIn(inputs.lifeReferrals, 0, MAX_REFERRAL_COUNT)
+  ) {
+    return `Life referrals must be a whole number from 0 to ${MAX_REFERRAL_COUNT}.`;
+  }
+  return null;
+}
+
+/** Why Producer of the Year settings cannot be stored, or `null` when they can. */
+export function producerOfYearError(
+  settings: ProducerOfYearSettings,
+): string | null {
+  const amount = amountError(settings.bonusAmount, 'The bonus');
+  if (amount) return amount;
+  if (!isWholeIn(settings.minCompliantMonths, 0, 12)) {
+    return 'Compliant months must be a whole number from 0 to 12.';
+  }
+  return percentError(
+    settings.minCompliancePercent,
+    'The compliance rate that counts a month',
+  );
+}
+
+/**
+ * The comp-plan parts of a structure, defaults filled in: what a write
+ * stores when a client leaves a part out, and what a read returns for a
+ * structure saved before the parts existed.
+ */
+export function structurePlanDefaults(input: {
+  basePay?: number;
+  stipendAmounts?: readonly number[];
+  memberStarts?: readonly MemberStart[];
+  complianceFloor?: ComplianceFloor | null;
+  overrides?: readonly OverrideRule[];
+  agencyTiers?: readonly BonusTier[];
+  agencyTiersCarrier?: string;
+  teamRequirements?: TeamRequirements | null;
+  referralRule?: ReferralRule | null;
+  chargebackWindowMonths?: number | null;
+}) {
+  return {
+    basePay: input.basePay ?? 0,
+    stipendAmounts: [...(input.stipendAmounts ?? [])],
+    memberStarts: (input.memberStarts ?? []).map((start) => ({
+      userId: start.userId,
+      startMonth: start.startMonth,
+    })),
+    complianceFloor: input.complianceFloor
+      ? {
+          minimumPercent: input.complianceFloor.minimumPercent,
+          reductionPercent: input.complianceFloor.reductionPercent,
+        }
+      : null,
+    overrides: normalizeOverrides(input.overrides ?? []),
+    agencyTiers: sortBonusTiers(input.agencyTiers ?? []).map((tier) => ({
+      thresholdPremium: tier.thresholdPremium,
+      bonusAmount: tier.bonusAmount,
+    })),
+    agencyTiersCarrier: storedCarrier(input.agencyTiersCarrier ?? ANY_CARRIER),
+    teamRequirements: {
+      soldLogWithinDays: input.teamRequirements?.soldLogWithinDays ?? null,
+      meetingAttendance: input.teamRequirements?.meetingAttendance ?? false,
+    },
+    referralRule: input.referralRule
+      ? {
+          minimum: input.referralRule.minimum,
+          shortfallDeduction: input.referralRule.shortfallDeduction,
+          bonusThreshold: input.referralRule.bonusThreshold ?? null,
+          bonusAmount: input.referralRule.bonusAmount,
+        }
+      : null,
+    chargebackWindowMonths: input.chargebackWindowMonths ?? null,
+  };
+}
+
+/** Overrides as stored: carriers canonical, ids lower-cased, agency ones first. */
+export function normalizeOverrides(
+  overrides: readonly OverrideRule[],
+): OverrideRule[] {
+  return overrides
+    .map((rule) => ({
+      basis: rule.basis,
+      leadSourceId:
+        rule.basis === 'lead_source' && rule.leadSourceId
+          ? leadSourceKey(rule.leadSourceId)
+          : null,
+      carrier: storedCarrier(rule.carrier),
+      ratePercent: rule.ratePercent,
+    }))
+    .sort(
+      (a, b) =>
+        a.basis.localeCompare(b.basis) ||
+        (a.leadSourceId ?? '').localeCompare(b.leadSourceId ?? '') ||
+        compareRuleCarriers(a.carrier, b.carrier),
+    );
+}
+
+/** The figures a structure asks the manager for on each statement. */
+export function statementInputsNeeded(structure: {
+  rules: readonly RateRule[];
+  individualTiers: readonly BonusTier[];
+  complianceFloor?: ComplianceFloor | null;
+  referralRule?: ReferralRule | null;
+  teamRequirements?: TeamRequirements | null;
+  teamBonusEligible: boolean;
+}): StatementInputsNeeded {
+  const stepped = structure.rules.filter((rule) => rule.steps?.length);
+  return {
+    compliance:
+      Boolean(structure.complianceFloor) ||
+      structure.individualTiers.some(
+        (tier) => tier.minCompliancePercent != null,
+      ) ||
+      stepped.some((rule) =>
+        (rule.steps ?? []).some((step) => step.minCompliancePercent !== null),
+      ),
+    retention: stepped.some((rule) => rule.stepBasis === 'retention'),
+    referrals: Boolean(structure.referralRule),
+    attendance:
+      structure.teamBonusEligible &&
+      Boolean(structure.teamRequirements?.meetingAttendance),
+  };
 }
 
 /** Tiers or levels lowest threshold first — the order they are stored and shown in. */
@@ -654,6 +1234,16 @@ export function normalizeRateRules(
       carrier: storedCarrier(rule.carrier),
       ratePercent: rule.ratePercent,
       minBundleRatePercent: rule.minBundleRatePercent ?? null,
+      stepBasis: rule.stepBasis ?? 'premium',
+      steps: [...(rule.steps ?? [])]
+        .sort((a, b) => a.threshold - b.threshold)
+        .map((step) => ({
+          threshold: step.threshold,
+          ratePercent: step.ratePercent,
+          bonusAmount: step.bonusAmount ?? 0,
+          minCompliancePercent: step.minCompliancePercent ?? null,
+          minBundleRatePercent: step.minBundleRatePercent ?? null,
+        })),
     }))
     .sort((a, b) => compareRuleCarriers(a.carrier, b.carrier));
 }
@@ -836,6 +1426,12 @@ export const PAYOUT_RUN_GENERATING = 'PAYOUT_RUN_GENERATING';
 
 /** 409 when a statement that is not draft or disputed is asked to change. */
 export const PAYOUT_STATEMENT_NOT_EDITABLE = 'PAYOUT_STATEMENT_NOT_EDITABLE';
+/**
+ * 403: the figures on a statement (compliance rate, retention, …) decide the
+ * person's pay, so they are entered by someone else — a reviewer cannot
+ * enter them on their own statement unless they hold `agency:payouts:admin`.
+ */
+export const PAYOUT_STATEMENT_OWN_INPUTS = 'PAYOUT_STATEMENT_OWN_INPUTS';
 
 /**
  * Which half of the team pool a person shares in. CSRs are licensed and sell
@@ -917,6 +1513,11 @@ export interface PremiumLineView {
   bundleRate: number | null;
   minBundleRatePercent: number | null;
   bundleShortfall: boolean;
+  /**
+   * The step of a stepped rate this line was paid at (1-based), `null` at
+   * the base rate. Absent on statements computed before steps existed.
+   */
+  rateStep?: number | null;
 }
 
 /** One sale, as a statement and the activity view list it. */
@@ -997,6 +1598,47 @@ export interface StatementBonusesView {
     amount: number;
   };
   salespersonOfMonth: { enabled: boolean; winner: boolean; amount: number };
+  // The 2026 comp-plan parts. Absent on statements computed before them.
+  /** Bonuses paid by the step a stepped rate reached. */
+  rateSteps?: {
+    carrier: string;
+    step: number;
+    threshold: number;
+    ratePercent: number;
+    bonusAmount: number;
+  }[];
+  /** The personal bonus on the agency's premium (Office Manager). */
+  agency?: {
+    carrier: string;
+    premium: number;
+    reached: BonusTier | null;
+    amount: number;
+  } | null;
+  overrides?: {
+    basis: OverrideBasis;
+    leadSourceId: string | null;
+    leadSourceName: string | null;
+    carrier: string;
+    premium: number;
+    ratePercent: number;
+    amount: number;
+  }[];
+  referrals?: {
+    count: number | null;
+    minimum: number;
+    bonusThreshold: number | null;
+    amount: number;
+  } | null;
+  producerOfYear?: { enabled: boolean; winner: boolean; amount: number };
+  /** Why the person has no share of the team pool, when they have none. */
+  teamBlocked?: string[];
+  compliance?: {
+    percent: number | null;
+    floor: ComplianceFloor | null;
+    belowFloor: boolean;
+    /** Negative: the share of variable pay taken off. */
+    reduction: number;
+  };
 }
 
 export interface StatementIndicatorsView {
@@ -1010,6 +1652,8 @@ export interface StatementIndicatorsView {
   complianceStatus: ComplianceStatus;
   /** The month's sales whose deal audit failed. */
   failedAudits: number;
+  /** The compliance rate the manager entered; `null` = not entered. */
+  compliancePercent?: number | null;
 }
 
 /** The Commission Statement's summary grid. */
@@ -1027,7 +1671,27 @@ export interface StatementTotalsView {
   spiffs: number;
   complianceAdjustment: number;
   otherAdjustments: number;
+  /** Commission, bonuses and every adjustment — everything but base pay and stipend. */
   netCommission: number;
+  // The 2026 comp-plan lines (6 Nov 2026). Absent on statements computed
+  // before them: read them as 0, and net pay as net commission.
+  basePay?: number;
+  stipend?: number;
+  rateStepBonus?: number;
+  overrideCommission?: number;
+  agencyBonus?: number;
+  producerOfYearBonus?: number;
+  /** Negative: the compliance floor's reduction of variable pay. */
+  complianceReduction?: number;
+  /** The referral bonus (positive) or shortfall deduction (negative). */
+  referralAdjustment?: number;
+  /** Base pay + stipend + net commission: what the person is paid. */
+  netPay?: number;
+}
+
+/** A statement's net pay; net commission for one computed before base pay existed. */
+export function statementNetPay(totals: StatementTotalsView): number {
+  return totals.netPay ?? totals.netCommission;
 }
 
 export interface StatementAdjustmentView {
@@ -1051,6 +1715,18 @@ export interface StatementStructureSnapshot {
   individualTiers: BonusTier[];
   tiersStackable: boolean;
   teamBonusEligible: boolean;
+  // The 2026 comp-plan parts; absent on snapshots taken before them.
+  basePay?: number;
+  stipendAmounts?: number[];
+  complianceFloor?: ComplianceFloor | null;
+  overrides?: OverrideRuleView[];
+  agencyTiers?: BonusTier[];
+  agencyTiersCarrier?: string;
+  teamRequirements?: TeamRequirements;
+  referralRule?: ReferralRule | null;
+  chargebackWindowMonths?: number | null;
+  /** The member's start month, for the stipend. */
+  startMonth?: string | null;
 }
 
 export interface PayStatementSummary {
@@ -1086,8 +1762,19 @@ export interface PayStatementView extends PayStatementSummary {
   bonuses: StatementBonusesView;
   indicators: StatementIndicatorsView;
   adjustments: StatementAdjustmentView[];
+  /** The figures the manager entered. */
+  inputs: StatementInputs;
+  /** Which of them this statement's structure reads. */
+  inputsNeeded: StatementInputsNeeded;
   warnings: string[];
 }
+
+/**
+ * `PATCH /payouts/statements/:id/inputs`: the figures, whole. The statement
+ * is recalculated with them, against the month's stored team split and
+ * Salesperson of the Month (as Recalculate does).
+ */
+export type UpdateStatementInputsInput = StatementInputs;
 
 export interface PayStatementsResponse {
   statements: PayStatementSummary[];
@@ -1140,7 +1827,14 @@ export interface PayoutRunView {
     rejected: number;
   };
   /** Over the statements the caller may see. */
-  totals: { grossPremium: number; netCommission: number };
+  totals: { grossPremium: number; netCommission: number; netPay: number };
+  /** Paid on December's run only; `null` in other months. */
+  producerOfYear: {
+    enabled: boolean;
+    bonusAmount: number;
+    topGrossPremium: number | null;
+    winners: { userId: string; name: string }[];
+  } | null;
   warnings: string[];
   /** ISO-8601. */
   startedAt: string;

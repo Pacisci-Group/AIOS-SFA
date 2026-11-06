@@ -1,18 +1,26 @@
 import { carrierSlug, normalizeCarrier } from './carrier';
 import type { ChargebackReason, ChargebackSource } from './chargeback';
 import {
+  ANY_CARRIER,
   bundleMinimumFor,
   levelsReached,
   PAYOUT_BUNDLE_MIN_POLICIES,
   PAYOUT_NO_CARRIER,
   rateFor,
   rateForCarrier,
+  rateRuleCarrierLabel,
+  rateRuleKey,
   sortBonusTiers,
   teamPoolFor,
   type BonusTier,
+  type ComplianceFloor,
   type HatTrickRule,
   type LeadSourceRateRule,
+  type OverrideRule,
   type PayoutPool,
+  type ReferralRule,
+  type StatementInputs,
+  type TeamRequirements,
   type PayoutRunTeamBonusView,
   type PremiumLineView,
   type RateRule,
@@ -193,6 +201,23 @@ export interface PayoutSale {
   /** The lead's source, the deal's own as the fallback (`sourceStages`). */
   leadSourceId: string | null;
   lines: readonly PayoutSaleLine[];
+  /**
+   * The agency-local day the sale was entered in the app (`Deal.createdAt`),
+   * `YYYY-MM-DD` — what the Sold Log requirement compares with `soldDay`.
+   */
+  enteredDay?: string | null;
+}
+
+/**
+ * One slice of the agency's sold premium for the month: everyone's sales,
+ * on a structure or not, by seller, lead source and carrier. What overrides
+ * and agency-premium tiers are measured on.
+ */
+export interface AgencySaleLine {
+  producerId: string;
+  leadSourceId: string | null;
+  carrier: string | null;
+  premium: number;
 }
 
 export interface PayoutChargeback {
@@ -228,10 +253,32 @@ export interface StatementRules {
   individualTiers: readonly BonusTier[];
   tiersStackable: boolean;
   teamBonusEligible: boolean;
+  basePay: number;
+  stipendAmounts: readonly number[];
+  complianceFloor: ComplianceFloor | null;
+  overrides: readonly OverrideRule[];
+  agencyTiers: readonly BonusTier[];
+  agencyTiersCarrier: string;
+  teamRequirements: TeamRequirements;
+  referralRule: ReferralRule | null;
+  chargebackWindowMonths: number | null;
 }
 
 export interface ComputeStatementInput {
+  /** The pay month, `YYYY-MM`. */
+  month: string;
+  /** Whose statement — what a lead-source override leaves out. */
+  userId: string;
   structure: StatementRules;
+  /** The figures the manager entered on the statement. */
+  inputs: StatementInputs;
+  /** The member's start month, for the stipend; `null` = not set. */
+  startMonth: string | null;
+  /** `false` for someone no longer active: their base pay is left off. */
+  basePayApplies: boolean;
+  /** The whole agency's sales for the month (overrides, agency tiers). */
+  agencySales: readonly AgencySaleLine[];
+  producerOfYear: { enabled: boolean; bonusAmount: number; winner: boolean };
   sales: readonly PayoutSale[];
   chargebacks: readonly PayoutChargeback[];
   adjustments: readonly PayoutAdjustment[];
@@ -310,6 +357,228 @@ export function hatTrickDays(
     .sort();
 }
 
+// ── The 2026 comp plans: steps, gates, floor ────────────────────────────
+
+/** Months from `from` to `to`, both `YYYY-MM`: `2026-01` → `2026-03` is 2. */
+export function monthsBetween(from: string, to: string): number {
+  const index = (month: string) => {
+    const [year, mon] = month.split('-').map(Number);
+    return year * 12 + (mon - 1);
+  };
+  return index(to) - index(from);
+}
+
+/** Days from `from` to `to`, both `YYYY-MM-DD`. */
+function daysBetween(from: string, to: string): number {
+  const at = (day: string) => {
+    const [year, month, date] = day.split('-').map(Number);
+    return Date.UTC(year, month - 1, date);
+  };
+  return Math.round((at(to) - at(from)) / 86_400_000);
+}
+
+/** Below the structure's compliance floor — only ever on an entered rate. */
+export function complianceBelowFloor(
+  floor: ComplianceFloor | null,
+  inputs: Pick<StatementInputs, 'compliancePercent'>,
+): boolean {
+  return (
+    floor !== null &&
+    inputs.compliancePercent !== null &&
+    inputs.compliancePercent < floor.minimumPercent
+  );
+}
+
+/** A gate is met when it is off, or the figure is known and high enough. */
+function gateMet(minimum: number | null | undefined, value: number | null) {
+  return minimum === null || minimum === undefined
+    ? true
+    : value !== null && value >= minimum;
+}
+
+const percentText = (value: number | null) =>
+  value === null ? 'not entered' : `${value}%`;
+
+/** Sales with two or more policies ÷ sales, all carriers; `null` with none. */
+export function salesBundleRate(sales: readonly PayoutSale[]): number | null {
+  const bundled = sales.filter(
+    (sale) =>
+      sale.lines.filter((line) => line.typed).length >=
+      PAYOUT_BUNDLE_MIN_POLICIES,
+  ).length;
+  return ratioPercent(bundled, sales.length);
+}
+
+export interface AppliedRate {
+  ratePercent: number;
+  /** 1-based, `null` at the base rate. */
+  step: number | null;
+  threshold: number | null;
+  bonusAmount: number;
+  /** Why a step reached was not paid, or the measure was missing. */
+  notes: string[];
+}
+
+/**
+ * The rate a rule pays this month: the highest step reached whose gates are
+ * met, else the base rate. Below the compliance floor, always the base
+ * rate (the 2026 plan: "paid at base commission tier only").
+ */
+export function appliedRate(
+  rule: RateRule,
+  month: {
+    premium: number;
+    retentionPercent: number | null;
+    compliancePercent: number | null;
+    bundleRate: number | null;
+    belowFloor: boolean;
+  },
+): AppliedRate {
+  const base: AppliedRate = {
+    ratePercent: rule.ratePercent,
+    step: null,
+    threshold: null,
+    bonusAmount: 0,
+    notes: [],
+  };
+  const steps = [...(rule.steps ?? [])].sort(
+    (a, b) => a.threshold - b.threshold,
+  );
+  if (!steps.length || month.belowFloor) return base;
+  const label = rateRuleCarrierLabel(rule.carrier);
+  const basis = rule.stepBasis ?? 'premium';
+  const measure =
+    basis === 'retention' ? month.retentionPercent : month.premium;
+  if (measure === null) {
+    base.notes.push(
+      `${label}: retention is not entered, so the base rate of ` +
+        `${rule.ratePercent}% applies.`,
+    );
+    return base;
+  }
+  const thresholdText = (threshold: number) =>
+    basis === 'retention' ? `${threshold}% retention` : moneyText(threshold);
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step.threshold > measure) continue;
+    const missing: string[] = [];
+    if (!gateMet(step.minCompliancePercent, month.compliancePercent)) {
+      missing.push(
+        `a ${step.minCompliancePercent}% compliance rate ` +
+          `(${percentText(month.compliancePercent)})`,
+      );
+    }
+    if (!gateMet(step.minBundleRatePercent, month.bundleRate)) {
+      missing.push(
+        `a ${step.minBundleRatePercent}% bundle rate ` +
+          `(this month: ${percentText(month.bundleRate)})`,
+      );
+    }
+    if (missing.length) {
+      base.notes.push(
+        `${label}: the ${step.ratePercent}% step at ` +
+          `${thresholdText(step.threshold)} is not paid — it needs ` +
+          `${missing.join(' and ')}.`,
+      );
+      continue;
+    }
+    return {
+      ratePercent: step.ratePercent,
+      step: index + 1,
+      threshold: step.threshold,
+      bonusAmount: step.bonusAmount,
+      notes: base.notes,
+    };
+  }
+  return base;
+}
+
+/**
+ * Why the person takes no share of the team pool though their structure
+ * takes part: below the compliance floor, a sale entered late in the Sold
+ * Log, or meeting attendance not ticked. Empty = they share it.
+ */
+export function teamBlockReasons(
+  structure: Pick<
+    StatementRules,
+    'complianceFloor' | 'teamRequirements' | 'teamBonusEligible'
+  >,
+  sales: readonly Pick<PayoutSale, 'soldDay' | 'enteredDay'>[],
+  inputs: StatementInputs,
+): string[] {
+  if (!structure.teamBonusEligible) return [];
+  const reasons: string[] = [];
+  if (complianceBelowFloor(structure.complianceFloor, inputs)) {
+    reasons.push(
+      `The compliance rate of ${inputs.compliancePercent}% is below the ` +
+        `${structure.complianceFloor?.minimumPercent}% floor.`,
+    );
+  }
+  const days = structure.teamRequirements.soldLogWithinDays;
+  if (days !== null) {
+    const late = sales.filter(
+      (sale) =>
+        sale.enteredDay &&
+        sale.soldDay &&
+        daysBetween(sale.soldDay, sale.enteredDay) > days,
+    ).length;
+    if (late > 0) {
+      reasons.push(
+        `${late} ${late === 1 ? 'sale was' : 'sales were'} entered more ` +
+          `than ${days} ${days === 1 ? 'day' : 'days'} after the sold date.`,
+      );
+    }
+  }
+  if (structure.teamRequirements.meetingAttendance) {
+    if (inputs.meetingAttendance === null) {
+      reasons.push('Sales meeting attendance is not entered.');
+    } else if (!inputs.meetingAttendance) {
+      reasons.push('Sales meeting attendance was not met.');
+    }
+  }
+  return reasons;
+}
+
+/** The stipend for `month`: month 1 is the start month; `null` start = none. */
+export function stipendFor(
+  amounts: readonly number[],
+  startMonth: string | null,
+  month: string,
+): number {
+  if (!amounts.length || !startMonth) return 0;
+  const index = monthsBetween(startMonth, month);
+  return index >= 0 && index < amounts.length ? amounts[index] : 0;
+}
+
+/** What a referral count earns (+) or costs (−); `0` when not entered. */
+export function referralAdjustment(
+  rule: ReferralRule,
+  count: number | null,
+): number {
+  if (count === null) return 0;
+  if (count < rule.minimum) return -rule.shortfallDeduction;
+  if (rule.bonusThreshold !== null && count >= rule.bonusThreshold) {
+    return rule.bonusAmount;
+  }
+  return 0;
+}
+
+/** The agency's premium on `carrier` (any carrier: all of it). */
+function agencyPremiumCents(
+  lines: readonly AgencySaleLine[],
+  carrier: string,
+  keep: (line: AgencySaleLine) => boolean = () => true,
+): number {
+  const key = rateRuleKey(carrier);
+  return lines
+    .filter(
+      (line) =>
+        keep(line) &&
+        (key === ANY_CARRIER || rateRuleKey(line.carrier ?? '') === key),
+    )
+    .reduce((sum, line) => sum + toCents(line.premium), 0);
+}
+
 // ── Lines ───────────────────────────────────────────────────────────────
 
 interface LineAccumulator {
@@ -318,6 +587,7 @@ interface LineAccumulator {
   leadSourceId: string | null;
   ratePercent: number;
   rateSource: StatementRateSource;
+  rateStep: number | null;
   appointed: boolean;
   grossCents: number;
   chargebackCents: number;
@@ -327,15 +597,17 @@ interface LineAccumulator {
 /**
  * The line a sale (or the chargeback reversing it) lands on, with its rate.
  * A lead-source rate gets a line of its own; anything else folds into the
- * carrier's line at the carrier's rate.
+ * carrier's line at the carrier's rate — the step it reached, when the rule
+ * is stepped (`steps`: rule key → the rate it applies).
  */
 function lineFor(
-  structure: StatementRules,
+  structure: Pick<StatementRules, 'rules' | 'leadSourceRules'>,
+  steps: ReadonlyMap<string, AppliedRate>,
   carrier: string,
   leadSourceId: string | null,
 ): Pick<
   LineAccumulator,
-  'key' | 'carrier' | 'leadSourceId' | 'ratePercent' | 'rateSource'
+  'key' | 'carrier' | 'leadSourceId' | 'ratePercent' | 'rateSource' | 'rateStep'
 > {
   const carrierArg = carrier === PAYOUT_NO_CARRIER ? null : carrier;
   const key = carrierKey(carrier);
@@ -355,16 +627,23 @@ function lineFor(
         leadSourceId,
         ratePercent: resolved.ratePercent,
         rateSource: resolved.source,
+        rateStep: null,
       };
     }
   }
   const base = rateForCarrier(structure.rules, carrierArg);
+  const applied = base
+    ? steps.get(
+        base.source === 'any' ? ANY_CARRIER : rateRuleKey(carrierArg ?? ''),
+      )
+    : undefined;
   return {
     key: `${key}|`,
     carrier,
     leadSourceId: null,
-    ratePercent: base?.ratePercent ?? 0,
+    ratePercent: applied?.ratePercent ?? base?.ratePercent ?? 0,
     rateSource: base?.source ?? 'none',
+    rateStep: applied?.step ?? null,
   };
 }
 
@@ -543,8 +822,37 @@ function compareLines(
 export function computeStatement(
   input: ComputeStatementInput,
 ): StatementComputation {
-  const { structure, leadSourceNames } = input;
+  const { structure, leadSourceNames, inputs } = input;
   const warnings: string[] = [];
+  const belowFloor = complianceBelowFloor(structure.complianceFloor, inputs);
+  const grossPremiumIn = salesGrossPremium(input.sales);
+  const overallBundleRate = salesBundleRate(input.sales);
+
+  // Each rule's rate this month: its base, or the step it reached.
+  const steps = new Map<string, AppliedRate>();
+  const stepBonuses: NonNullable<StatementBonusesView['rateSteps']> = [];
+  for (const rule of structure.rules) {
+    const applied = appliedRate(rule, {
+      premium: grossPremiumIn,
+      retentionPercent: inputs.retentionPercent,
+      compliancePercent: inputs.compliancePercent,
+      bundleRate: overallBundleRate,
+      belowFloor,
+    });
+    steps.set(rateRuleKey(rule.carrier), applied);
+    warnings.push(...applied.notes);
+    if (applied.step !== null && applied.bonusAmount > 0) {
+      stepBonuses.push({
+        carrier: rateRuleCarrierLabel(rule.carrier),
+        step: applied.step,
+        threshold: applied.threshold ?? 0,
+        ratePercent: applied.ratePercent,
+        bonusAmount: applied.bonusAmount,
+      });
+    }
+  }
+  const lineTarget = (carrier: string, leadSourceId: string | null) =>
+    lineFor(structure, steps, carrier, leadSourceId);
 
   // Carrier names: the appointment's spelling wins, else the first seen.
   const appointedKeys = new Set<string>();
@@ -576,7 +884,7 @@ export function computeStatement(
     const name = nameOf(raw);
     if (name === PAYOUT_NO_CARRIER) continue;
     appointedKeys.add(carrierKey(name));
-    ensureLine(lineFor(structure, name, null));
+    ensureLine(lineTarget(name, null));
   }
 
   // Sales.
@@ -591,7 +899,7 @@ export function computeStatement(
   for (const sale of input.sales) {
     for (const saleLine of sale.lines) {
       const carrier = nameOf(saleLine.carrier);
-      const line = ensureLine(lineFor(structure, carrier, sale.leadSourceId));
+      const line = ensureLine(lineTarget(carrier, sale.leadSourceId));
       line.grossCents += toCents(saleLine.premium);
       if (carrier === PAYOUT_NO_CARRIER) {
         untypedCents += toCents(saleLine.premium);
@@ -599,20 +907,26 @@ export function computeStatement(
     }
   }
 
-  // Chargebacks, each on the line of the sale it reverses.
+  // Chargebacks, each on the line of the sale it reverses. One older than
+  // the structure's window (months after its cancellation) is left out.
   const exclusions = new Map<string, string>();
   for (const adjustment of input.adjustments) {
     if (adjustment.kind === 'exclude_chargeback' && adjustment.chargebackId) {
       exclusions.set(adjustment.chargebackId, adjustment.note);
     }
   }
+  const windowMonths = structure.chargebackWindowMonths;
   const chargebacks: StatementChargebackView[] = input.chargebacks
     .map((row) => {
       const carrier = nameOf(row.carrier);
-      const target = lineFor(structure, carrier, row.leadSourceId);
+      const target = lineTarget(carrier, row.leadSourceId);
       const line = ensureLine(target);
       const deduction = percentOf(row.amount, target.ratePercent);
-      const excluded = exclusions.has(row.chargebackId);
+      const outOfWindow =
+        windowMonths !== null &&
+        /^\d{4}-\d{2}/.test(row.occurredDay) &&
+        monthsBetween(row.occurredDay.slice(0, 7), input.month) > windowMonths;
+      const excluded = exclusions.has(row.chargebackId) || outOfWindow;
       if (!excluded) {
         line.chargebackCents += toCents(row.amount);
         line.impactCents += toCents(deduction);
@@ -633,9 +947,11 @@ export function computeStatement(
         ratePercent: target.ratePercent,
         commissionDeduction: deduction,
         excluded,
-        excludedNote: excluded
+        excludedNote: exclusions.has(row.chargebackId)
           ? (exclusions.get(row.chargebackId) ?? '')
-          : null,
+          : outOfWindow
+            ? `More than ${windowMonths} months after the cancellation, so it is not charged.`
+            : null,
       };
     })
     .sort(
@@ -690,6 +1006,7 @@ export function computeStatement(
         bundleRate,
         minBundleRatePercent: minimum,
         bundleShortfall: shortfall,
+        rateStep: line.rateStep,
       };
     });
 
@@ -711,6 +1028,16 @@ export function computeStatement(
     );
   }
 
+  // The compliance floor, and figures the structure needs but are missing.
+  if (belowFloor) {
+    warnings.push(
+      `The compliance rate of ${inputs.compliancePercent}% is below the ` +
+        `${structure.complianceFloor?.minimumPercent}% floor: no Sales of ` +
+        `the Month, hat trick, team or tier bonuses, every rate at its base, ` +
+        `and ${structure.complianceFloor?.reductionPercent}% off variable pay.`,
+    );
+  }
+
   // Bonuses.
   const grossCents = premiumLines.reduce(
     (sum, line) => sum + toCents(line.grossPremium),
@@ -721,13 +1048,31 @@ export function computeStatement(
   const days = hatTrick.enabled
     ? hatTrickDays(input.sales, hatTrick.dealsPerDay)
     : [];
-  const hatTrickBonus = fromCents(days.length * toCents(hatTrick.bonusAmount));
-  const tiers = levelsReached(
-    structure.individualTiers,
-    grossPremium,
-    structure.tiersStackable,
-    (tier) => tier.bonusAmount,
-  );
+  const hatTrickBonus = belowFloor
+    ? 0
+    : fromCents(days.length * toCents(hatTrick.bonusAmount));
+  const payableTiers = structure.individualTiers.filter((tier) => {
+    if (gateMet(tier.minCompliancePercent, inputs.compliancePercent)) {
+      return true;
+    }
+    if (tier.thresholdPremium <= grossPremium) {
+      warnings.push(
+        `The ${moneyText(tier.thresholdPremium)} tier ` +
+          `(${moneyText(tier.bonusAmount)}) is not paid — it needs a ` +
+          `${tier.minCompliancePercent}% compliance rate ` +
+          `(${percentText(inputs.compliancePercent)}).`,
+      );
+    }
+    return false;
+  });
+  const tiers = belowFloor
+    ? { amount: 0, levels: [] as BonusTier[] }
+    : levelsReached(
+        payableTiers,
+        grossPremium,
+        structure.tiersStackable,
+        (tier) => tier.bonusAmount,
+      );
   const sortedTiers = sortBonusTiers(structure.individualTiers);
   const highestIndex = sortedTiers.reduce(
     (found, tier, index) =>
@@ -735,8 +1080,116 @@ export function computeStatement(
     -1,
   );
   const som = input.salespersonOfMonth;
-  const somBonus = som.enabled && som.winner ? som.bonusAmount : 0;
-  const teamBonus = input.team.eligible ? input.team.amount : 0;
+  const somWinner = som.enabled && som.winner && !belowFloor;
+  const somBonus = somWinner ? som.bonusAmount : 0;
+  const teamBlocked = teamBlockReasons(structure, input.sales, inputs);
+  const teamBonus =
+    input.team.eligible && teamBlocked.length === 0 ? input.team.amount : 0;
+  const poy = input.producerOfYear;
+  const poyBonus = poy.enabled && poy.winner ? poy.bonusAmount : 0;
+  const stepBonusCents = belowFloor
+    ? 0
+    : stepBonuses.reduce((sum, step) => sum + toCents(step.bonusAmount), 0);
+
+  // Pay on other people's premium, and the bonus on the agency's.
+  const overrides = structure.overrides.map((rule) => {
+    const source = rule.leadSourceId?.toLowerCase() ?? null;
+    const premiumCents = agencyPremiumCents(
+      input.agencySales,
+      rule.carrier,
+      (line) =>
+        rule.basis === 'agency' ||
+        (line.producerId !== input.userId &&
+          (line.leadSourceId?.toLowerCase() ?? null) === source),
+    );
+    return {
+      basis: rule.basis,
+      leadSourceId: rule.leadSourceId,
+      leadSourceName: rule.leadSourceId
+        ? (leadSourceNames.get(rule.leadSourceId) ?? null)
+        : null,
+      carrier: rateRuleCarrierLabel(rule.carrier),
+      premium: fromCents(premiumCents),
+      ratePercent: rule.ratePercent,
+      amount: fromCents(percentOfCents(premiumCents, rule.ratePercent)),
+    };
+  });
+  const overrideCents = overrides.reduce(
+    (sum, row) => sum + toCents(row.amount),
+    0,
+  );
+  let agency: StatementBonusesView['agency'] = null;
+  if (structure.agencyTiers.length) {
+    const premium = fromCents(
+      agencyPremiumCents(input.agencySales, structure.agencyTiersCarrier),
+    );
+    const reached = levelsReached(
+      structure.agencyTiers,
+      premium,
+      false,
+      (tier) => tier.bonusAmount,
+    );
+    agency = {
+      carrier: rateRuleCarrierLabel(structure.agencyTiersCarrier),
+      premium,
+      reached: reached.levels[0]
+        ? {
+            thresholdPremium: reached.levels[0].thresholdPremium,
+            bonusAmount: reached.levels[0].bonusAmount,
+          }
+        : null,
+      amount: reached.amount,
+    };
+  }
+  const agencyBonus = agency?.amount ?? 0;
+
+  // Referrals.
+  let referrals: StatementBonusesView['referrals'] = null;
+  if (structure.referralRule) {
+    if (inputs.lifeReferrals === null) {
+      warnings.push('Life referrals are not entered.');
+    }
+    referrals = {
+      count: inputs.lifeReferrals,
+      minimum: structure.referralRule.minimum,
+      bonusThreshold: structure.referralRule.bonusThreshold,
+      amount: referralAdjustment(structure.referralRule, inputs.lifeReferrals),
+    };
+  }
+  if (
+    inputs.compliancePercent === null &&
+    (structure.complianceFloor !== null ||
+      structure.individualTiers.some((t) => t.minCompliancePercent != null) ||
+      structure.rules.some((r) =>
+        (r.steps ?? []).some((s) => s.minCompliancePercent !== null),
+      ))
+  ) {
+    warnings.push(
+      'The compliance rate is not entered: pay that needs a minimum rate is ' +
+        'held back until it is.',
+    );
+  }
+  if (teamBlocked.length && input.team.eligible && input.team.amount > 0) {
+    warnings.push(`No team bonus share: ${teamBlocked.join(' ')}`);
+  }
+
+  // Base pay and the stipend.
+  let basePay = structure.basePay;
+  if (basePay > 0 && !input.basePayApplies) {
+    warnings.push(
+      'Base pay is left off: this person is no longer active. Add any ' +
+        'pay owed for the month as an adjustment.',
+    );
+    basePay = 0;
+  }
+  if (structure.stipendAmounts.length && !input.startMonth) {
+    warnings.push('No start month is set, so no stipend is paid.');
+  }
+  const stipend = stipendFor(
+    structure.stipendAmounts,
+    input.startMonth,
+    input.month,
+  );
 
   // The manager's lines.
   const adjustmentCents = (kind: StatementAdjustmentKind) =>
@@ -762,16 +1215,34 @@ export function computeStatement(
     0,
   );
   const tierBonusCents = toCents(tiers.amount);
-  const netCents =
+  // Variable pay — what the compliance floor's reduction is a share of.
+  const variableCents =
     grossCommissionCents -
     impactCents +
+    overrideCents +
+    stepBonusCents +
     tierBonusCents +
+    toCents(agencyBonus) +
     toCents(teamBonus) +
     toCents(somBonus) +
     toCents(hatTrickBonus) +
+    toCents(poyBonus);
+  const reductionCents =
+    belowFloor && variableCents > 0
+      ? -percentOfCents(
+          variableCents,
+          structure.complianceFloor?.reductionPercent ?? 0,
+        )
+      : 0;
+  const referralCents = toCents(referrals?.amount ?? 0);
+  const netCents =
+    variableCents +
+    reductionCents +
+    referralCents +
     spiffsCents +
     complianceCents +
     otherCents;
+  const netPayCents = toCents(basePay) + toCents(stipend) + netCents;
 
   const bundleTotal = deals.filter((deal) => deal.isBundle).length;
 
@@ -798,8 +1269,24 @@ export function computeStatement(
       team: { ...input.team, amount: teamBonus },
       salespersonOfMonth: {
         enabled: som.enabled,
-        winner: som.enabled && som.winner,
+        winner: somWinner,
         amount: somBonus,
+      },
+      rateSteps: belowFloor ? [] : stepBonuses,
+      agency,
+      overrides,
+      referrals,
+      producerOfYear: {
+        enabled: poy.enabled,
+        winner: poy.enabled && poy.winner,
+        amount: poyBonus,
+      },
+      teamBlocked,
+      compliance: {
+        percent: inputs.compliancePercent,
+        floor: structure.complianceFloor,
+        belowFloor,
+        reduction: fromCents(reductionCents),
       },
     },
     indicators: {
@@ -812,9 +1299,11 @@ export function computeStatement(
           : null,
       bundleRate: ratioPercent(bundleTotal, deals.length),
       hatTricks: hatTrick.enabled ? days.length : null,
-      somStatus: !som.enabled ? 'off' : som.winner ? 'winner' : 'none',
-      complianceStatus: input.failedAudits > 0 ? 'non_compliant' : 'compliant',
+      somStatus: !som.enabled ? 'off' : somWinner ? 'winner' : 'none',
+      complianceStatus:
+        belowFloor || input.failedAudits > 0 ? 'non_compliant' : 'compliant',
       failedAudits: input.failedAudits,
+      compliancePercent: inputs.compliancePercent,
     },
     totals: {
       grossPremium,
@@ -830,6 +1319,15 @@ export function computeStatement(
       complianceAdjustment: fromCents(complianceCents),
       otherAdjustments: fromCents(otherCents),
       netCommission: fromCents(netCents),
+      basePay,
+      stipend,
+      rateStepBonus: fromCents(stepBonusCents),
+      overrideCommission: fromCents(overrideCents),
+      agencyBonus,
+      producerOfYearBonus: poyBonus,
+      complianceReduction: fromCents(reductionCents),
+      referralAdjustment: fromCents(referralCents),
+      netPay: fromCents(netPayCents),
     },
     warnings,
   };

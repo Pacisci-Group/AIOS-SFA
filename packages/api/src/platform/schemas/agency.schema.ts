@@ -1,5 +1,6 @@
 import {
   DEFAULT_AGENCY_END_OF_DAY_HOUR,
+  DEFAULT_PRODUCER_OF_YEAR,
   DEFAULT_SALESPERSON_OF_MONTH,
   DEFAULT_TEAM_BONUS,
   type AgencySetupStatus,
@@ -354,6 +355,36 @@ export const AgencySalespersonOfMonthSchema = SchemaFactory.createForClass(
 );
 
 /**
+ * Producer of the Year (2026 comp plan): a bonus on the December statement
+ * to the year's top producer by sold premium who was compliant in at least
+ * `minCompliantMonths` months. See `ProducerOfYearSettings` in `@sfa/shared`.
+ */
+@Schema({ _id: false })
+export class AgencyProducerOfYear {
+  @Prop({ type: Boolean, default: DEFAULT_PRODUCER_OF_YEAR.enabled })
+  enabled: boolean;
+
+  @Prop({ ...MONEY_PROP, default: DEFAULT_PRODUCER_OF_YEAR.bonusAmount })
+  bonusAmount: number;
+
+  @Prop({
+    type: Number,
+    min: 0,
+    max: 12,
+    default: DEFAULT_PRODUCER_OF_YEAR.minCompliantMonths,
+  })
+  minCompliantMonths: number;
+
+  @Prop({
+    ...PERCENT_PROP,
+    default: DEFAULT_PRODUCER_OF_YEAR.minCompliancePercent,
+  })
+  minCompliancePercent: number;
+}
+export const AgencyProducerOfYearSchema =
+  SchemaFactory.createForClass(AgencyProducerOfYear);
+
+/**
  * How the agency pays bonuses that are not per structure (PAC-177). Served by
  * `/payouts/settings` behind `agency:payouts:admin`, not by the agency profile:
  * it decides money, and its blast radius is its own.
@@ -376,6 +407,9 @@ export class AgencyPayoutSettings {
 
   @Prop({ type: AgencySalespersonOfMonthSchema })
   salespersonOfMonth?: AgencySalespersonOfMonth;
+
+  @Prop({ type: AgencyProducerOfYearSchema })
+  producerOfYear?: AgencyProducerOfYear;
 }
 export const AgencyPayoutSettingsSchema =
   SchemaFactory.createForClass(AgencyPayoutSettings);

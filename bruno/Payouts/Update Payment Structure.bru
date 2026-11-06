@@ -46,8 +46,8 @@ tests {
   test("replaced the whole structure", function () {
     // Allstate's minimum cleared, one set on the catch-all instead.
     expect(res.getBody().rules).to.deep.equal([
-      { carrier: "Allstate", ratePercent: 12.5, minBundleRatePercent: null },
-      { carrier: "*", ratePercent: 5, minBundleRatePercent: 60 }
+      { carrier: "Allstate", ratePercent: 12.5, minBundleRatePercent: null, stepBasis: "premium", steps: [] },
+      { carrier: "*", ratePercent: 5, minBundleRatePercent: 60, stepBasis: "premium", steps: [] }
     ]);
     expect(res.getBody().hatTrick.enabled).to.equal(false);
     expect(res.getBody().individualTiers).to.deep.equal([]);

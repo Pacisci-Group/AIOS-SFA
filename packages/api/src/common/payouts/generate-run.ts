@@ -1,19 +1,27 @@
 import {
+  complianceBelowFloor,
   computeStatement,
   computeTeamContext,
   EDITABLE_PAY_STATEMENT_STATUSES,
+  EMPTY_STATEMENT_INPUTS,
   isEditableStatementStatus,
   normalizeRateRules,
   payoutPoolFor,
   salesGrossPremium,
   salespersonOfMonthWinners,
+  statementInputsNeeded,
+  structurePlanDefaults,
+  teamBlockReasons,
   teamBonusFor,
   type PayoutAdjustment,
+  type PayoutSale,
   type PayoutPool,
   type PayoutRunTeamBonusView,
   type PayoutSettingsView,
   type PayStatementStatus,
   type StatementBonusesView,
+  type StatementInputs,
+  type StatementInputsNeeded,
   type StatementRules,
   type StatementStructureSnapshot,
 } from '@sfa/shared';
@@ -36,9 +44,18 @@ import { leadSourceLabels } from './lead-source-labels';
 import {
   agencyGrossPremium,
   appointedCarrierNames,
+  grossByProducer,
+  loadAgencySales,
   loadRunInputs,
   type PayoutInputModels,
 } from './load-run-inputs';
+import { monthWindow } from './month-window';
+import {
+  memberStartMonth,
+  storedPlan,
+  storedRateRules,
+  storedTiers,
+} from './structure-plan';
 import {
   payoutSettingsFrom,
   type StoredPayoutSettings,
@@ -110,6 +127,7 @@ interface LeanStatement {
   allstateBindId?: string | null;
   bonuses?: Partial<StatementBonusesView> | null;
   totals?: { grossPremium?: number } | null;
+  inputs?: Partial<StatementInputs> | null;
   adjustments?: {
     _id: Types.ObjectId;
     kind: PayoutAdjustment['kind'];
@@ -128,15 +146,23 @@ export function peopleModels(models: PayoutModels) {
   };
 }
 
-/** The structure as a statement freezes it, sources named. */
+/**
+ * The structure as a statement freezes it, sources named, with the member's
+ * start month (for the stipend).
+ */
 export function structureSnapshot(
   structure: LeanStructure,
   labels: ReadonlyMap<string, string>,
+  userId: string,
 ): StatementStructureSnapshot {
+  // Every member's start month stays on the structure; the snapshot keeps
+  // only this member's (`startMonth`, below).
+  const { memberStarts, ...plan } = storedPlan(structure, labels);
+  void memberStarts;
   return {
     id: String(structure._id),
     name: structure.name,
-    rules: normalizeRateRules(structure.rules ?? []),
+    rules: storedRateRules(structure.rules),
     leadSourceRules: (structure.leadSourceRules ?? []).map((rule) => ({
       leadSourceId: String(rule.leadSourceId),
       leadSourceName: labels.get(String(rule.leadSourceId)) ?? '',
@@ -148,24 +174,68 @@ export function structureSnapshot(
       dealsPerDay: structure.hatTrick.dealsPerDay,
       bonusAmount: structure.hatTrick.bonusAmount,
     },
-    individualTiers: (structure.individualTiers ?? []).map((tier) => ({
-      thresholdPremium: tier.thresholdPremium,
-      bonusAmount: tier.bonusAmount,
-    })),
+    individualTiers: storedTiers(structure.individualTiers),
     tiersStackable: structure.tiersStackable ?? false,
     teamBonusEligible: structure.teamBonusEligible,
+    ...plan,
+    startMonth: memberStartMonth(structure, userId),
   };
 }
 
-function rulesOf(snapshot: StatementStructureSnapshot): StatementRules {
+/**
+ * The rules a snapshot computes with. A snapshot frozen before the 2026
+ * comp-plan parts existed has none of them: it reads as "none of each".
+ */
+export function rulesOf(snapshot: StatementStructureSnapshot): StatementRules {
+  const { memberStarts, ...plan } = structurePlanDefaults(snapshot);
+  void memberStarts;
   return {
-    rules: snapshot.rules,
+    rules: normalizeRateRules(snapshot.rules),
     leadSourceRules: snapshot.leadSourceRules,
     hatTrick: snapshot.hatTrick,
     individualTiers: snapshot.individualTiers,
     tiersStackable: snapshot.tiersStackable,
     teamBonusEligible: snapshot.teamBonusEligible,
+    ...plan,
   };
+}
+
+/**
+ * The figures a statement asks the manager for: what its rules read, and the
+ * compliance rate whenever Producer of the Year is on — it counts the
+ * months with an entered rate, so every month's is needed.
+ */
+function inputsNeededFor(
+  rules: StatementRules,
+  settings: Pick<PayoutSettingsView, 'producerOfYear'>,
+): StatementInputsNeeded {
+  const needed = statementInputsNeeded(rules);
+  return {
+    ...needed,
+    compliance: needed.compliance || settings.producerOfYear.enabled,
+  };
+}
+
+/** The figures the manager entered; all `null` on a statement without them. */
+export function inputsOf(
+  statement: { inputs?: Partial<StatementInputs> | null } | undefined,
+): StatementInputs {
+  return { ...EMPTY_STATEMENT_INPUTS, ...(statement?.inputs ?? {}) };
+}
+
+/**
+ * Takes part in the team pool: on a structure that does, and not blocked by
+ * the compliance floor or the team requirements (2026 plans).
+ */
+function teamEligible(
+  rules: StatementRules,
+  sales: readonly PayoutSale[],
+  inputs: StatementInputs,
+): boolean {
+  return (
+    rules.teamBonusEligible &&
+    teamBlockReasons(rules, sales, inputs).length === 0
+  );
 }
 
 function adjustmentsOf(
@@ -267,21 +337,29 @@ async function computeRun(
   }
   const memberIds = [...structureOf.keys()];
 
-  const [people, labels, inputs, agencyGross, appointed, existingRows] =
-    await Promise.all([
-      loadPayoutPeople(peopleModels(models), agencyId, memberIds),
-      leadSourceLabels(models.leadSource, agencyId),
-      loadRunInputs(models, {
-        agencyId,
-        month: run.month,
-        window,
-        timeZone,
-        memberIds,
-      }),
-      agencyGrossPremium(models.deal, agencyId, window),
-      appointedCarrierNames(models.carrier, agency?.carrierAppointments),
-      models.payStatement.find({ agencyId, runId }).lean<LeanStatement[]>(),
-    ]);
+  const [
+    people,
+    labels,
+    inputs,
+    agencyGross,
+    appointed,
+    existingRows,
+    agencySales,
+  ] = await Promise.all([
+    loadPayoutPeople(peopleModels(models), agencyId, memberIds),
+    leadSourceLabels(models.leadSource, agencyId),
+    loadRunInputs(models, {
+      agencyId,
+      month: run.month,
+      window,
+      timeZone,
+      memberIds,
+    }),
+    agencyGrossPremium(models.deal, agencyId, window),
+    appointedCarrierNames(models.carrier, agency?.carrierAppointments),
+    models.payStatement.find({ agencyId, runId }).lean<LeanStatement[]>(),
+    loadAgencySales(models.deal, agencyId, window),
+  ]);
   const existing = new Map(
     existingRows.map((row) => [String(row.userId), row]),
   );
@@ -289,6 +367,11 @@ async function computeRun(
   interface Recipient {
     person: PayoutPerson;
     structure: LeanStructure;
+    snapshot: StatementStructureSnapshot;
+    rules: StatementRules;
+    /** The figures the manager entered on the month's statement, if any. */
+    inputs: StatementInputs;
+    sales: PayoutSale[];
     pool: PayoutPool;
     gross: number;
   }
@@ -308,38 +391,58 @@ async function computeRun(
     const prior = existing.get(userId);
     const issued = prior && !isEditableStatementStatus(prior.status);
     if (person.status !== 'active' && !hasActivity && !issued) continue;
+    const snapshot = structureSnapshot(structure, labels, userId);
     recipients.push({
       person,
       structure,
+      snapshot,
+      rules: rulesOf(snapshot),
+      inputs: inputsOf(prior),
+      sales,
       pool: payoutPoolFor(person.roleSlugs),
       gross: salesGrossPremium(sales),
     });
   }
   if (!structures.length) warnings.push('No payment structure is active.');
 
+  // Below the compliance floor, or short of a team requirement, a person
+  // takes no share of the pool and cannot win Salesperson of the Month — so
+  // the pool is split, and the month won, among the others (2026 plans).
   const teamMembers = recipients.map((r) => ({
     userId: r.person.id,
     pool: r.pool,
     grossPremium: r.gross,
-    eligible: r.structure.teamBonusEligible,
+    eligible: teamEligible(r.rules, r.sales, r.inputs),
   }));
+  const eligibleOf = new Map(teamMembers.map((m) => [m.userId, m.eligible]));
   const team = computeTeamContext(settings.teamBonus, agencyGross, teamMembers);
   warnings.push(...team.warnings);
   const som = salespersonOfMonthWinners(
     settings.salespersonOfMonth,
-    teamMembers,
+    recipients
+      .filter((r) => !complianceBelowFloor(r.rules.complianceFloor, r.inputs))
+      .map((r) => ({ userId: r.person.id, grossPremium: r.gross })),
   );
+  const poy = await producerOfYearWinners(models, {
+    agencyId,
+    run,
+    settings,
+    recipients: recipients.map((r) => ({
+      userId: r.person.id,
+      inputs: r.inputs,
+    })),
+  });
 
   let drafted = 0;
   let untouched = 0;
   for (const recipient of recipients) {
-    const { person, structure, pool } = recipient;
+    const { person, structure, pool, snapshot } = recipient;
     const userId = person.id;
     const prior = existing.get(userId);
     const teamPart = teamBonusFor(team, {
       userId,
       pool,
-      eligible: structure.teamBonusEligible,
+      eligible: eligibleOf.get(userId) ?? false,
     });
     if (prior && !isEditableStatementStatus(prior.status)) {
       untouched += 1;
@@ -353,10 +456,20 @@ async function computeRun(
       continue;
     }
 
-    const snapshot = structureSnapshot(structure, labels);
     const computed = computeStatement({
-      structure: rulesOf(snapshot),
-      sales: inputs.sales.get(userId) ?? [],
+      month: run.month,
+      userId,
+      structure: recipient.rules,
+      inputs: recipient.inputs,
+      startMonth: snapshot.startMonth ?? null,
+      basePayApplies: person.status === 'active',
+      agencySales,
+      producerOfYear: {
+        enabled: poy.enabled,
+        bonusAmount: poy.bonusAmount,
+        winner: poy.winnerIds.includes(userId),
+      },
+      sales: recipient.sales,
       chargebacks: inputs.chargebacks.get(userId) ?? [],
       adjustments: adjustmentsOf(prior),
       appointedCarriers: appointed,
@@ -391,6 +504,7 @@ async function computeRun(
             structureSnapshot: snapshot,
             timeZone,
             ...computed,
+            inputsNeeded: inputsNeededFor(recipient.rules, settings),
             computedAt: now,
           },
           $setOnInsert: { status: 'draft', version: 1, adjustments: [] },
@@ -460,12 +574,104 @@ async function computeRun(
           share: member.eligible ? (team.shares[member.userId] ?? 0) : 0,
         })),
         salespersonOfMonth,
+        producerOfYear: poy.enabled
+          ? {
+              enabled: true,
+              bonusAmount: poy.bonusAmount,
+              topGrossPremium: poy.topGrossPremium,
+              winners: poy.winnerIds.map((userId) => ({
+                userId,
+                name: names.get(userId) ?? '',
+              })),
+            }
+          : null,
         warnings,
       },
     },
   );
 
   return { runId: String(runId), statements, drafted, untouched };
+}
+
+/**
+ * Producer of the Year (2026 plan), on December's run only: of this run's
+ * recipients, those compliant — an entered compliance rate at least the
+ * setting's — in at least `minCompliantMonths` of the year's statements,
+ * the one(s) with the highest sold premium over the calendar year. December's
+ * own month counts with the figure entered on this run's statement.
+ */
+async function producerOfYearWinners(
+  models: PayoutModels,
+  args: {
+    agencyId: string;
+    run: Pick<PayoutRun, 'month' | 'timeZone' | 'window'>;
+    settings: PayoutSettingsView;
+    recipients: { userId: string; inputs: StatementInputs }[];
+  },
+): Promise<{
+  enabled: boolean;
+  bonusAmount: number;
+  topGrossPremium: number | null;
+  winnerIds: string[];
+}> {
+  const { agencyId, run, settings } = args;
+  const rule = settings.producerOfYear;
+  const off = {
+    enabled: false,
+    bonusAmount: rule.bonusAmount,
+    topGrossPremium: null,
+    winnerIds: [],
+  };
+  if (!rule.enabled || !run.month.endsWith('-12') || !args.recipients.length) {
+    return off;
+  }
+  const year = run.month.slice(0, 4);
+  const yearWindow = {
+    $gte: monthWindow(`${year}-01`, run.timeZone).$gte,
+    $lt: run.window.to,
+  };
+  const [gross, earlier] = await Promise.all([
+    grossByProducer(models.deal, agencyId, yearWindow),
+    models.payStatement
+      .find({
+        agencyId,
+        month: { $gte: `${year}-01`, $lt: run.month },
+        userId: {
+          $in: args.recipients.map((r) => new Types.ObjectId(r.userId)),
+        },
+        'inputs.compliancePercent': { $gte: rule.minCompliancePercent },
+      })
+      .select({ userId: 1, month: 1 })
+      .lean<{ userId: Types.ObjectId; month: string }[]>(),
+  ]);
+  const months = new Map<string, Set<string>>();
+  for (const row of earlier) {
+    const key = String(row.userId);
+    months.set(key, (months.get(key) ?? new Set()).add(row.month));
+  }
+  const candidates = args.recipients.filter((r) => {
+    const compliant =
+      (months.get(r.userId)?.size ?? 0) +
+      (r.inputs.compliancePercent !== null &&
+      r.inputs.compliancePercent >= rule.minCompliancePercent
+        ? 1
+        : 0);
+    return compliant >= rule.minCompliantMonths;
+  });
+  const top = candidates.reduce(
+    (max, r) => Math.max(max, Math.round((gross.get(r.userId) ?? 0) * 100)),
+    0,
+  );
+  if (top <= 0) return { ...off, enabled: true };
+  return {
+    enabled: true,
+    bonusAmount: rule.bonusAmount,
+    topGrossPremium: top / 100,
+    winnerIds: candidates
+      .filter((r) => Math.round((gross.get(r.userId) ?? 0) * 100) === top)
+      .map((r) => r.userId)
+      .sort(),
+  };
 }
 
 /**
@@ -498,31 +704,40 @@ export async function recomputeStatement(
   const userId = String(statement.userId);
   const timeZone = run.timeZone;
   const window = { $gte: run.window.from, $lt: run.window.to };
-  const settings = run.settingsSnapshot ?? payoutSettingsFrom(null);
+  // Through the mapper: a run calculated before a setting existed (Producer
+  // of the Year) has a snapshot without it.
+  const settings = payoutSettingsFrom(run.settingsSnapshot);
 
-  const [structure, people, labels, inputs, agency] = await Promise.all([
-    models.paymentStructure
-      .findOne({ agencyId, status: 'active', memberIds: statement.userId })
-      .sort({ name: 1 })
-      .lean<LeanStructure | null>(),
-    loadPayoutPeople(peopleModels(models), agencyId, [userId]),
-    leadSourceLabels(models.leadSource, agencyId),
-    loadRunInputs(models, {
-      agencyId,
-      month: run.month,
-      window,
-      timeZone,
-      memberIds: [userId],
-    }),
-    models.agency.findById(agencyId).select({ carrierAppointments: 1 }).lean<{
-      carrierAppointments?: { carrierId?: Types.ObjectId; active?: boolean }[];
-    } | null>(),
-  ]);
+  const [structure, people, labels, inputs, agency, agencySales] =
+    await Promise.all([
+      models.paymentStructure
+        .findOne({ agencyId, status: 'active', memberIds: statement.userId })
+        .sort({ name: 1 })
+        .lean<LeanStructure | null>(),
+      loadPayoutPeople(peopleModels(models), agencyId, [userId]),
+      leadSourceLabels(models.leadSource, agencyId),
+      loadRunInputs(models, {
+        agencyId,
+        month: run.month,
+        window,
+        timeZone,
+        memberIds: [userId],
+      }),
+      models.agency.findById(agencyId).select({ carrierAppointments: 1 }).lean<{
+        carrierAppointments?: {
+          carrierId?: Types.ObjectId;
+          active?: boolean;
+        }[];
+      } | null>(),
+      loadAgencySales(models.deal, agencyId, window),
+    ]);
   const person = people.get(userId);
   const warnings: string[] = [];
   const snapshot = structure
-    ? structureSnapshot(structure, labels)
+    ? structureSnapshot(structure, labels, userId)
     : statement.structureSnapshot;
+  const rules = rulesOf(snapshot);
+  const entered = inputsOf(statement);
   if (!structure) {
     warnings.push(
       `${statement.userName} is no longer on a payment structure; this ` +
@@ -533,6 +748,7 @@ export async function recomputeStatement(
   const pool = person ? payoutPoolFor(roleSlugs) : statement.pool;
   const sales = inputs.sales.get(userId) ?? [];
   const gross = salesGrossPremium(sales);
+  const eligibleNow = teamEligible(rules, sales, entered);
 
   const stored = run.teamShares?.find((row) => String(row.userId) === userId);
   const teamView = run.teamBonus;
@@ -553,16 +769,34 @@ export async function recomputeStatement(
   const winners = run.salespersonOfMonth?.winners ?? [];
   const storedGross =
     stored?.grossPremium ?? statement.totals?.grossPremium ?? 0;
-  if (Math.round(storedGross * 100) !== Math.round(gross * 100)) {
+  const somBlocked = complianceBelowFloor(rules.complianceFloor, entered);
+  const somWinner = winners.some((winner) => winner.userId === userId);
+  if (
+    Math.round(storedGross * 100) !== Math.round(gross * 100) ||
+    (stored !== undefined && stored.eligible !== eligibleNow) ||
+    (somWinner && somBlocked)
+  ) {
     warnings.push(
-      'Sold premium has changed since the month was last calculated. ' +
-        'Recalculate the month to update the team bonus split and ' +
-        'Salesperson of the Month.',
+      'Sold premium or eligibility has changed since the month was last ' +
+        'calculated. Recalculate the month to update the team bonus split ' +
+        'and Salesperson of the Month.',
     );
   }
+  const poy = run.producerOfYear;
 
   const computed = computeStatement({
-    structure: rulesOf(snapshot),
+    month: run.month,
+    userId,
+    structure: rules,
+    inputs: entered,
+    startMonth: snapshot.startMonth ?? null,
+    basePayApplies: person ? person.status === 'active' : false,
+    agencySales,
+    producerOfYear: {
+      enabled: Boolean(poy?.enabled),
+      bonusAmount: poy?.bonusAmount ?? 0,
+      winner: (poy?.winners ?? []).some((winner) => winner.userId === userId),
+    },
     sales,
     chargebacks: inputs.chargebacks.get(userId) ?? [],
     adjustments: adjustmentsOf(statement),
@@ -602,6 +836,7 @@ export async function recomputeStatement(
         structureSnapshot: snapshot,
         timeZone,
         ...computed,
+        inputsNeeded: inputsNeededFor(rules, settings),
         warnings: [...warnings, ...computed.warnings],
         computedAt: now,
       },

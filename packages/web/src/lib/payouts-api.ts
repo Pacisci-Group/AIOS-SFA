@@ -20,6 +20,7 @@ import type {
   PayoutSettingsView,
   UpdatePaymentStructureInput,
   UpdatePayoutSettingsInput,
+  UpdateStatementInputsInput,
   UpsertPaymentStructureInput,
 } from "@sfa/shared";
 import { apiFetch } from "@/lib/api-client";
@@ -174,6 +175,23 @@ export function recalculatePayStatement(id: string): Promise<PayStatementView> {
   return apiFetch<PayStatementView>(
     `/payouts/statements/${encodeURIComponent(id)}/recalculate`,
     { method: "POST" },
+  );
+}
+
+/**
+ * The figures the manager enters on a statement (2026 comp plans) — all
+ * four, each `null` when not entered — and the statement recalculated with
+ * them. `payouts:write`; 403 `PAYOUT_STATEMENT_OWN_INPUTS` on one's own
+ * statement without `agency:payouts:admin`; 409
+ * `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted.
+ */
+export function updatePayStatementInputs(
+  id: string,
+  input: UpdateStatementInputsInput,
+): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/inputs`,
+    { method: "PATCH", body: JSON.stringify(input) },
   );
 }
 

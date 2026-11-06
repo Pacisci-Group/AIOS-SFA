@@ -265,6 +265,18 @@ temperature/aging that aren't first-class in legacy payloads. See
   month of their date. ⚠ **A policy is charged back once**: a report line
   whose policy already has any chargeback (any month, any source) is a
   duplicate that is never charged, and the commit re-checks the ledger.
+  The **2026 comp plans** (6 Nov 2026) add optional structure parts — rates
+  that step up on the month's premium or on retention (gated by compliance
+  and bundle rate, applied to all premium, not split-rate), base pay, a
+  stipend by start month, a compliance floor, overrides on agency or
+  lead-source premium, agency-premium tiers, team requirements, a referral
+  rule, a chargeback window — and Producer of the Year. Figures the app
+  cannot know (compliance rate, retention, referrals, attendance) are
+  **entered on each statement** (`PATCH /payouts/statements/:id/inputs`): a
+  gate is unmet until its figure is entered, a penalty applies only to an
+  entered one. Statements carry `netPay` = base pay + stipend + net
+  commission. Life Specialist pay is not built (no term/permanent or
+  issued-and-paid data).
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

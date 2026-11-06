@@ -18,13 +18,19 @@ import { DetailCard } from "@/components/common/DetailCard";
 import { StepProgress } from "@/components/common/StepProgress";
 import { WizardFooter } from "@/components/common/WizardFooter";
 import { FormError } from "@/components/form";
-import type { ChecklistOption, ComboboxOption } from "@/components/form/fields";
+import type {
+  ChecklistOption,
+  ComboboxOption,
+  SelectOption,
+} from "@/components/form/fields";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/contexts/auth-context";
 import { useAppForm } from "@/hooks/form";
 import { useLeadSources } from "@/hooks/useLeadSources";
 import { carriersKey, getCarriers } from "@/lib/carriers-api";
 import { ownsPath } from "@/lib/field-paths";
+import { addMonths, agencyMonth, formatMonth, isMonth } from "@/lib/months";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 import {
   createPaymentStructure,
@@ -210,6 +216,7 @@ function StructureEditor({
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [stepIndex, setStepIndex] = useState(0);
   const [submitError, setSubmitError] = useState<SubmitError | null>(null);
   const [defaultValues] = useState<StructureFormValues>(() =>
@@ -238,6 +245,10 @@ function StructureEditor({
   const peopleOptions = useMemo(
     () => peopleOptionsFor(people, structure),
     [people, structure],
+  );
+  const startMonthOptions = useMemo(
+    () => startMonthOptionsFor(agencyMonth(user?.timeZone), defaultValues),
+    [user?.timeZone, defaultValues],
   );
 
   const save = useMutation({
@@ -350,9 +361,13 @@ function StructureEditor({
             leadSourcesUnavailable={leadSourcesUnavailable}
           />
         ) : step.id === "bonuses" ? (
-          <BonusesStep form={form} />
+          <BonusesStep form={form} carrierOptions={leadSourceCarrierOptions} />
         ) : (
-          <PeopleStep form={form} options={peopleOptions} />
+          <PeopleStep
+            form={form}
+            options={peopleOptions}
+            monthOptions={startMonthOptions}
+          />
         )}
 
         {submitError ? (
@@ -402,16 +417,22 @@ function StructureEditor({
 
 /**
  * The carrier catalog by name, "Any other carrier" first, plus any carrier a
- * stored rule (carrier or lead-source) names that the catalog no longer
- * lists — so an old rule still renders as itself instead of an empty picker.
+ * stored rule (carrier, lead-source, override or agency tier) names that the
+ * catalog no longer lists — so an old rule still renders as itself instead
+ * of an empty picker.
  */
 function carrierOptionsFor(
   carriers: readonly CarrierOption[],
   values: StructureFormValues,
 ): ComboboxOption<string>[] {
   const names = new Set(carriers.map((carrier) => carrier.name));
-  for (const rule of [...values.rules, ...values.leadSourceRules]) {
-    if (rule.carrier && rule.carrier !== ANY_CARRIER) names.add(rule.carrier);
+  for (const carrier of [
+    ...[...values.rules, ...values.leadSourceRules, ...values.overrides].map(
+      (rule) => rule.carrier,
+    ),
+    values.agencyTiersCarrier,
+  ]) {
+    if (carrier && carrier !== ANY_CARRIER) names.add(carrier);
   }
   return [
     {
@@ -442,7 +463,20 @@ function leadSourceOptionsFor(
     keywords: [source.slug],
   }));
   const listed = new Set(options.map((option) => option.value));
-  for (const rule of structure?.leadSourceRules ?? []) {
+  const stored = [
+    ...(structure?.leadSourceRules ?? []),
+    ...(structure?.overrides ?? []).flatMap((rule) =>
+      rule.leadSourceId
+        ? [
+            {
+              leadSourceId: rule.leadSourceId,
+              leadSourceName: rule.leadSourceName ?? "",
+            },
+          ]
+        : [],
+    ),
+  ];
+  for (const rule of stored) {
     if (listed.has(rule.leadSourceId)) continue;
     listed.add(rule.leadSourceId);
     options.push({
@@ -453,6 +487,32 @@ function leadSourceOptionsFor(
     });
   }
   return options;
+}
+
+/** The start-month picker's "no start month" entry — Radix Select cannot hold `""`. */
+const NO_START_MONTH = "none";
+
+/**
+ * The months a start month may be: three ahead of the agency's current one
+ * (a new hire starting next month) back two years, newest first, plus any
+ * stored start outside that — so it still renders as itself — and "Not set".
+ */
+function startMonthOptionsFor(
+  currentMonth: string,
+  values: StructureFormValues,
+): SelectOption<string>[] {
+  const months = new Set(
+    Array.from({ length: 28 }, (_, back) => addMonths(currentMonth, 3 - back)),
+  );
+  for (const month of Object.values(values.memberStarts)) {
+    if (isMonth(month)) months.add(month);
+  }
+  return [
+    { value: NO_START_MONTH, label: "Not set" },
+    ...[...months]
+      .sort((a, b) => b.localeCompare(a))
+      .map((month) => ({ value: month, label: formatMonth(month) })),
+  ];
 }
 
 /**

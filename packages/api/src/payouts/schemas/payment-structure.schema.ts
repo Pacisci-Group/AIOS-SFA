@@ -1,14 +1,18 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import {
+  ANY_CARRIER,
   MAX_HAT_TRICK_DEALS,
   MIN_HAT_TRICK_DEALS,
+  OVERRIDE_BASES,
   PAYMENT_STRUCTURE_STATUSES,
+  RATE_STEP_BASES,
 } from '@sfa/shared';
 import type {
   BonusTier,
   HatTrickRule,
+  OverrideBasis,
   PaymentStructureStatus,
-  RateRule,
+  RateStepBasis,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
@@ -28,8 +32,31 @@ export type PaymentStructureDocument = HydratedDocument<PaymentStructure>;
  * `create`.
  */
 
+/** One step of a stepped rate (`RateStep` in `@sfa/shared`). */
 @Schema({ _id: false })
-export class PaymentStructureRateRule implements RateRule {
+export class PaymentStructureRateStep {
+  /** Dollars of premium, or a retention percentage — the rule's `stepBasis`. */
+  @Prop({ ...MONEY_PROP, required: true })
+  threshold: number;
+
+  @Prop({ ...PERCENT_PROP, required: true })
+  ratePercent: number;
+
+  @Prop({ ...MONEY_PROP, default: 0 })
+  bonusAmount: number;
+
+  @Prop(NULLABLE_PERCENT_PROP)
+  minCompliancePercent: number | null;
+
+  @Prop(NULLABLE_PERCENT_PROP)
+  minBundleRatePercent: number | null;
+}
+const PaymentStructureRateStepSchema = SchemaFactory.createForClass(
+  PaymentStructureRateStep,
+);
+
+@Schema({ _id: false })
+export class PaymentStructureRateRule {
   /** A carrier's display name, or `ANY_CARRIER` (`*`). */
   @Prop({ type: String, required: true, trim: true })
   carrier: string;
@@ -43,6 +70,14 @@ export class PaymentStructureRateRule implements RateRule {
    */
   @Prop(NULLABLE_PERCENT_PROP)
   minBundleRatePercent: number | null;
+
+  /** What `steps` are measured on. Absent on rules saved before steps. */
+  @Prop({ type: String, enum: RATE_STEP_BASES, default: 'premium' })
+  stepBasis: RateStepBasis;
+
+  /** Lowest threshold first; `[]` = a flat rate. */
+  @Prop({ type: [PaymentStructureRateStepSchema], default: [] })
+  steps: PaymentStructureRateStep[];
 }
 const PaymentStructureRateRuleSchema = SchemaFactory.createForClass(
   PaymentStructureRateRule,
@@ -99,9 +134,89 @@ export class PaymentStructureBonusTier implements BonusTier {
 
   @Prop({ ...MONEY_PROP, required: true })
   bonusAmount: number;
+
+  /** Monthly tiers only: the tier needs an entered compliance rate this high. */
+  @Prop(NULLABLE_PERCENT_PROP)
+  minCompliancePercent: number | null;
 }
 const PaymentStructureBonusTierSchema = SchemaFactory.createForClass(
   PaymentStructureBonusTier,
+);
+
+@Schema({ _id: false })
+export class PaymentStructureComplianceFloor {
+  @Prop({ ...PERCENT_PROP, required: true })
+  minimumPercent: number;
+
+  @Prop({ ...PERCENT_PROP, required: true })
+  reductionPercent: number;
+}
+const PaymentStructureComplianceFloorSchema = SchemaFactory.createForClass(
+  PaymentStructureComplianceFloor,
+);
+
+/** Pay on premium other people sold (`OverrideRule` in `@sfa/shared`). */
+@Schema({ _id: false })
+export class PaymentStructureOverride {
+  @Prop({ type: String, enum: OVERRIDE_BASES, required: true })
+  basis: OverrideBasis;
+
+  /** The lead source of a `lead_source` override; `null` for `agency`. */
+  @Prop({ type: ObjectIdType, ref: 'LeadSource', default: null })
+  leadSourceId: Types.ObjectId | null;
+
+  @Prop({ type: String, required: true, trim: true })
+  carrier: string;
+
+  @Prop({ ...PERCENT_PROP, required: true })
+  ratePercent: number;
+}
+const PaymentStructureOverrideSchema = SchemaFactory.createForClass(
+  PaymentStructureOverride,
+);
+
+@Schema({ _id: false })
+export class PaymentStructureTeamRequirements {
+  @Prop({ type: Number, min: 0, max: 31, default: null })
+  soldLogWithinDays: number | null;
+
+  @Prop({ type: Boolean, default: false })
+  meetingAttendance: boolean;
+}
+const PaymentStructureTeamRequirementsSchema = SchemaFactory.createForClass(
+  PaymentStructureTeamRequirements,
+);
+
+@Schema({ _id: false })
+export class PaymentStructureReferralRule {
+  @Prop({ type: Number, required: true, min: 0, validate: WHOLE_NUMBER })
+  minimum: number;
+
+  @Prop({ ...MONEY_PROP, required: true })
+  shortfallDeduction: number;
+
+  @Prop({ type: Number, min: 1, default: null })
+  bonusThreshold: number | null;
+
+  @Prop({ ...MONEY_PROP, required: true })
+  bonusAmount: number;
+}
+const PaymentStructureReferralRuleSchema = SchemaFactory.createForClass(
+  PaymentStructureReferralRule,
+);
+
+/** When a member started — month 1 of the stipend. */
+@Schema({ _id: false })
+export class PaymentStructureMemberStart {
+  @Prop({ type: ObjectIdType, ref: 'User', required: true })
+  userId: Types.ObjectId;
+
+  /** `YYYY-MM`. */
+  @Prop({ type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ })
+  startMonth: string;
+}
+const PaymentStructureMemberStartSchema = SchemaFactory.createForClass(
+  PaymentStructureMemberStart,
 );
 
 /**
@@ -186,6 +301,44 @@ export class PaymentStructure {
 
   @Prop({ type: Boolean, required: true, default: true })
   teamBonusEligible: boolean;
+
+  // ── The 2026 comp-plan parts (6 Nov 2026) ────────────────────────────
+  // Every one defaults to "none"; reads still null-guard them, because a
+  // structure saved before they existed has none of the fields at all.
+
+  /** Monthly base pay on every member's statement. */
+  @Prop({ ...MONEY_PROP, default: 0 })
+  basePay: number;
+
+  /** The stipend for months 1, 2, … of a member's start. */
+  @Prop({ type: [Number], default: [] })
+  stipendAmounts: number[];
+
+  /** Members' start months (for the stipend); kept to current members. */
+  @Prop({ type: [PaymentStructureMemberStartSchema], default: [] })
+  memberStarts: PaymentStructureMemberStart[];
+
+  @Prop({ type: PaymentStructureComplianceFloorSchema, default: null })
+  complianceFloor: PaymentStructureComplianceFloor | null;
+
+  @Prop({ type: [PaymentStructureOverrideSchema], default: [] })
+  overrides: PaymentStructureOverride[];
+
+  /** A personal bonus on the agency's premium on `agencyTiersCarrier`. */
+  @Prop({ type: [PaymentStructureBonusTierSchema], default: [] })
+  agencyTiers: PaymentStructureBonusTier[];
+
+  @Prop({ type: String, default: ANY_CARRIER, trim: true })
+  agencyTiersCarrier: string;
+
+  @Prop({ type: PaymentStructureTeamRequirementsSchema, default: null })
+  teamRequirements: PaymentStructureTeamRequirements | null;
+
+  @Prop({ type: PaymentStructureReferralRuleSchema, default: null })
+  referralRule: PaymentStructureReferralRule | null;
+
+  @Prop({ type: Number, min: 1, max: 36, default: null })
+  chargebackWindowMonths: number | null;
 
   @Prop({ type: [ObjectIdType], ref: 'User', default: [] })
   memberIds: Types.ObjectId[];

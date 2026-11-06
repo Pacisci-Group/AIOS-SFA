@@ -1,9 +1,12 @@
-import type {
-  PayoutRunView,
-  PayStatementStatus,
-  PayStatementSummary,
-  PayStatementView,
-  StatementAdjustmentView,
+import {
+  EMPTY_STATEMENT_INPUTS,
+  statementInputsNeeded,
+  structurePlanDefaults,
+  type PayoutRunView,
+  type PayStatementStatus,
+  type PayStatementSummary,
+  type PayStatementView,
+  type StatementAdjustmentView,
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import type { PayoutRun } from './schemas/payout-run.schema';
@@ -25,7 +28,7 @@ export interface RunCounts {
 
 export const EMPTY_RUN_COUNTS: RunCounts = {
   counts: { statements: 0, draft: 0, sent: 0, accepted: 0, rejected: 0 },
-  totals: { grossPremium: 0, netCommission: 0 },
+  totals: { grossPremium: 0, netCommission: 0, netPay: 0 },
 };
 
 /** Per-status counts and totals over a set of statements, from an aggregate. */
@@ -35,20 +38,27 @@ export function runCountsFrom(
     count: number;
     grossPremium: number;
     netCommission: number;
+    netPay?: number;
   }[],
 ): RunCounts {
   const counts = { ...EMPTY_RUN_COUNTS.counts };
   let gross = 0;
   let net = 0;
+  let pay = 0;
   for (const row of rows) {
     counts[row._id] = row.count;
     counts.statements += row.count;
     gross += Math.round(row.grossPremium * 100);
     net += Math.round(row.netCommission * 100);
+    pay += Math.round((row.netPay ?? row.netCommission) * 100);
   }
   return {
     counts,
-    totals: { grossPremium: gross / 100, netCommission: net / 100 },
+    totals: {
+      grossPremium: gross / 100,
+      netCommission: net / 100,
+      netPay: pay / 100,
+    },
   };
 }
 
@@ -85,6 +95,14 @@ export function runView(run: LeanRun, scoped: RunCounts): PayoutRunView {
       topGrossPremium: som?.topGrossPremium ?? null,
       winners: som?.winners ?? [],
     },
+    producerOfYear: run.producerOfYear
+      ? {
+          enabled: run.producerOfYear.enabled,
+          bonusAmount: run.producerOfYear.bonusAmount,
+          topGrossPremium: run.producerOfYear.topGrossPremium ?? null,
+          winners: run.producerOfYear.winners ?? [],
+        }
+      : null,
     counts: scoped.counts,
     totals: scoped.totals,
     warnings: run.warnings ?? [],
@@ -130,6 +148,8 @@ function adjustmentView(
 }
 
 export function statementView(doc: LeanStatement): PayStatementView {
+  const snapshot = doc.structureSnapshot;
+  const plan = structurePlanDefaults(snapshot ?? {});
   return {
     ...statementSummary(doc),
     allstateBindId: doc.allstateBindId ?? null,
@@ -141,6 +161,19 @@ export function statementView(doc: LeanStatement): PayStatementView {
     bonuses: doc.bonuses,
     indicators: doc.indicators,
     adjustments: (doc.adjustments ?? []).map(adjustmentView),
+    inputs: { ...EMPTY_STATEMENT_INPUTS, ...(doc.inputs ?? {}) },
+    // Stored by the calculation; derived from the snapshot for a statement
+    // computed before it was.
+    inputsNeeded:
+      doc.inputsNeeded ??
+      statementInputsNeeded({
+        rules: snapshot?.rules ?? [],
+        individualTiers: snapshot?.individualTiers ?? [],
+        complianceFloor: plan.complianceFloor,
+        referralRule: plan.referralRule,
+        teamRequirements: plan.teamRequirements,
+        teamBonusEligible: snapshot?.teamBonusEligible ?? false,
+      }),
     warnings: doc.warnings ?? [],
   };
 }

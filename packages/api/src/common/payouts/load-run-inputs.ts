@@ -1,5 +1,6 @@
 import {
   NEW_BUSINESS_MATCH,
+  type AgencySaleLine,
   type ChargebackReason,
   type ChargebackSource,
   type PayoutChargeback,
@@ -80,6 +81,7 @@ interface LeanSaleRow {
   _id: Types.ObjectId;
   producerId: Types.ObjectId;
   soldDate: Date;
+  createdAt?: Date | null;
   clientName?: string | null;
   householdId?: Types.ObjectId | null;
   policyTypes?: string[] | null;
@@ -232,6 +234,7 @@ export async function loadRunInputs(
       $project: {
         producerId: 1,
         soldDate: 1,
+        createdAt: 1,
         clientName: 1,
         householdId: 1,
         policyTypes: 1,
@@ -327,6 +330,8 @@ export async function loadRunInputs(
         UNNAMED_CLIENT,
       policyTypes: row.policyTypes ?? [],
       leadSourceId: row.sourceId ? String(row.sourceId) : null,
+      // When it was typed in, for the Sold Log requirement.
+      enteredDay: row.createdAt ? businessDay(row.createdAt, timeZone) : null,
       lines: row.lines.map((line) => ({
         carrier: line.carrier ?? null,
         policyType: line.policyType ?? null,
@@ -411,6 +416,75 @@ export async function agencyGrossPremium(
     { $group: { _id: null, premium: { $sum: '$linePremium' } } },
   ]);
   return Math.round((row?.premium ?? 0) * 100) / 100;
+}
+
+/**
+ * The agency's whole sold premium for the month by seller, lead source and
+ * carrier — everyone's, on a structure or not. What overrides (the Office
+ * Manager's 1%, Outside Sales' overflow) and agency-premium tiers are
+ * measured on. The same sales as {@link agencyGrossPremium}; carriers are
+ * left as stored, the engine canonicalises them.
+ */
+export async function loadAgencySales(
+  dealModel: Model<Deal>,
+  agencyId: string,
+  window: InstantWindow,
+): Promise<AgencySaleLine[]> {
+  const rows = await dealModel.aggregate<{
+    _id: {
+      producerId?: Types.ObjectId | null;
+      sourceId?: Types.ObjectId | null;
+      carrier?: string | null;
+    };
+    premium: number;
+  }>([
+    ...linesPrefix(soldInMonth(agencyId, window), SOLD_LINES, {}, true, {
+      carrier: true,
+    }),
+    { $unwind: '$lines' },
+    {
+      $group: {
+        _id: {
+          producerId: '$producerId',
+          sourceId: '$sourceId',
+          carrier: '$lines.carrier',
+        },
+        premium: { $sum: '$lines.premium' },
+      },
+    },
+  ]);
+  return rows.map((row) => ({
+    producerId: row._id.producerId ? String(row._id.producerId) : '',
+    leadSourceId: row._id.sourceId ? String(row._id.sourceId) : null,
+    carrier: row._id.carrier ?? null,
+    premium: Math.round((row.premium ?? 0) * 100) / 100,
+  }));
+}
+
+/**
+ * Each producer's sold premium over `window` (a calendar year to date, for
+ * Producer of the Year): userId → premium.
+ */
+export async function grossByProducer(
+  dealModel: Model<Deal>,
+  agencyId: string,
+  window: InstantWindow,
+): Promise<Map<string, number>> {
+  const rows = await dealModel.aggregate<{
+    _id: Types.ObjectId | null;
+    premium: number;
+  }>([
+    ...linesPrefix(soldInMonth(agencyId, window), SOLD_LINES, {}, false),
+    { $group: { _id: '$producerId', premium: { $sum: '$linePremium' } } },
+  ]);
+  return new Map(
+    rows
+      .filter((row) => row._id)
+      .map((row) => [
+        String(row._id),
+        Math.round((row.premium ?? 0) * 100) / 100,
+      ]),
+  );
 }
 
 /**

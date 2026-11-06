@@ -1,7 +1,9 @@
 import {
+  DEFAULT_PRODUCER_OF_YEAR,
   DEFAULT_SALESPERSON_OF_MONTH,
   DEFAULT_TEAM_BONUS,
   type PayoutSettingsView,
+  type ProducerOfYearSettings,
   type SalespersonOfMonthSettings,
   type TeamBonusSettings,
 } from '@sfa/shared';
@@ -10,6 +12,7 @@ import {
 export interface StoredPayoutSettings {
   teamBonus?: Partial<TeamBonusSettings> | null;
   salespersonOfMonth?: Partial<SalespersonOfMonthSettings> | null;
+  producerOfYear?: Partial<ProducerOfYearSettings> | null;
 }
 
 /**
@@ -25,6 +28,7 @@ export function payoutSettingsFrom(
 ): PayoutSettingsView {
   const team = stored?.teamBonus ?? {};
   const som = stored?.salespersonOfMonth ?? {};
+  const poy = stored?.producerOfYear ?? {};
   return {
     teamBonus: {
       enabled: team.enabled ?? DEFAULT_TEAM_BONUS.enabled,
@@ -41,6 +45,15 @@ export function payoutSettingsFrom(
     salespersonOfMonth: {
       enabled: som.enabled ?? DEFAULT_SALESPERSON_OF_MONTH.enabled,
       bonusAmount: som.bonusAmount ?? DEFAULT_SALESPERSON_OF_MONTH.bonusAmount,
+    },
+    producerOfYear: {
+      enabled: poy.enabled ?? DEFAULT_PRODUCER_OF_YEAR.enabled,
+      bonusAmount: poy.bonusAmount ?? DEFAULT_PRODUCER_OF_YEAR.bonusAmount,
+      minCompliantMonths:
+        poy.minCompliantMonths ?? DEFAULT_PRODUCER_OF_YEAR.minCompliantMonths,
+      minCompliancePercent:
+        poy.minCompliancePercent ??
+        DEFAULT_PRODUCER_OF_YEAR.minCompliancePercent,
     },
   };
 }

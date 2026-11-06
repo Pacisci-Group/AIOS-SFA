@@ -71,12 +71,30 @@ export const SOM_LABELS: Record<SomStatus, string> = {
   off: NOT_AVAILABLE,
 };
 
+/**
+ * A statement is non-compliant on a failed deal audit, or (2026 comp plans)
+ * an entered compliance rate below its structure's floor.
+ */
 export function complianceLabel(
   status: ComplianceStatus,
   failedAudits: number,
+  belowFloor = false,
 ): string {
   if (status === "compliant") return "Compliant";
-  return `${failedAudits} failed audit${failedAudits === 1 ? "" : "s"}`;
+  const audits =
+    failedAudits > 0
+      ? `${failedAudits} failed audit${failedAudits === 1 ? "" : "s"}`
+      : null;
+  return (
+    [belowFloor ? "Below the floor" : null, audits]
+      .filter(Boolean)
+      .join(" · ") || "Not compliant"
+  );
+}
+
+/** "Yes", "No" or "Not entered" — the manager's meeting-attendance tick. */
+export function attendanceLabel(value: boolean | null): string {
+  return value === null ? "Not entered" : value ? "Yes" : "No";
 }
 
 /** "Mar 31, 2026" for an agency day (`YYYY-MM-DD`). */

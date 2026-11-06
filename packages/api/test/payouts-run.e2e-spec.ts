@@ -537,6 +537,7 @@ describe('Payouts — monthly statements (e2e)', () => {
         somStatus: 'winner',
         complianceStatus: 'non_compliant',
         failedAudits: 1,
+        compliancePercent: null,
       });
       expect(s.totals).toEqual({
         grossPremium: 8000,
@@ -552,6 +553,16 @@ describe('Payouts — monthly statements (e2e)', () => {
         complianceAdjustment: 0,
         otherAdjustments: 0,
         netCommission: 1636.11,
+        // The 2026 comp-plan lines: none on this structure.
+        basePay: 0,
+        stipend: 0,
+        rateStepBonus: 0,
+        overrideCommission: 0,
+        agencyBonus: 0,
+        producerOfYearBonus: 0,
+        complianceReduction: 0,
+        referralAdjustment: 0,
+        netPay: 1636.11,
       });
     });
 
@@ -702,7 +713,9 @@ describe('Payouts — monthly statements (e2e)', () => {
       expect(csr.totals.grossPremium).toBe(2500);
       // The pool split is the month's, kept until the month is recalculated.
       expect(csr.totals.teamBonus).toBe(200);
-      expect(csr.warnings[0]).toMatch(/^Sold premium has changed/);
+      expect(csr.warnings[0]).toMatch(
+        /^Sold premium or eligibility has changed/,
+      );
 
       await api()
         .post(`/api/v1/payouts/statements/${csrId}/recalculate`)

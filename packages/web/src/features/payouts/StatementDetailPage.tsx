@@ -20,6 +20,7 @@ import {
 } from "@/lib/payouts-api";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { StatementBreakdown } from "./components/StatementBreakdown";
+import { StatementInputsCard } from "./components/StatementInputsCard";
 import { StatementStatusBadge } from "./components/StatementStatusBadge";
 import { payoutErrorMessage } from "./payout-errors";
 import { POOL_LABELS } from "./payout-format";
@@ -34,8 +35,11 @@ const TAB_ALLOWED = { tab: ["activity"] as const };
  * Statement's sections; Activity (PAC-179) lists the month's sales and
  * chargebacks behind it.
  *
- * A reviewer (`payouts:write`) may recalculate a draft or disputed one.
- * Sending, accepting and disputing arrive with PAC-181/182.
+ * A reviewer (`payouts:write`) may recalculate a draft or disputed one, and
+ * enter the figures its structure needs (the compliance rate, retention, …;
+ * 2026 comp plans) — not on their own statement without
+ * `agency:payouts:admin`. Sending, accepting and disputing arrive with
+ * PAC-181/182.
  */
 export default function StatementDetailPage() {
   const { id = "" } = useParams();
@@ -139,7 +143,10 @@ export default function StatementDetailPage() {
         ) : view.tab === "activity" ? (
           <ActivityPanel userId={s.userId} month={s.month} />
         ) : (
-          <StatementBreakdown statement={s} />
+          <StatementBreakdown
+            statement={s}
+            figures={<StatementInputsCard statement={s} />}
+          />
         )}
       </main>
     </AppShell>

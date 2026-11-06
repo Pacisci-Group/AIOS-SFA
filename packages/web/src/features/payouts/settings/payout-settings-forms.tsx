@@ -5,9 +5,11 @@ import { toast } from "sonner";
 import { z } from "zod";
 import {
   MAX_BONUS_TIERS,
+  producerOfYearError,
   teamLevelsError,
   teamSplitError,
   type PayoutSettingsView,
+  type ProducerOfYearSettings,
   type SalespersonOfMonthSettings,
   type TeamBonusSettings,
 } from "@sfa/shared";
@@ -21,10 +23,12 @@ import {
   moneyString,
   percentString,
   toField,
+  wholeString,
 } from "../payout-form-fields";
 
 /**
- * The two agency-wide payout settings forms (PAC-177). Each saves its own
+ * The agency-wide payout settings forms (PAC-177; Producer of the Year, 2026
+ * comp plans). Each saves its own
  * section whole — the API refuses half a team bonus — and is remounted from
  * the stored value after its own save (a `key` per form on the caller, so
  * saving one never resets unsaved edits in the other).
@@ -319,6 +323,133 @@ export function SalespersonOfMonthForm({
             />
           )}
         </form.AppField>
+        <form.Subscribe selector={(state) => state.isDirty}>
+          {(dirty) => (
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              disabled={!dirty || save.isPending}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
+          )}
+        </form.Subscribe>
+      </form>
+    </form.AppForm>
+  );
+}
+
+/*
+ * `poy`-prefixed names for the same reason as `somEnabled`: a checkbox's id
+ * is its field name, and the other cards on the page have an `enabled` and a
+ * `bonusAmount` of their own.
+ */
+const poyFieldSchemas = {
+  poyBonus: moneyString("Enter the bonus"),
+  poyMonths: wholeString("Enter a number of months", { min: 0, max: 12 }),
+  poyCompliance: percentString("Enter a compliance rate"),
+};
+
+const poyFormSchema = z
+  .object({ poyEnabled: z.boolean(), ...poyFieldSchemas })
+  .superRefine((values, ctx) => {
+    // The shared rules once every field parses, so a field shows its own
+    // message first.
+    const parsed = (
+      Object.keys(poyFieldSchemas) as (keyof typeof poyFieldSchemas)[]
+    ).every((key) => poyFieldSchemas[key].safeParse(values[key]).success);
+    if (!parsed) return;
+    const error = producerOfYearError(poySettingsOf(values));
+    if (error) {
+      ctx.addIssue({ code: "custom", path: ["poyMonths"], message: error });
+    }
+  });
+
+type PoyFormValues = z.infer<typeof poyFormSchema>;
+
+function poySettingsOf(values: PoyFormValues): ProducerOfYearSettings {
+  return {
+    enabled: values.poyEnabled,
+    bonusAmount: Number(values.poyBonus),
+    minCompliantMonths: Number(values.poyMonths),
+    minCompliancePercent: Number(values.poyCompliance),
+  };
+}
+
+/**
+ * Producer of the Year: a bonus on the December statement to the year's top
+ * producer by sold premium who was compliant — an entered compliance rate at
+ * least this high — in enough months of the year. Saved whole.
+ */
+export function ProducerOfYearForm({
+  initial,
+  onSaved,
+}: {
+  initial: ProducerOfYearSettings;
+  onSaved: () => void;
+}) {
+  const save = useSaveSettings(onSaved);
+  const [defaultValues] = useState<PoyFormValues>(() => ({
+    poyEnabled: initial.enabled,
+    poyBonus: toField(initial.bonusAmount),
+    poyMonths: toField(initial.minCompliantMonths),
+    poyCompliance: toField(initial.minCompliancePercent),
+  }));
+
+  const form = useAppForm({
+    defaultValues,
+    validators: { onBlur: poyFormSchema },
+    onSubmit: ({ value }) =>
+      save.mutate({ producerOfYear: poySettingsOf(value) }),
+  });
+
+  return (
+    <form.AppForm>
+      <form
+        noValidate
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void form.handleSubmit();
+        }}
+      >
+        <form.AppField name="poyEnabled">
+          {(f) => <f.CheckboxField label="Pay a Producer of the Year bonus" />}
+        </form.AppField>
+        <form.AppField name="poyBonus">
+          {(f) => (
+            <f.MoneyField
+              label="Bonus"
+              description="On the December statement. Ties all win it."
+              inputClassName="bg-card border-border"
+            />
+          )}
+        </form.AppField>
+        <FormGrid gap={3}>
+          <form.AppField name="poyMonths">
+            {(f) => (
+              <f.NumberField
+                label="Compliant months needed"
+                description="Out of the year's 12."
+                inputMode="numeric"
+                step="1"
+                min="0"
+                max="12"
+                inputClassName="bg-card border-border"
+              />
+            )}
+          </form.AppField>
+          <form.AppField name="poyCompliance">
+            {(f) => (
+              <f.PercentField
+                label="Compliance rate that counts a month"
+                description="As entered on each statement."
+                inputClassName="bg-card border-border"
+              />
+            )}
+          </form.AppField>
+        </FormGrid>
         <form.Subscribe selector={(state) => state.isDirty}>
           {(dirty) => (
             <Button

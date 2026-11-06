@@ -78,4 +78,13 @@ docs {
     unless the levels stack."). The reason is in `errors.formErrors` /
     `errors.fieldErrors`.
   - `403` — without `agency:payouts:admin`.
+
+  ## Producer of the Year (2026 comp plan)
+
+  `producerOfYear { enabled, bonusAmount, minCompliantMonths (0–12),
+  minCompliancePercent }` — sent alone or with the other sections, whole.
+  Paid on **December's** run to the year's top producer by sold premium who
+  had an entered compliance rate of at least `minCompliancePercent` in at
+  least `minCompliantMonths` of the year's statements. Defaults: off, $0, 9
+  months, 95%.
 }

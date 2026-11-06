@@ -5,7 +5,9 @@ import { TriangleAlert } from "lucide-react";
 import {
   PAY_STATEMENT_STATUSES,
   PAY_STATEMENTS_PAGE_SIZE,
+  statementNetPay,
   type PayStatementStatus,
+  type StatementTotalsView,
 } from "@sfa/shared";
 import { DataPanel } from "@/components/common/DataPanel";
 import { TablePagination } from "@/components/common/TablePagination";
@@ -38,6 +40,16 @@ import { listPayStatements, payStatementsListKey } from "@/lib/payouts-api";
 import { payoutErrorMessage } from "../payout-errors";
 import { POOL_LABELS, STATEMENT_STATUS_LABELS } from "../payout-format";
 import { StatementStatusBadge } from "./StatementStatusBadge";
+
+/** "incl. $2,500 base pay" — what net pay holds beyond net commission. */
+function fixedPayLabel(totals: StatementTotalsView): string | null {
+  const base = totals.basePay ?? 0;
+  const stipend = totals.stipend ?? 0;
+  if (!base && !stipend) return null;
+  const what =
+    base && stipend ? "base and stipend" : base ? "base pay" : "stipend";
+  return `incl. ${formatMoney(base + stipend)} ${what}`;
+}
 
 /** Radix Select cannot hold `""`, so "no filter" needs a value of its own. */
 const ANY = "__any__";
@@ -188,16 +200,28 @@ export function StatementsTable({
             <TableHead className="text-right">Net premium</TableHead>
             <TableHead className="text-right">Commission</TableHead>
             <TableHead className="text-right">Bonuses</TableHead>
-            <TableHead className="text-right">Net commission</TableHead>
+            <TableHead className="text-right">Net pay</TableHead>
             <TableHead className="pr-5">Status</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {data?.statements.map((row) => {
             const t = row.totals;
-            const commission = t.grossCommission - t.chargebackImpact;
+            // Commission includes overrides (pay on others' premium); the
+            // 2026 comp-plan lines are absent on statements computed before
+            // them.
+            const commission =
+              t.grossCommission -
+              t.chargebackImpact +
+              (t.overrideCommission ?? 0);
             const bonuses =
-              t.tierBonus + t.teamBonus + t.somBonus + t.hatTrickBonus;
+              t.tierBonus +
+              t.teamBonus +
+              t.somBonus +
+              t.hatTrickBonus +
+              (t.rateStepBonus ?? 0) +
+              (t.agencyBonus ?? 0) +
+              (t.producerOfYearBonus ?? 0);
             return (
               <TableRow
                 key={row.id}
@@ -245,8 +269,15 @@ export function StatementsTable({
                 <TableCell className="text-right tabular-nums">
                   {formatMoney(bonuses)}
                 </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {formatMoney(t.netCommission)}
+                <TableCell className="text-right tabular-nums">
+                  <div className="font-semibold">
+                    {formatMoney(statementNetPay(t))}
+                  </div>
+                  {fixedPayLabel(t) && (
+                    <div className="text-xs text-muted-foreground">
+                      {fixedPayLabel(t)}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="pr-5">
                   <StatementStatusBadge

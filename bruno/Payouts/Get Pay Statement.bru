@@ -70,4 +70,18 @@ docs {
   `Deal.chargebackAdjustment` is not applied — the ledger row carries it.
 
   Skipped when the run had no statement to read.
+
+  ## The 2026 comp-plan fields
+
+  - `inputs` — the figures the manager entered (**Update Pay Statement
+    Inputs**), each `null` when not; `inputsNeeded` — which of them the
+    structure reads.
+  - `totals` gains `basePay`, `stipend`, `rateStepBonus`,
+    `overrideCommission`, `agencyBonus`, `producerOfYearBonus`,
+    `complianceReduction` (≤ 0), `referralAdjustment` (±) and `netPay`
+    (base pay + stipend + net commission). Absent on statements computed
+    before them: read them as 0, and net pay as net commission.
+  - `premiumLines[].rateStep` — the step a stepped rate was paid at.
+  - `bonuses` gains `rateSteps`, `agency`, `overrides`, `referrals`,
+    `producerOfYear`, `teamBlocked` and `compliance`.
 }

@@ -13,8 +13,8 @@ import {
   PAYMENT_STRUCTURE_NAME_TAKEN,
   PAYMENT_STRUCTURE_STALE,
   sortBonusTiers,
+  structurePlanDefaults,
   type AccessContext,
-  type LeadSourceRateRule,
   type LeadSourceRateRuleView,
   type PaymentStructureMemberView,
   type PaymentStructureSummary,
@@ -46,6 +46,11 @@ import {
   type PayoutPeopleModels,
   type PayoutPerson,
 } from '../common/payouts/payout-people';
+import {
+  storedPlan,
+  storedRateRules,
+  storedTiers,
+} from '../common/payouts/structure-plan';
 import {
   PaymentStructure,
   PaymentStructureDocument,
@@ -110,6 +115,16 @@ function leadSourceRuleViews(
     );
 }
 
+/** Every lead source a save names: its lead-source rates and its overrides. */
+function sourcesNamed(dto: UpsertPaymentStructureDto): string[] {
+  return [
+    ...dto.leadSourceRules.map((rule) => rule.leadSourceId),
+    ...dto.overrides.flatMap((rule) =>
+      rule.leadSourceId ? [rule.leadSourceId] : [],
+    ),
+  ];
+}
+
 function summaryOf(
   doc: LeanStructure,
   memberCount: number,
@@ -119,24 +134,18 @@ function summaryOf(
     id: String(doc._id),
     name: doc.name,
     status: doc.status,
-    rules: doc.rules.map((rule) => ({
-      carrier: rule.carrier,
-      ratePercent: rule.ratePercent,
-      // Null-guarded like the fields below: a rule saved before it existed.
-      minBundleRatePercent: rule.minBundleRatePercent ?? null,
-    })),
+    // Null-guarded: rules, steps and tiers saved before their fields existed.
+    rules: storedRateRules(doc.rules),
     leadSourceRules: leadSourceRuleViews(doc, labels),
     hatTrick: {
       enabled: doc.hatTrick.enabled,
       dealsPerDay: doc.hatTrick.dealsPerDay,
       bonusAmount: doc.hatTrick.bonusAmount,
     },
-    individualTiers: doc.individualTiers.map((tier) => ({
-      thresholdPremium: tier.thresholdPremium,
-      bonusAmount: tier.bonusAmount,
-    })),
+    individualTiers: storedTiers(doc.individualTiers),
     tiersStackable: doc.tiersStackable ?? false,
     teamBonusEligible: doc.teamBonusEligible,
+    ...storedPlan(doc, labels),
     memberCount,
     createdAt: (doc.createdAt ?? new Date(0)).toISOString(),
     updatedAt: (doc.updatedAt ?? new Date(0)).toISOString(),
@@ -244,7 +253,7 @@ export class PaymentStructuresService {
     const agencyId = agencyOf(access);
     const nameKey = paymentStructureNameKey(dto.name);
     await this.assertNameFree(agencyId, nameKey, null);
-    await this.assertLeadSources(agencyId, dto.leadSourceRules, []);
+    await this.assertLeadSources(agencyId, sourcesNamed(dto), []);
     const [members, labels] = await Promise.all([
       this.checkedMembers(agencyId, dto.memberIds, []),
       this.leadSources.labelsFor(agencyId),
@@ -292,11 +301,12 @@ export class PaymentStructuresService {
     this.assertEditable(current, dto.expectedUpdatedAt);
     const nameKey = paymentStructureNameKey(dto.name);
     await this.assertNameFree(agencyId, nameKey, current._id);
-    await this.assertLeadSources(
-      agencyId,
-      dto.leadSourceRules,
-      current.leadSourceRules ?? [],
-    );
+    await this.assertLeadSources(agencyId, sourcesNamed(dto), [
+      ...(current.leadSourceRules ?? []).map((rule) => rule.leadSourceId),
+      ...(current.overrides ?? []).flatMap((rule) =>
+        rule.leadSourceId ? [rule.leadSourceId] : [],
+      ),
+    ]);
     const [members, labels] = await Promise.all([
       this.checkedMembers(agencyId, dto.memberIds, current.memberIds),
       this.leadSources.labelsFor(agencyId),
@@ -374,7 +384,23 @@ export class PaymentStructuresService {
   // --- internals -------------------------------------------------------------
 
   private fields(dto: UpsertPaymentStructureDto, nameKey: string) {
+    const plan = structurePlanDefaults(dto);
+    const members = new Set(dto.memberIds.map((id) => id.toLowerCase()));
     return {
+      ...plan,
+      // Start months only for people on the structure.
+      memberStarts: plan.memberStarts
+        .filter((start) => members.has(start.userId.toLowerCase()))
+        .map((start) => ({
+          userId: new Types.ObjectId(start.userId),
+          startMonth: start.startMonth,
+        })),
+      overrides: plan.overrides.map((rule) => ({
+        ...rule,
+        leadSourceId: rule.leadSourceId
+          ? new Types.ObjectId(rule.leadSourceId)
+          : null,
+      })),
       name: dto.name.trim().replace(/\s+/g, ' '),
       nameKey,
       rules: normalizeRateRules(dto.rules),
@@ -385,7 +411,11 @@ export class PaymentStructuresService {
         }),
       ),
       hatTrick: dto.hatTrick,
-      individualTiers: sortBonusTiers(dto.individualTiers),
+      individualTiers: sortBonusTiers(dto.individualTiers).map((tier) => ({
+        thresholdPremium: tier.thresholdPremium,
+        bonusAmount: tier.bonusAmount,
+        minCompliancePercent: tier.minCompliancePercent ?? null,
+      })),
       tiersStackable: dto.tiersStackable,
       teamBonusEligible: dto.teamBonusEligible,
     };
@@ -519,12 +549,10 @@ export class PaymentStructuresService {
    */
   private async assertLeadSources(
     agencyId: string,
-    rules: readonly LeadSourceRateRule[],
-    current: readonly { leadSourceId: Types.ObjectId }[],
+    requested: readonly string[],
+    current: readonly Types.ObjectId[],
   ): Promise<void> {
-    const ids = [
-      ...new Set(rules.map((rule) => rule.leadSourceId.toLowerCase())),
-    ];
+    const ids = [...new Set(requested.map((id) => id.toLowerCase()))];
     if (!ids.length) return;
     const rows = await this.leadSources.visibleRows(agencyId, ids);
     if (ids.some((id) => !rows.has(id))) {
@@ -532,7 +560,7 @@ export class PaymentStructuresService {
         'Some lead sources chosen are not available to this agency.',
       );
     }
-    const already = new Set(current.map((rule) => String(rule.leadSourceId)));
+    const already = new Set(current.map(String));
     const archived = ids
       .filter((id) => !rows.get(id)!.active && !already.has(id))
       .map((id) => rows.get(id)!.name);

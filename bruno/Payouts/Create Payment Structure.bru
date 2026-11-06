@@ -59,8 +59,8 @@ tests {
 
   test("stores carriers by name with the catch-all last, with their minimum bundle rates", function () {
     expect(res.getBody().rules).to.deep.equal([
-      { carrier: "Allstate", ratePercent: 10, minBundleRatePercent: 83 },
-      { carrier: "*", ratePercent: 5, minBundleRatePercent: null }
+      { carrier: "Allstate", ratePercent: 10, minBundleRatePercent: 83, stepBasis: "premium", steps: [] },
+      { carrier: "*", ratePercent: 5, minBundleRatePercent: null, stepBasis: "premium", steps: [] }
     ]);
   });
 
@@ -127,4 +127,32 @@ docs {
     added."). See **Create Payment Structure (Duplicate Lead-Source Rate)**.
   - `403` — without `agency:payouts:admin`.
   - `409` `PAYMENT_STRUCTURE_NAME_TAKEN` — an active structure has the name.
+
+  ## The 2026 comp-plan parts (6 Nov 2026)
+
+  All optional; left out = none, and a structure without them pays as before.
+
+  - `rules[].stepBasis` (`premium` | `retention`, default `premium`) and
+    `rules[].steps[]` `{ threshold, ratePercent, bonusAmount,
+    minCompliancePercent, minBundleRatePercent }` — the rate **steps up**:
+    the highest step reached whose gates are met pays its rate on **all**
+    the rule's premium (not split-rate); `ratePercent` is the base. A step
+    may not pay less than the base or the step below.
+  - `individualTiers[].minCompliancePercent` — the tier pays only with an
+    entered compliance rate at least this high.
+  - `basePay` — monthly, on every member's statement.
+  - `stipendAmounts[]` (≤ 12) and `memberStarts[] { userId, startMonth }` —
+    month 1 of the stipend is the member's start month. Starts for people
+    not on the structure are dropped.
+  - `complianceFloor { minimumPercent, reductionPercent }`.
+  - `overrides[] { basis: agency | lead_source, leadSourceId, carrier,
+    ratePercent }` — pay on the agency's premium, or on premium others sold
+    from a lead source (which must be this agency's or the platform's).
+  - `agencyTiers[]` + `agencyTiersCarrier` — a personal bonus on the
+    agency's premium on one carrier (or `*`), highest tier only.
+  - `teamRequirements { soldLogWithinDays, meetingAttendance }`.
+  - `referralRule { minimum, shortfallDeduction, bonusThreshold, bonusAmount }`.
+  - `chargebackWindowMonths` (1–36) — older chargebacks are left out.
+
+  Every part is served back on reads, defaults filled.
 }

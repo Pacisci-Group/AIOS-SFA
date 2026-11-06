@@ -11,6 +11,8 @@ import {
   type StatementChargebackView,
   type StatementDealView,
   type StatementIndicatorsView,
+  type StatementInputs,
+  type StatementInputsNeeded,
   type StatementStructureSnapshot,
   type StatementTotalsView,
 } from '@sfa/shared';
@@ -143,6 +145,23 @@ export class PayStatement {
 
   @Prop({ type: [PayStatementAdjustmentSchema], default: [] })
   adjustments: PayStatementAdjustment[];
+
+  /**
+   * The figures the manager enters (2026 comp plans): compliance rate,
+   * retention, life referrals, meeting attendance. Like adjustments they are
+   * the manager's word, so a recalculation keeps them. Absent on statements
+   * drafted before they existed — read as all `null`.
+   */
+  @Prop({ type: Object, default: null })
+  inputs: StatementInputs | null;
+
+  /**
+   * Which figures the page asks for: what the structure reads, plus the
+   * compliance rate while Producer of the Year is on (it counts compliant
+   * months all year). Written by every calculation.
+   */
+  @Prop({ type: Object, default: null })
+  inputsNeeded: StatementInputsNeeded | null;
 
   @Prop({ type: Object, required: true })
   totals: StatementTotalsView;

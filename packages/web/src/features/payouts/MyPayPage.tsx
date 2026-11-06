@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Wallet } from "lucide-react";
-import { PAY_STATEMENTS_PAGE_SIZE } from "@sfa/shared";
+import { PAY_STATEMENTS_PAGE_SIZE, statementNetPay } from "@sfa/shared";
 import { DataPanel } from "@/components/common/DataPanel";
 import { MonthPicker } from "@/components/common/MonthPicker";
 import { TablePagination } from "@/components/common/TablePagination";
@@ -98,7 +98,7 @@ export default function MyPayPage() {
                   <TableHead className="pl-5">Month</TableHead>
                   <TableHead className="text-right">Sold premium</TableHead>
                   <TableHead className="text-right">Chargebacks</TableHead>
-                  <TableHead className="text-right">Net commission</TableHead>
+                  <TableHead className="text-right">Net pay</TableHead>
                   <TableHead className="pr-5">Status</TableHead>
                 </TableRow>
               </TableHeader>
@@ -119,7 +119,7 @@ export default function MyPayPage() {
                       {formatMoney(row.totals.chargebackTotal)}
                     </TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">
-                      {formatMoney(row.totals.netCommission)}
+                      {formatMoney(statementNetPay(row.totals))}
                     </TableCell>
                     <TableCell className="pr-5">
                       <StatementStatusBadge

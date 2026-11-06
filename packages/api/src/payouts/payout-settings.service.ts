@@ -49,6 +49,9 @@ export class PayoutSettingsService {
     if (dto.salespersonOfMonth) {
       $set['payouts.salespersonOfMonth'] = dto.salespersonOfMonth;
     }
+    if (dto.producerOfYear) {
+      $set['payouts.producerOfYear'] = dto.producerOfYear;
+    }
     const agency = await this.agencyModel
       .findByIdAndUpdate(agencyId, { $set }, { new: true, runValidators: true })
       .select('payouts')
