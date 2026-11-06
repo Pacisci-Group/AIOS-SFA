@@ -522,7 +522,7 @@ function MailerCard({
 }) {
   return (
     <section className="rounded-xl border border-border bg-card">
-      <h3 className="border-b border-border px-5 py-3 text-sm font-semibold text-card-foreground">
+      <h3 className="border-b border-border px-5 py-3 text-base font-semibold text-card-foreground">
         {title}
       </h3>
       <div className="px-5 py-4">{children}</div>

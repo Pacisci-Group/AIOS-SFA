@@ -229,7 +229,7 @@ export function PermissionCatalogEditor({
 
         {filteredAdmin.length > 0 && (
           <section className="mb-6">
-            <h2 className="mb-1 text-sm font-semibold text-foreground">
+            <h2 className="mb-1 text-base font-semibold text-foreground">
               Agency administration
             </h2>
             <p className="mb-3 text-xs text-muted-foreground">
@@ -267,7 +267,7 @@ export function PermissionCatalogEditor({
         )}
 
         {filteredAdmin.length > 0 && filteredPages.length > 0 && (
-          <h2 className="mb-3 text-sm font-semibold text-foreground">Pages</h2>
+          <h2 className="mb-3 text-base font-semibold text-foreground">Pages</h2>
         )}
 
         <div className="flex flex-col gap-2">

@@ -84,7 +84,7 @@ export function ActivityTimeline({
   return (
     <section className="flex h-full flex-col rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h2 className="text-sm font-semibold text-card-foreground">
+        <h2 className="text-base font-semibold text-card-foreground">
           Notes &amp; activity
         </h2>
         <span className="text-sm text-muted-foreground">

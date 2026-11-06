@@ -36,7 +36,7 @@ export function WizardProgress({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">
+        <h2 className="text-base font-semibold text-foreground">
           {CARD_TITLES[card]}
         </h2>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

@@ -60,14 +60,14 @@ export function FormSubPanel({
       {action !== undefined ? (
         <div className="flex items-center justify-between">
           {title ? (
-            <Title className="text-[10px] uppercase tracking-widest text-muted-foreground">
+            <Title className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {title}
             </Title>
           ) : null}
           {action}
         </div>
       ) : title ? (
-        <Title className="text-[10px] uppercase tracking-widest text-muted-foreground">
+        <Title className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {title}
         </Title>
       ) : null}

@@ -40,7 +40,7 @@ export function PolicyCards({
           <header className="flex items-start gap-3">
             <Plane aria-hidden className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold text-card-foreground">
+              <h2 className="truncate text-base font-semibold text-card-foreground">
                 {policy.name}
               </h2>
               <p className="text-xs text-muted-foreground">

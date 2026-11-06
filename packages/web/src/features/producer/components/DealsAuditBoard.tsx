@@ -305,7 +305,7 @@ export function DealsAuditBoard() {
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-5 rounded-full bg-amber-500" />
-            <h2 className="text-sm text-foreground font-semibold">
+            <h2 className="text-base text-foreground font-semibold">
               Deals Pending Service Hand-off
             </h2>
           </div>

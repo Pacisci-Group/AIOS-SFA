@@ -65,7 +65,7 @@ export function WorkWeekSchedule({
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h3 className="text-sm font-semibold text-card-foreground">Working days and hours</h3>
+        <h3 className="text-base font-semibold text-card-foreground">Working days and hours</h3>
         <span className="text-sm tabular-nums text-muted-foreground">
           {formatHours(total)} a week
         </span>

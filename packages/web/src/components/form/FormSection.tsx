@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 interface FormSectionProps {
   /**
-   * The small uppercase heading. Omit for a bare panel — `SoldDealWizard`'s
+   * The panel's heading, in sentence case. Omit for a bare panel — `SoldDealWizard`'s
    * shell has its own progress header instead.
    */
   title?: React.ReactNode;
@@ -57,33 +57,38 @@ export function FormSection({
     >
       {title || description || action ? (
         // The heading block is always one child of `space-y-4`, so the vertical
-        // rhythm is the same whether or not there is a description — the sites
-        // that render a bare heading and the sites that wrap it in a `<div>`
-        // both come out identical. `action` adds the flex row that
-        // `LeadContextHeader` uses to sit a status badge beside the heading.
+        // rhythm is the same whether or not there is a description. Heading and
+        // sub-line stack on the left; `action` sits on the right of the same
+        // row — `LeadContextHeader` puts a status badge there, the review
+        // steps an Edit button.
         <div
           className={
-            action ? "flex items-center justify-between gap-3" : undefined
+            action ? "flex items-start justify-between gap-3" : undefined
           }
         >
-          {title ? (
-            <Title className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              {title}
-            </Title>
-          ) : null}
-          {description ? (
-            // `mt-1` only when it is sitting under a heading; on its own it is
-            // the first thing in the panel and needs no lead-in.
-            <p
-              className={cn(
-                "text-xs text-muted-foreground",
-                title && "mt-1",
-              )}
-            >
-              {description}
-            </p>
-          ) : null}
-          {action}
+          <div className="min-w-0">
+            {title ? (
+              // The card-title role from `styles/TYPOGRAPHY.md`. This was a
+              // 10px uppercase muted micro-label, which read as a field label
+              // rather than the heading of the panel.
+              <Title className="text-base font-semibold text-card-foreground">
+                {title}
+              </Title>
+            ) : null}
+            {description ? (
+              // `mt-1` only when it is sitting under a heading; on its own it
+              // is the first thing in the panel and needs no lead-in.
+              <p
+                className={cn(
+                  "text-sm text-muted-foreground",
+                  title && "mt-1",
+                )}
+              >
+                {description}
+              </p>
+            ) : null}
+          </div>
+          {action ? <div className="shrink-0">{action}</div> : null}
         </div>
       ) : null}
       {children}

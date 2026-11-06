@@ -53,7 +53,7 @@ export function HolidayChecklist({
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
-        <h3 className="text-sm font-semibold text-card-foreground">
+        <h3 className="text-base font-semibold text-card-foreground">
           {group === "federal" ? "Federal holidays" : "Popular additions"}
         </h3>
         <Button
@@ -120,7 +120,7 @@ export function CustomHolidaysEditor({
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-5 py-3">
-        <h3 className="text-sm font-semibold text-card-foreground">Your own holidays</h3>
+        <h3 className="text-base font-semibold text-card-foreground">Your own holidays</h3>
         <p className="text-sm text-muted-foreground">
           A company day, a winter closure — one day or a range of days.
         </p>
@@ -291,7 +291,7 @@ export function HolidayYearSummary({
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-5 py-3">
-        <h3 className="text-sm font-semibold text-card-foreground">
+        <h3 className="text-base font-semibold text-card-foreground">
           {days.length} day{days.length === 1 ? "" : "s"} off in {year}
         </h3>
       </div>

@@ -42,7 +42,7 @@ export function StepProgress({
       }
     >
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <h2 className="text-base font-semibold text-foreground">{title}</h2>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Step {step} of {total}
         </p>

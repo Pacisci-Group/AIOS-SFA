@@ -312,7 +312,7 @@ function Header({ campaign }: { campaign: MailerCampaign }) {
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-sm font-semibold text-card-foreground">
+          <h2 className="text-base font-semibold text-card-foreground">
             {campaign.name}
           </h2>
           <CampaignStatusBadge status={campaign.status} />
@@ -527,7 +527,7 @@ function Section({
   return (
     <Card>
       <CardContent className="px-5 py-4">
-        <h3 className="mb-3 text-sm font-semibold text-card-foreground">
+        <h3 className="mb-3 text-base font-semibold text-card-foreground">
           {title}
         </h3>
         {children}

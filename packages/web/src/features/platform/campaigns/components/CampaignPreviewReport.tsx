@@ -144,7 +144,7 @@ export function CampaignPreviewReport({
         <Card>
           <CardContent className="flex flex-col gap-4 px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-card-foreground">
+              <h3 className="text-base font-semibold text-card-foreground">
                 {fileNames || campaign.name}
               </h3>
               <CampaignStatusBadge status={campaign.status} />
@@ -201,7 +201,7 @@ export function CampaignPreviewReport({
       {reopened && (
         <Card>
           <CardContent className="flex flex-col gap-3 px-5 py-4">
-            <h3 className="text-sm font-semibold text-card-foreground">
+            <h3 className="text-base font-semibold text-card-foreground">
               Adding records to an imported campaign
             </h3>
             <div className="grid grid-cols-2 gap-3">
@@ -228,7 +228,7 @@ export function CampaignPreviewReport({
       {/* --- Assignment --------------------------------------------------- */}
       <Card>
         <CardContent className="flex flex-col gap-3 px-5 py-4">
-          <h3 className="text-sm font-semibold text-card-foreground">
+          <h3 className="text-base font-semibold text-card-foreground">
             Assignment
           </h3>
           {preview.assignment.resolved.length === 0 ? (
@@ -293,7 +293,7 @@ export function CampaignPreviewReport({
       {preview.unmatchedZips.length > 0 && (
         <Card>
           <CardContent className="px-5 py-4">
-            <h3 className="mb-3 text-sm font-semibold text-card-foreground">
+            <h3 className="mb-3 text-base font-semibold text-card-foreground">
               ZIPs with no market
             </h3>
             <UnmatchedZipsResolver
@@ -310,7 +310,7 @@ export function CampaignPreviewReport({
       {existing.length > 0 && (
         <Card>
           <CardContent className="flex flex-col gap-3 px-5 py-4">
-            <h3 className="text-sm font-semibold text-card-foreground">
+            <h3 className="text-base font-semibold text-card-foreground">
               This week already has{" "}
               {existing.length === 1 ? "a campaign" : "campaigns"}
             </h3>

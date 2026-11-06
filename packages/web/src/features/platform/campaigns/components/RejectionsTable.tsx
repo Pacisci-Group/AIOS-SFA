@@ -38,7 +38,7 @@ export function RejectionsTable({
   return (
     <Card>
       <CardContent className="px-5 py-4">
-        <h3 className="mb-1 text-sm font-semibold text-card-foreground">
+        <h3 className="mb-1 text-base font-semibold text-card-foreground">
           Skipped rows
         </h3>
         <p className="mb-3 text-sm text-muted-foreground">

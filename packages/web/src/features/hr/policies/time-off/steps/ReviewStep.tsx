@@ -6,7 +6,9 @@ import {
   TIME_OFF_TYPE_LABELS,
   type TimeOffPolicyRules,
 } from "@sfa/shared";
-import { FormGrid, FormSection } from "@/components/form";
+import { Pencil } from "lucide-react";
+import { DetailCard } from "@/components/common/DetailCard";
+import { FormGrid } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { withForm } from "@/hooks/form";
 import { hrKeys, listPolicyPeople } from "@/lib/hr-api";
@@ -36,9 +38,9 @@ export const ReviewStep = withForm({
           balances={balances}
           onEdit={onEdit}
           autoApprove={
-            <FormSection title="Auto-approve requests" titleAs="h3">
+            <DetailCard title="Auto-approve requests">
               <AutoApproveFields form={form} />
-            </FormSection>
+            </DetailCard>
           }
         />
       </div>
@@ -118,8 +120,17 @@ export function ReviewSections({
     enabled: !members,
   });
   const unlimited = rules.accrualType === "unlimited";
-  const editButton = (section: TimeOffSection) => (
-    <Button type="button" variant="ghost" size="sm" onClick={() => onEdit(section)}>
+  // Outlined, with the pencil: a bare ghost "Edit" was missed at the demo —
+  // it only looks like a control once the pointer is already on it.
+  const editButton = (section: TimeOffSection, what: string) => (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      aria-label={`Edit ${what}`}
+      onClick={() => onEdit(section)}
+    >
+      <Pencil />
       Edit
     </Button>
   );
@@ -130,7 +141,7 @@ export function ReviewSections({
 
   return (
     <>
-      <FormSection title="Basic setup" titleAs="h3" action={editButton("basics")}>
+      <DetailCard title="Basic setup" action={editButton("basics", "basic setup")}>
         <dl className="space-y-2 text-sm">
           <Row label="Name" value={name} />
           <Row label="Kind" value={TIME_OFF_TYPE_LABELS[rules.timeOffType]} />
@@ -138,9 +149,9 @@ export function ReviewSections({
           <Row label="Compensation" value={COMPENSATION_LABELS[rules.compensation]} />
           <Row label="Accrual type" value={ACCRUAL_TYPE_LABELS[rules.accrualType]} />
         </dl>
-      </FormSection>
+      </DetailCard>
 
-      <FormSection title="Settings" titleAs="h3" action={editButton("settings")}>
+      <DetailCard title="Settings" action={editButton("settings", "settings")}>
         <dl className="space-y-2 text-sm">
           <Row
             label="Waiting period"
@@ -152,10 +163,10 @@ export function ReviewSections({
             <Row label="Unused time off payout" value={rules.payOutOnTermination ? "On" : "Off"} />
           )}
         </dl>
-      </FormSection>
+      </DetailCard>
 
       {!unlimited && (
-        <FormSection title="Accrual" titleAs="h3" action={editButton("accrual")}>
+        <DetailCard title="Accrual" action={editButton("accrual", "accrual")}>
           <dl className="space-y-2 text-sm">
             <Row label="Hours per year" value={formatBalance(rules.hoursPerYear)} />
             <Row label="Earned" value={accrualLabel(rules)} />
@@ -181,10 +192,10 @@ export function ReviewSections({
               />
             )}
           </dl>
-        </FormSection>
+        </DetailCard>
       )}
 
-      <FormSection title="Enrollment" titleAs="h3" action={editButton("enrollment")}>
+      <DetailCard title="Enrollment" action={editButton("enrollment", "enrollment")}>
         {memberIds.length === 0 ? (
           <p className="text-sm text-muted-foreground">Nobody yet. People can be added any time.</p>
         ) : (
@@ -209,10 +220,10 @@ export function ReviewSections({
             })}
           </ul>
         )}
-      </FormSection>
+      </DetailCard>
 
       {autoApprove ?? (
-        <FormSection title="Auto-approve requests" titleAs="h3" action={editButton("autoApprove")}>
+        <DetailCard title="Auto-approve requests" action={editButton("autoApprove", "auto-approve requests")}>
           <dl className="space-y-2 text-sm">
             <Row label="Auto-approval" value={rules.autoApprove.enabled ? "On" : "Off"} />
             {rules.autoApprove.enabled && (
@@ -226,7 +237,7 @@ export function ReviewSections({
               </>
             )}
           </dl>
-        </FormSection>
+        </DetailCard>
       )}
     </>
   );

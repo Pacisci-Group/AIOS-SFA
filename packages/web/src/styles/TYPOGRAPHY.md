@@ -36,7 +36,7 @@ a class name; the tables below are already calibrated for it.
 | Role | Class |
 |---|---|
 | Page title (`h1`) | `text-lg font-semibold tracking-tight` |
-| Card title (`h2`) | `text-sm font-semibold text-card-foreground` — **sentence case** |
+| Card title (`h2`) | `text-base font-semibold text-card-foreground` — **sentence case** |
 | Section sub-label | `text-xs font-medium uppercase tracking-wide text-muted-foreground` |
 | Primary body | `text-base` |
 | Secondary / meta | `text-sm text-muted-foreground` |
@@ -50,6 +50,13 @@ document exists to stop.
 Card titles are **not** uppercase micro-labels. A 10–11px uppercase muted `h2`
 is a label, not a heading — it made every card read as an afterthought. One
 uppercase tier survives (the section sub-label above) and that is the limit.
+
+The card title is `text-base` (15px), not `text-sm`: at 13px it was the same
+size as the rows under it and was still being read as body text (PAC-148 demo
+feedback). Both card shells render it — `DetailCard` and `FormSection` — and a
+hand-written card header uses the same classes. `FormSection` was the last
+place the 10px uppercase title survived; it is gone there too. A sub-line under
+a card title is `text-sm text-muted-foreground`.
 
 ## Icons
 
@@ -99,5 +106,12 @@ Every clickable thing goes through `components/ui/button.tsx` (or
 `buttonVariants` + `asChild` for a `<Link>`). A hand-rolled `<Link>` with ad-hoc
 padding has no focus ring, no disabled handling and no size scale — which is
 exactly how "Quote" ended up not looking like a button while "Mark as Sold" did.
+
+An **edit trigger in a card header** is
+`<Button variant="outline" size="sm"><Pencil /> Edit</Button>` with an
+`aria-label` naming what it edits. Not `ghost`: a borderless "Edit" only looks
+like a control once the pointer is on it, and people at the PAC-148 demo had to
+hunt for it. Row-level actions inside a list (edit / remove on one policy row)
+stay `ghost`, where a column of outlined buttons would be noise.
 
 Status pills use `<Badge size="sm">`, not hand-written pill classes.

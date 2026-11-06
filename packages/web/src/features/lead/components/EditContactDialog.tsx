@@ -118,12 +118,11 @@ export function EditContactDialog({ leadId, contact }: EditContactDialogProps) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
-          className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
           aria-label={`Edit ${contact.name}`}
         >
-          <Pencil size={12} />
+          <Pencil />
           Edit
         </Button>
       </DialogTrigger>

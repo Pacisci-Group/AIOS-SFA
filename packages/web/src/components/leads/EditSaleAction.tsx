@@ -28,9 +28,8 @@ export function EditSaleAction({ dealId }: EditSaleActionProps) {
   return (
     <Button
       asChild
-      variant="ghost"
+      variant="outline"
       size="sm"
-      className="text-muted-foreground hover:text-foreground"
     >
       <Link to={editSoldDealRoute(dealId)} aria-label="Edit sale">
         <Pencil />
