@@ -545,6 +545,15 @@ export class Agency {
    */
   @Prop({ type: Number })
   payoutStructuresRevision?: number;
+
+  /**
+   * Not data either: `ChargebackImportsService.commit` bumps it first in its
+   * transaction, so two chargeback reports committed at once write-conflict
+   * and the second re-reads the ledger after the first — and finds its lines
+   * already charged instead of charging them twice (PAC-180).
+   */
+  @Prop({ type: Number })
+  chargebackImportsRevision?: number;
 }
 
 export const AgencySchema = SchemaFactory.createForClass(Agency);

@@ -35,8 +35,13 @@ describe('policyCancellationSummary', () => {
 });
 
 describe('chargeback reasons', () => {
-  it('records a cancellation with a chargeback beside a rewrite, and labels both', () => {
-    expect([...CHARGEBACK_REASONS]).toEqual(['cancel_rewrite', 'cancellation']);
+  it('records a cancellation with a chargeback beside a rewrite, the report and manual lines, and labels each', () => {
+    expect([...CHARGEBACK_REASONS]).toEqual([
+      'cancel_rewrite',
+      'cancellation',
+      'carrier_statement',
+      'manual',
+    ]);
     for (const reason of CHARGEBACK_REASONS) {
       expect(CHARGEBACK_REASON_LABELS[reason]).toBeTruthy();
     }

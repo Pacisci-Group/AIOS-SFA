@@ -272,9 +272,18 @@ export class PolicyRewritesService {
      * One query for every chargeback on the chain rather than one per policy.
      * A chain of three is three round trips otherwise, for a panel that renders
      * on a page load.
+     *
+     * Only the app's own reasons: this card is the policy's cancel and rewrite
+     * history. A chargeback-report line (PAC-180) is the same cancellation as
+     * the carrier saw it — counting it here would add it to the total twice
+     * and push the app's `cancellation` row out as the newest.
      */
     const chargebacks = await this.chargebackModel
-      .find({ agencyId, policyId: { $in: chain.map((p) => p._id) } })
+      .find({
+        agencyId,
+        policyId: { $in: chain.map((p) => p._id) },
+        reason: { $in: ['cancel_rewrite', 'cancellation'] },
+      })
       .select('policyId amount withinClawbackWindow reason occurredAt')
       // Oldest first by when each was WRITTEN, so the maps below keep each
       // policy's newest: a policy reinstated and cancelled again with a

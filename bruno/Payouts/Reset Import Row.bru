@@ -1,0 +1,56 @@
+meta {
+  name: Reset Import Row
+  type: http
+  seq: 32
+}
+
+patch {
+  url: {{baseUrl}}/payouts/imports/{{payoutsImportId}}/rows/{{payoutsImportRowNumber}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "action": "reset"
+  }
+}
+
+tests {
+  test("returns 200 (409 once committed)", function () {
+    expect([200, 409]).to.include(res.getStatus());
+  });
+
+  test("the line reads unmatched", function () {
+    if (res.getStatus() !== 200) return;
+    expect(res.getBody().row.resolution).to.equal("unmatched");
+    expect(res.getBody().counts.rows).to.equal(5);
+  });
+}
+
+docs {
+  # PATCH /payouts/imports/:id/rows/:rowNumber — `{ "action": "reset" }` (PAC-180)
+
+  **Permission** — `agency:payouts:admin`. One line of a preview:
+
+  | Body | Effect |
+  |---|---|
+  | `{ "action": "assign", "userId" }` | charge it to that person (any agency user, people who left included) → `assigned` — also how a skipped reversal is charged on purpose |
+  | `{ "action": "skip" }` | leave it out → `skipped` |
+  | `{ "action": "reset" }` | back to what matching decided |
+
+  A `duplicate` takes none of them: its policy has already been charged back
+  (400 `PAYOUT_IMPORT_ALREADY_CHARGED`).
+
+  ## Response 200
+  `{ row: ChargebackImportRowView, counts }`.
+
+  ## Errors
+  400 an unknown action, a person not in the agency, any action on a
+  duplicate (`PAYOUT_IMPORT_ALREADY_CHARGED`) · 404 no such line · 409
+  `PAYOUT_IMPORT_NOT_EDITABLE` once committed or discarded.
+}

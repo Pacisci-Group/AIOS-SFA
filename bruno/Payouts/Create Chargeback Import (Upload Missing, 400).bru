@@ -1,0 +1,44 @@
+meta {
+  name: Create Chargeback Import (Upload Missing, 400)
+  type: http
+  seq: 26
+}
+
+post {
+  url: {{baseUrl}}/payouts/imports
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  // A key under this agency's prefix that was never uploaded.
+  const key = bru.getVar("payoutsImportKey") || "";
+  bru.setVar("payoutsMissingImportKey", key.replace(/[^/]+$/, "never-uploaded.xlsx"));
+}
+
+body:json {
+  {
+    "storageKey": "{{payoutsMissingImportKey}}",
+    "uploadedFilename": "never-uploaded.xlsx",
+    "size": 1000,
+    "carrier": "Allstate",
+    "month": "{{payoutsMonth}}"
+  }
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /payouts/imports — refused: nothing was uploaded under that key
+
+  The key is the agency's own, but storage holds no object for it (the PUT
+  never happened, or the presign expired).
+}

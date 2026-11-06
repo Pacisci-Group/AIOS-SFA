@@ -111,6 +111,9 @@ const StatementDetailPage = lazy(
   () => import('@/features/payouts/StatementDetailPage'),
 );
 const MyPayPage = lazy(() => import('@/features/payouts/MyPayPage'));
+const ImportPreviewPage = lazy(
+  () => import('@/features/payouts/imports/ImportPreviewPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -900,6 +903,31 @@ export function App() {
                     </LazyPage>
                   }
                 />
+              </Route>
+              {/*
+                A chargeback report import (PAC-180): the owner's, like the
+                upload — gated as the payout settings are (admin key + the
+                module).
+              */}
+              <Route
+                element={
+                  <RequirePermission permission={AgencyPermission.PayoutsAdmin} />
+                }
+              >
+                <Route
+                  element={
+                    <RequirePermission permission={`${ModuleKey.Payouts}:read`} />
+                  }
+                >
+                  <Route
+                    path="/payouts/imports/:id"
+                    element={
+                      <LazyPage>
+                        <ImportPreviewPage />
+                      </LazyPage>
+                    }
+                  />
+                </Route>
               </Route>
 
               {/* Owner-only user directory */}

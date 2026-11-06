@@ -1,0 +1,35 @@
+meta {
+  name: Presign Chargeback Report (Not a Spreadsheet, 400)
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{baseUrl}}/payouts/imports/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "filename": "chargebacks.pdf",
+    "size": 1000
+  }
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /payouts/imports/presign — refused: not .xlsx or .csv
+
+  The report is read as a spreadsheet or a CSV; anything else is a 400 before
+  a key is minted.
+}

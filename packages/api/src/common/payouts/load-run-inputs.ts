@@ -46,11 +46,14 @@ import {
  * ## Chargebacks
  *
  * Every ledger row charged to the person (`Chargeback.producerId`, the
- * producer credited on the original sale) whose `occurredAt` falls in the
- * month. The carrier is the policy's; the lead source is the original deal's,
- * resolved the way a sale's is, so a chargeback lands on the line of the sale
- * it reverses. The carrier chargeback import (PAC-180) adds rows matched by
- * statement month; that is one more clause here.
+ * producer credited on the original sale) that counts in the month: a row
+ * with a `statementMonth` (a chargeback-report line, PAC-180, or a manager's
+ * manual line) counts in that month, whatever its date; any other row (the
+ * app's own) counts in the month of its `occurredAt`. The carrier is the
+ * row's own when it carries one (report rows), else the policy's; the lead
+ * source is the original deal's, resolved the way a sale's is, so a
+ * chargeback lands on the line of the sale it reverses. The customer is the
+ * app's name for the sale, else the report's.
  *
  * In `common/` so the worker can run it.
  */
@@ -101,6 +104,8 @@ interface LeanChargeback {
   occurredAt: Date;
   reason: ChargebackReason;
   source?: ChargebackSource | null;
+  carrier?: string | null;
+  customerName?: string | null;
 }
 
 /** The sold-deal match for a month — `NEW_BUSINESS_MATCH`, no test records. */
@@ -169,6 +174,27 @@ async function householdNames(
   return names;
 }
 
+/**
+ * The ledger rows that count in a pay month: those stamped with it
+ * (`statementMonth` — chargeback-report and manual lines), and the app's own,
+ * which carry none, by `occurredAt` in the month's window. A report line dated
+ * in another month still counts in the month it was imported for.
+ */
+export function chargebacksInMonth(
+  month: string,
+  window: InstantWindow,
+): Record<string, unknown> {
+  return {
+    $or: [
+      { statementMonth: month },
+      {
+        statementMonth: null,
+        occurredAt: { $gte: window.$gte, $lt: window.$lt },
+      },
+    ],
+  };
+}
+
 const UNNAMED_CLIENT = 'Unnamed client';
 
 /** The month's sales, chargebacks and failed audits for `memberIds`. */
@@ -176,12 +202,15 @@ export async function loadRunInputs(
   models: PayoutInputModels,
   args: {
     agencyId: string;
+    /** `YYYY-MM` — what report and manual chargebacks are counted by. */
+    month: string;
+    /** The month on the agency's clock — what sales and app chargebacks are. */
     window: InstantWindow;
     timeZone: string;
     memberIds: readonly string[];
   },
 ): Promise<RunInputs> {
-  const { agencyId, window, timeZone } = args;
+  const { agencyId, month, window, timeZone } = args;
   const members = args.memberIds.map((id) => new Types.ObjectId(id));
   const inputs: RunInputs = {
     sales: new Map(),
@@ -217,7 +246,7 @@ export async function loadRunInputs(
     .find({
       agencyId,
       producerId: { $in: members },
-      occurredAt: { $gte: window.$gte, $lt: window.$lt },
+      ...chargebacksInMonth(month, window),
     })
     .select({
       policyId: 1,
@@ -230,6 +259,8 @@ export async function loadRunInputs(
       occurredAt: 1,
       reason: 1,
       source: 1,
+      carrier: 1,
+      customerName: 1,
     })
     .sort({ occurredAt: 1, _id: 1 })
     .lean<LeanChargeback[]>();
@@ -319,11 +350,12 @@ export async function loadRunInputs(
       policyId: row.policyId ? String(row.policyId) : null,
       policyNumber: row.policyNumber ?? policy?.policyNumber ?? null,
       policyType: row.policyType ?? policy?.policyType ?? null,
-      carrier: policy?.carrier ?? null,
+      carrier: row.carrier?.trim() || policy?.carrier || null,
       leadSourceId: deal?.sourceId ? String(deal.sourceId) : null,
       customerName:
         deal?.clientName?.trim() ||
         (householdId ? names.get(String(householdId)) : null) ||
+        row.customerName?.trim() ||
         null,
       amount: Math.abs(row.amount ?? 0),
       occurredAt: row.occurredAt.toISOString(),

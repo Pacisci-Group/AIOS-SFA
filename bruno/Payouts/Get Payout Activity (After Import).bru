@@ -1,0 +1,41 @@
+meta {
+  name: Get Payout Activity (After Import)
+  type: http
+  seq: 36
+}
+
+get {
+  url: {{baseUrl}}/payouts/activity?month={{payoutsMonth}}&userId={{payoutsProducerUserId}}
+  auth: bearer
+}
+
+params:query {
+  month: {{payoutsMonth}}
+  userId: {{payoutsProducerUserId}}
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the producer's month shows the report's chargebacks", function () {
+    const fromReport = res.getBody().chargebacks.filter(function (c) {
+      return c.source === "carrier_statement";
+    });
+    expect(fromReport.length).to.be.at.least(1);
+    fromReport.forEach(function (c) { expect(c.reason).to.equal("carrier_statement"); });
+  });
+}
+
+docs {
+  # GET /payouts/activity — after the import (PAC-180)
+
+  A report line counts in the month it was imported for (`statementMonth`),
+  whatever its date, so the producer's month now lists it with `source:
+  "carrier_statement"` ("Carrier report" on the page).
+}

@@ -11,14 +11,11 @@ import {
   type PayStatementStatus,
 } from '@sfa/shared';
 import { Types } from 'mongoose';
-import { DEFAULT_AGENCY_TIME_ZONE } from '../common/dates/time-zones';
-import { generateRun } from '../common/payouts/generate-run';
+import { currentMonthIn, isMonthAfter } from '../common/payouts/month-window';
 import {
-  currentMonthIn,
-  isMonthAfter,
-  monthWindow,
-} from '../common/payouts/month-window';
-import { claimRun } from '../common/payouts/run-claim';
+  agencyTimeZone,
+  regenerateMonth,
+} from '../common/payouts/regenerate-month';
 import { PayoutModelsService } from './payout-models.service';
 import {
   EMPTY_RUN_COUNTS,
@@ -48,12 +45,8 @@ export class PayoutRunsService {
     return this.payoutModels.models;
   }
 
-  private async timeZoneOf(agencyId: string): Promise<string> {
-    const agency = await this.models.agency
-      .findById(agencyId)
-      .select({ timezone: 1 })
-      .lean<{ timezone?: string } | null>();
-    return agency?.timezone ?? DEFAULT_AGENCY_TIME_ZONE;
+  private timeZoneOf(agencyId: string): Promise<string> {
+    return agencyTimeZone(this.models.agency, agencyId);
   }
 
   /** Counts and totals over the run's statements the caller may see. */
@@ -119,27 +112,22 @@ export class PayoutRunsService {
         'That month has not started yet, so there is nothing to calculate.',
       );
     }
-    const claim = await claimRun(this.models.payoutRun, {
+    const regenerated = await regenerateMonth(this.models, {
       agencyId,
       month,
-      trigger: 'manual',
       timeZone,
-      window: monthWindow(month, timeZone),
+      trigger: 'manual',
       actorId: access.userId,
       now,
     });
-    if (claim.outcome !== 'claimed') {
+    if (regenerated.outcome === 'busy') {
       throw new ConflictException({
         code: PAYOUT_RUN_GENERATING,
         message:
           'This month is being calculated right now. Try again in a minute.',
       });
     }
-    const result = await generateRun(this.models, {
-      runId: claim.runId,
-      agencyId,
-      now,
-    });
+    const { result } = regenerated;
     this.logger.log(
       `Payout run ${result.runId} (${month}) for agency ${agencyId}: ` +
         `${result.drafted} drafted, ${result.untouched} left as sent`,

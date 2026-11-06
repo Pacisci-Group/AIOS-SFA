@@ -136,6 +136,22 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Payouts | Recalculate Pay Statement | `POST /payouts/statements/:id/recalculate` | One draft or disputed statement from today's data, against the month's stored team split. `payouts:write`; 409 `PAYOUT_STATEMENT_NOT_EDITABLE` once sent. |
 | Payouts | List Activity People | `GET /payouts/activity/people` | **PAC-179** — whose sales and chargebacks a reviewer may open (the owner: the agency; a branch manager: their branch). `payouts:write`. |
 | Payouts | Get Payout Activity | `GET /payouts/activity?month&userId` | One person's month: every sale and chargeback (with its source) and totals that equal their statement's. Any month, statement or not. |
+| Payouts | Presign Chargeback Report | `POST /payouts/imports/presign` | **PAC-180** — step 1 of 3 of the chargeback report upload (`.xlsx` or `.csv`, ≤ 10 MiB). Every import route is `agency:payouts:admin`, reads included. Captures `payoutsImportUploadUrl` / `payoutsImportKey`. |
+| Payouts | Presign Chargeback Report (Not a Spreadsheet, 400) | `POST /payouts/imports/presign` | Anything but `.xlsx` / `.csv` (400). |
+| Payouts | Upload Chargeback Report | `PUT <uploadUrl>` | Raw PUT straight to storage of `fixtures/payout-chargebacks-demo.xlsx` (the agency's sheet layout + a SOK column; demo policy numbers). `auth: none` by design. ⚠ Its size (19393) is declared in the presign and create bodies. |
+| Payouts | Create Chargeback Import | `POST /payouts/imports` | Reads the report into a **preview** (nothing charged): header found by name, **Prorated Amount** the amount; each line matched by SOK, else the Producer name weighed against the policy's seller; a policy already charged back (any month) or repeated in the file is a duplicate, never charged; an opposite-sign line is a skipped reversal. 409 `PAYOUT_IMPORT_DUPLICATE_FILE` + `importId` for the same bytes (rerun-safe), 422 `PAYOUT_IMPORT_UNREADABLE_FILE` + `reason`. Captures `payoutsImportId`. |
+| Payouts | Create Chargeback Import (Upload Missing, 400) | `POST /payouts/imports` | The agency's key, but nothing uploaded under it (400). |
+| Payouts | List Chargeback Imports | `GET /payouts/imports?month` | A month's reports, newest first, with counts (no lines). |
+| Payouts | List Import People | `GET /payouts/imports/people` | Everyone a line may be charged to — people who have left included — with SOK numbers. |
+| Payouts | Get Chargeback Import | `GET /payouts/imports/:id` | Every line: what the file says, the policy found, the candidates and who is charged, resolution, notes. Captures `payoutsImportRowNumber` (the line that needs a person). |
+| Payouts | Commit Chargeback Import (Unresolved, 400) | `POST /payouts/imports/:id/commit` | 400 `PAYOUT_IMPORT_UNRESOLVED_ROWS` + `unresolved` while a line needs a person (409 on a rerun: already committed). |
+| Payouts | Skip Import Row | `PATCH /payouts/imports/:id/rows/:rowNumber` | `{ action: assign \| skip \| reset }` on one line of a preview; returns `{ row, counts }`. A duplicate takes none (400 `PAYOUT_IMPORT_ALREADY_CHARGED`); 409 `PAYOUT_IMPORT_NOT_EDITABLE` once committed. |
+| Payouts | Reset Import Row | `PATCH /payouts/imports/:id/rows/:rowNumber` | Back to what matching decided (here: needs a person). |
+| Payouts | Assign Import Row | `PATCH /payouts/imports/:id/rows/:rowNumber` | Charges the line to the demo producer. |
+| Payouts | Commit Chargeback Import | `POST /payouts/imports/:id/commit` | One transaction (serialised per agency, ledger re-checked: 409 `PAYOUT_IMPORT_CHARGED_SINCE` if a policy was charged back since the preview): a `chargebacks` row per charged line (`source`/`reason` `carrier_statement`, `statementMonth`, `importId`, no change to the sale) and the import `committed`; then the month is recalculated like Recalculate (draft + disputed); sent/accepted statements of the people charged are listed in `result.untouched`. |
+| Payouts | Discard Chargeback Import (Committed, 409) | `DELETE /payouts/imports/:id` | Discarding frees a preview's file; a committed import cannot be undone (409). |
+| Payouts | Get Payout Activity (After Import) | `GET /payouts/activity?month&userId` | The producer's month now lists the report's lines (`source: carrier_statement`). |
+| Payouts | Get Pay Statement (After Import) | `GET /payouts/statements/:id` | The recalculated draft carries the lines under its chargebacks; totals add up. |
 | Payouts | Archive Payment Structure | `POST /payouts/structures/:id/archive` | Releases the members and frees the name. |
 | Payouts | Archive Payment Structure (Again) | `POST /payouts/structures/:id/archive` | Already archived (409). |
 | Payouts | Login as Producer | `POST /auth/login` | Captures `payoutsProducerToken`; a producer holds `payouts:read` only. |
@@ -145,6 +161,7 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Payouts | Get Payout Activity (as Producer, Own) | `GET /payouts/activity?month` | Their own month; no statement to open yet. |
 | Payouts | Get Payout Activity (as Producer, Other Person, 403) | `GET /payouts/activity?userId` | Someone else's needs `payouts:write`. |
 | Payouts | Generate Payout Run (as Producer, 403) | `POST /payouts/runs` | Generating is the owner's. |
+| Payouts | Presign Chargeback Report (as Producer, 403) | `POST /payouts/imports/presign` | The chargeback import is the owner's. |
 | Performance | Get Performance (This Month) | `GET /performance` | **PAC-10 / PAC-11** — Sold + Quoted scorecards. `performance:read`. |
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |

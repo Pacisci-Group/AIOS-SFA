@@ -5,6 +5,7 @@ import {
   leadSourceRulesError,
   MAX_BONUS_TIERS,
   MAX_PAY_STATEMENTS_PAGE_SIZE,
+  MAX_PAYOUT_IMPORT_FILE_BYTES,
   MAX_RATE_RULES,
   PAY_STATEMENT_STATUSES,
   PAY_STATEMENTS_PAGE_SIZE,
@@ -257,3 +258,71 @@ export const payoutActivityQuerySchema = z
   })
   .strict();
 export type PayoutActivityQueryDto = z.infer<typeof payoutActivityQuerySchema>;
+
+// ── Chargeback report import (PAC-180) ──────────────────────────────────
+
+/** A report the import reads: a spreadsheet or a CSV export of one. */
+const importFilename = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine(
+    (name) => /\.(xlsx|csv)$/i.test(name),
+    'Upload the chargeback report as .xlsx or .csv',
+  );
+
+/** `POST /payouts/imports/presign`. */
+export const presignChargebackImportSchema = z
+  .object({
+    filename: importFilename,
+    size: z.number().int().min(1).max(MAX_PAYOUT_IMPORT_FILE_BYTES),
+  })
+  .strict();
+export type PresignChargebackImportDto = z.infer<
+  typeof presignChargebackImportSchema
+>;
+
+/** `POST /payouts/imports` — read the uploaded report into a preview. */
+export const createChargebackImportSchema = z
+  .object({
+    storageKey: z.string().trim().min(1).max(512),
+    uploadedFilename: importFilename,
+    size: z.number().int().min(1),
+    carrier: z.string().trim().min(1, 'Choose a carrier.').max(100),
+    month: payoutMonthSchema,
+  })
+  .strict();
+export type CreateChargebackImportDto = z.infer<
+  typeof createChargebackImportSchema
+>;
+
+/** `GET /payouts/imports?month`. */
+export const listChargebackImportsQuerySchema = z
+  .object({ month: payoutMonthSchema.optional() })
+  .strict();
+export type ListChargebackImportsQueryDto = z.infer<
+  typeof listChargebackImportsQuerySchema
+>;
+
+/** `:id` of an import. */
+export const chargebackImportIdSchema = objectId;
+
+/** `:rowNumber` — a line's row in the sheet (a spreadsheet's last row at most). */
+export const importRowNumberSchema = z.coerce
+  .number()
+  .int()
+  .min(1)
+  .max(1_048_576);
+
+/**
+ * `PATCH /payouts/imports/:id/rows/:rowNumber`: charge the line to someone,
+ * leave it out, or undo the owner's choice. A duplicate takes none — a policy
+ * is charged back once.
+ */
+export const importRowActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('assign'), userId: objectId }).strict(),
+  z.object({ action: z.literal('skip') }).strict(),
+  z.object({ action: z.literal('reset') }).strict(),
+]);
+export type ImportRowActionDto = z.infer<typeof importRowActionSchema>;

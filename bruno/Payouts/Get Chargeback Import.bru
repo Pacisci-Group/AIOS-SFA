@@ -1,0 +1,51 @@
+meta {
+  name: Get Chargeback Import
+  type: http
+  seq: 29
+}
+
+get {
+  url: {{baseUrl}}/payouts/imports/{{payoutsImportId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const rows = res.getBody().rows;
+    const open = rows.find(function (r) { return r.resolution === "unmatched"; });
+    // The fixture's row 4 needs a person; on a rerun it is already charged.
+    bru.setVar("payoutsImportRowNumber", String(open ? open.rowNumber : 4));
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("names the columns it read", function () {
+    const fields = res.getBody().columns.map(function (c) { return c.field; });
+    expect(fields).to.include("policyNumber");
+    expect(fields).to.include("amount");
+    const amount = res.getBody().columns.find(function (c) { return c.field === "amount"; });
+    expect(amount.header).to.equal("Prorated Amount");
+  });
+}
+
+docs {
+  # GET /payouts/imports/:id — one import, every line (PAC-180)
+
+  **Permission** — `agency:payouts:admin`. 404 for another agency's import.
+
+  ## Response 200
+  `ChargebackImportView` (see `Create Chargeback Import`). A line's `notes`
+  say why it matched as it did: `sok_unknown`, `name_unknown`,
+  `name_ambiguous`, `name_seller_differ`, `sok_seller_differ`,
+  `seller_used`, `policy_not_found`, `policy_no_sale`, `already_charged`,
+  and `no_structure` (the person is on no payment structure, so no statement
+  shows it). Labels: `IMPORT_ROW_NOTE_LABELS` in `@sfa/shared`.
+}

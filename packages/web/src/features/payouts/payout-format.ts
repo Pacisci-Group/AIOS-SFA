@@ -1,12 +1,13 @@
-import type {
-  ChargebackReason,
-  ChargebackSource,
-  ComplianceStatus,
-  PayoutPool,
-  PayStatementStatus,
-  PremiumLineView,
-  SomStatus,
-  StatementRateSource,
+import {
+  CHARGEBACK_REASON_LABELS,
+  type ChargebackReason,
+  type ChargebackSource,
+  type ComplianceStatus,
+  type PayoutPool,
+  type PayStatementStatus,
+  type PremiumLineView,
+  type SomStatus,
+  type StatementRateSource,
 } from "@sfa/shared";
 import { NOT_AVAILABLE } from "@/lib/not-available";
 
@@ -50,18 +51,18 @@ export function premiumLineLabel(line: PremiumLineView): string {
     : line.carrier;
 }
 
-/** Where a chargeback came from, in the words the epic uses. */
+/**
+ * Where a chargeback came from — the ledger's own labels, so the statement
+ * and the rest of the app name a reason the same way. A row read off the
+ * chargeback report is "Carrier report" whatever its reason.
+ */
 export function chargebackSourceLabel(row: {
   reason: ChargebackReason;
   source: ChargebackSource;
 }): string {
-  const source: string = row.source;
-  const reason: string = row.reason;
-  if (source === "carrier_statement") return "Carrier report";
-  if (reason === "manual") return "Manual";
-  if (reason === "cancel_rewrite") return "Cancel Rewrite";
-  if (reason === "cancellation") return "Cancellation";
-  return reason;
+  return row.source === "carrier_statement"
+    ? CHARGEBACK_REASON_LABELS.carrier_statement
+    : CHARGEBACK_REASON_LABELS[row.reason];
 }
 
 export const SOM_LABELS: Record<SomStatus, string> = {

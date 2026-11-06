@@ -1,0 +1,39 @@
+meta {
+  name: List Import People
+  type: http
+  seq: 28
+}
+
+get {
+  url: {{baseUrl}}/payouts/imports/people
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the agency's people with their SOK numbers", function () {
+    const people = res.getBody().people;
+    const pat = people.find(function (p) { return p.id === bru.getVar("payoutsProducerUserId"); });
+    expect(pat).to.be.an("object");
+    expect(pat.allstateBindId).to.equal("SOKDEMOP");
+  });
+}
+
+docs {
+  # GET /payouts/imports/people — who a line may be charged to (PAC-180)
+
+  **Permission** — `agency:payouts:admin`. Every agency user, **people who
+  have left included** (a chargeback can follow a producer out the door);
+  platform admins never.
+
+  ## Response 200
+  `{ people: [{ id, name, status (active | invited | deactivated),
+  branchName, allstateBindId }] }`.
+}

@@ -60,6 +60,8 @@ export function payoutPersonStatus(user: {
  *   agency — a structure's members, or the ids a save names.
  * - Without, everyone who has not been removed: the people step offers
  *   invitees too, so a structure can be ready before someone's first day.
+ *   `includeRemoved` adds the removed — a chargeback-report line can be for
+ *   someone who has left (PAC-180).
  *
  * Platform admins are never an agency's people.
  *
@@ -72,6 +74,7 @@ export async function loadPayoutPeople(
   models: PayoutPeopleModels,
   agencyId: string,
   ids?: readonly (string | Types.ObjectId)[],
+  { includeRemoved = false }: { includeRemoved?: boolean } = {},
 ): Promise<Map<string, PayoutPerson>> {
   const agencyOid = new Types.ObjectId(agencyId);
   const where: FilterQuery<UserDocument> = {
@@ -81,7 +84,7 @@ export async function loadPayoutPeople(
   if (ids) {
     if (!ids.length) return new Map();
     where._id = { $in: ids.map((id) => new Types.ObjectId(String(id))) };
-  } else {
+  } else if (!includeRemoved) {
     where.deactivatedAt = null;
   }
   const users = await models.userModel
