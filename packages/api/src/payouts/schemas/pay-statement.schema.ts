@@ -3,6 +3,7 @@ import {
   PAY_STATEMENT_STATUSES,
   PAYOUT_POOLS,
   STATEMENT_ADJUSTMENT_KINDS,
+  STATEMENT_HISTORY_OUTCOMES,
   type PayoutPool,
   type PayStatementStatus,
   type PremiumLineView,
@@ -10,6 +11,7 @@ import {
   type StatementBonusesView,
   type StatementChargebackView,
   type StatementDealView,
+  type StatementHistoryOutcome,
   type StatementIndicatorsView,
   type StatementInputs,
   type StatementInputsNeeded,
@@ -53,6 +55,63 @@ const PayStatementAdjustmentSchema = SchemaFactory.createForClass(
 );
 
 /**
+ * An issued Commission Statement PDF (PAC-181), in object storage under
+ * `agencies/<agencyId>/pay-statements/<year>/<statementId>/
+ * commission-statement-<month>-v<n>.pdf`. Only the key is kept — a link is
+ * minted per read and never stored.
+ */
+@Schema({ _id: false, timestamps: false })
+export class PayStatementPdf {
+  @Prop({ type: String, required: true })
+  key: string;
+
+  /** SHA-256 of the file, hex. */
+  @Prop({ type: String, required: true })
+  sha256: string;
+
+  @Prop({ type: Number, required: true })
+  size: number;
+
+  @Prop({ type: Date, required: true })
+  renderedAt: Date;
+}
+const PayStatementPdfSchema = SchemaFactory.createForClass(PayStatementPdf);
+
+/**
+ * An issued version that is no longer current (PAC-181): its file and who
+ * sent it, kept when the statement is reopened or a disputed one is sent
+ * again. `version === history.length + 1` always — see
+ * `STATEMENT_HISTORY_OUTCOMES`.
+ */
+@Schema({ _id: false, timestamps: false })
+export class PayStatementHistoryEntry {
+  @Prop({ type: Number, required: true })
+  version: number;
+
+  @Prop({ type: String, enum: STATEMENT_HISTORY_OUTCOMES, required: true })
+  outcome: StatementHistoryOutcome;
+
+  @Prop({ type: PayStatementPdfSchema, default: null })
+  pdf: PayStatementPdf | null;
+
+  @Prop({ type: Date, default: null })
+  sentAt: Date | null;
+
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
+  sentBy: Types.ObjectId | null;
+
+  @Prop({ type: String, default: null })
+  sentByName: string | null;
+
+  /** When it stopped being current. */
+  @Prop({ type: Date, required: true })
+  at: Date;
+}
+const PayStatementHistoryEntrySchema = SchemaFactory.createForClass(
+  PayStatementHistoryEntry,
+);
+
+/**
  * One person's commission statement for one month (PAC-178).
  *
  * **A snapshot, not a view.** Everything the statement says — the structure
@@ -68,8 +127,14 @@ const PayStatementAdjustmentSchema = SchemaFactory.createForClass(
  * types.
  *
  * `branchId` is the person's branch when it was computed, as a string like
- * `TenantRecord`'s, so `buildScopeFilter` scopes a branch manager to it. PDF,
- * acceptance and history fields arrive with PAC-181/182.
+ * `TenantRecord`'s, so `buildScopeFilter` scopes a branch manager to it.
+ *
+ * **Sending (PAC-181)** renders the Commission Statement PDF, stores it
+ * (`pdf`) and marks the statement `sent` with who sent it; reopening takes it
+ * back to `draft` and moves the issued version into `history`. The PDF,
+ * sender and history fields are absent on statements written before them —
+ * read them as `null` / `[]`. Acceptance and dispute fields arrive with
+ * PAC-182.
  */
 @Schema({ timestamps: true, collection: 'payStatements' })
 export class PayStatement {
@@ -121,7 +186,11 @@ export class PayStatement {
   })
   status: PayStatementStatus;
 
-  /** Bumped by each re-send after a dispute (PAC-182). */
+  /**
+   * The version the statement is, or will be issued as: bumped when an
+   * issued version stops being current (a reopen, or a disputed statement
+   * sent again), so `version === history.length + 1`.
+   */
   @Prop({ type: Number, required: true, default: 1 })
   version: number;
 
@@ -171,6 +240,23 @@ export class PayStatement {
 
   @Prop({ type: Date, required: true })
   computedAt: Date;
+
+  /** The issued PDF of the current version; `null` until it is sent. */
+  @Prop({ type: PayStatementPdfSchema, default: null })
+  pdf: PayStatementPdf | null;
+
+  @Prop({ type: Date, default: null })
+  sentAt: Date | null;
+
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
+  sentBy: Types.ObjectId | null;
+
+  /** The sender's name as it was when they sent it. */
+  @Prop({ type: String, default: null })
+  sentByName: string | null;
+
+  @Prop({ type: [PayStatementHistoryEntrySchema], default: [] })
+  history: PayStatementHistoryEntry[];
 
   @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdBy: Types.ObjectId | null;

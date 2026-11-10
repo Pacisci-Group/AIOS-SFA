@@ -1,0 +1,32 @@
+meta {
+  name: Get Pay Statement PDF Link (as Producer, Own)
+  type: http
+  seq: 61
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/pdf
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().url).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id/pdf — the employee's own
+
+  `payouts:read` is enough for one's own sent statement. See **Get Pay
+  Statement PDF Link**.
+}

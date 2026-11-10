@@ -82,6 +82,20 @@ export const NOTIFICATION_TYPES = {
     category: 'payouts',
     defaultChannels: { email: true, push: true },
   },
+  /**
+   * A reviewer sent someone their commission statement (PAC-181) — one
+   * statement, or each of a month's drafts through Send all. Recipients: the
+   * statement's employee. `data`: `{ statementId, month, monthLabel, version,
+   * senderName }`. Dedupe: `pay-statement:<id>:sent:v<version>`, so sending
+   * the same version twice tells nobody twice while a reissued version (after
+   * a reopen or a dispute) is a new notification. **No amounts** on purpose:
+   * the email may land in a shared inbox, and the link opens the statement
+   * behind sign-in. Email is on: the statement asks for the employee's review.
+   */
+  'payouts.statement_sent': {
+    category: 'payouts',
+    defaultChannels: { email: true, push: true },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

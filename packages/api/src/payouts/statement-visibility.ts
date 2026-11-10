@@ -1,11 +1,13 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import {
+  AgencyPermission,
   DataScope,
   modulePermission,
   ModuleKey,
+  PAYOUT_STATEMENT_OWN_STATEMENT,
   type AccessContext,
 } from '@sfa/shared';
-import { Types, type FilterQuery } from 'mongoose';
+import { Types, type FilterQuery, type Model } from 'mongoose';
 import { buildScopeFilter } from '../common/access/scope-filter';
 import type { PayStatement } from './schemas/pay-statement.schema';
 
@@ -62,6 +64,63 @@ export function statementVisibility(
     producerField: 'userId',
     excludeTestRecords: false,
   });
+}
+
+/**
+ * One statement the caller may see, or a 404 — never a 403, so whether a
+ * statement exists is not given away. Every statement route starts here.
+ *
+ * `projection` reads only the fields a route needs (an inclusion
+ * projection): the result then carries those fields and `_id` alone, so the
+ * caller must list every field it reads.
+ */
+export async function loadVisibleStatement(
+  model: Model<PayStatement>,
+  access: AccessContext,
+  branchId: string | null,
+  id: string,
+  projection?: Partial<Record<keyof PayStatement, 1>>,
+): Promise<PayStatement & { _id: Types.ObjectId }> {
+  const query = model.findOne({
+    ...statementVisibility(access, branchId),
+    _id: new Types.ObjectId(id),
+  });
+  if (projection) query.select(projection);
+  const doc = await query.lean<
+    (PayStatement & { _id: Types.ObjectId }) | null
+  >();
+  if (!doc) throw new NotFoundException('Statement not found');
+  return doc;
+}
+
+/**
+ * May the caller issue this statement — send, reopen or recalculate it? Not
+ * their own without `agency:payouts:admin` (PAC-181 review fixes): what it
+ * says is their pay, so someone else decides it — the rule
+ * `updateInputs` already applied to the figures (`PAYOUT_STATEMENT_OWN_INPUTS`).
+ */
+export function issuesOwnStatement(
+  access: AccessContext,
+  statement: { userId: Types.ObjectId | string },
+): boolean {
+  return (
+    String(statement.userId) === access.userId &&
+    !access.permissions.includes(AgencyPermission.PayoutsAdmin)
+  );
+}
+
+/** 403 `PAYOUT_STATEMENT_OWN_STATEMENT` — see `issuesOwnStatement`. */
+export function assertNotOwnStatement(
+  access: AccessContext,
+  statement: { userId: Types.ObjectId | string },
+): void {
+  if (issuesOwnStatement(access, statement)) {
+    throw new ForbiddenException({
+      code: PAYOUT_STATEMENT_OWN_STATEMENT,
+      message:
+        'Someone else sends, reopens and recalculates your own statement.',
+    });
+  }
 }
 
 /**

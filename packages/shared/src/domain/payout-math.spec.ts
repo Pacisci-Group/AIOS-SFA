@@ -367,12 +367,14 @@ describe('computeStatement', () => {
       }),
     );
     const jya = result.premiumLines.find((line) => line.leadSourceId === JYA);
+    // 6% of the $1,200 left once $300 is charged back.
     expect(jya).toMatchObject({
       chargebacks: 300,
       netPremium: 1200,
-      chargebackImpact: 18,
+      grossCommission: 72,
       netCommission: 72,
     });
+    expect(jya).not.toHaveProperty('chargebackImpact');
     const none = result.premiumLines.find(
       (line) => line.carrier === PAYOUT_NO_CARRIER,
     );
@@ -381,7 +383,7 @@ describe('computeStatement', () => {
       chargebacks: 100,
       netPremium: -100,
       ratePercent: 5,
-      chargebackImpact: 5,
+      grossCommission: -5,
       netCommission: -5,
     });
     expect(result.premiumLines.at(-1)?.carrier).toBe(PAYOUT_NO_CARRIER);
@@ -395,11 +397,37 @@ describe('computeStatement', () => {
     expect(excluded).toMatchObject({
       excluded: true,
       excludedNote: 'Rewritten same day',
-      commissionDeduction: 100,
     });
+    expect(excluded).not.toHaveProperty('commissionDeduction');
     expect(result.totals.chargebackTotal).toBe(400);
-    expect(result.totals.chargebackImpact).toBe(23);
+    expect(result.totals).not.toHaveProperty('chargebackImpact');
     expect(result.totals.netPremium).toBe(6100);
+  });
+
+  // Owner, 10 Nov 2026: the chargeback comes off the sold premium and the
+  // rate applies to what remains — its commission is not deducted again.
+  it('pays the rate on net premium and deducts nothing a second time', () => {
+    const result = computeStatement(
+      input({
+        sales: [sale('2026-10-05', null, [['Allstate', 'Auto', 1000]])],
+        chargebacks: [chargeback('cb1', 'Allstate', null, 300)],
+      }),
+    );
+    expect(result.premiumLines[0]).toMatchObject({
+      grossPremium: 1000,
+      chargebacks: 300,
+      netPremium: 700,
+      ratePercent: 10,
+      grossCommission: 70,
+      netCommission: 70,
+    });
+    expect(result.totals).toMatchObject({
+      grossPremium: 1000,
+      chargebackTotal: 300,
+      netPremium: 700,
+      grossCommission: 70,
+      netCommission: 70,
+    });
   });
 
   it('lets a line and the statement go negative', () => {
@@ -654,16 +682,16 @@ describe('computeStatement', () => {
         ],
       }),
     );
-    // 507 − 23 + 12.34 + 100 + 50 + 25 − 10 − 2.5
+    // 484 (the rate on net premium) + 12.34 + 100 + 50 + 25 − 10 − 2.5 —
+    // the same as when it was 507 − 23 (the rate is linear).
+    expect(result.totals.grossCommission).toBe(484);
     expect(result.totals.netCommission).toBe(658.84);
     expect(salesGrossPremium(octoberSales())).toBe(result.totals.grossPremium);
     const linesNet = result.premiumLines.reduce(
       (sum, line) => sum + Math.round(line.netCommission * 100),
       0,
     );
-    expect(linesNet / 100).toBe(
-      result.totals.grossCommission - result.totals.chargebackImpact,
-    );
+    expect(linesNet / 100).toBe(result.totals.grossCommission);
   });
 
   it('warns about premium with no carrier recorded', () => {

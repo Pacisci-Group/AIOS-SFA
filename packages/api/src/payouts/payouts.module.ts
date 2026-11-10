@@ -31,6 +31,7 @@ import {
   AgencyRole,
   AgencyRoleSchema,
 } from '../roles/schemas/agency-role.schema';
+import { TenantBrandingModule } from '../tenant-branding/tenant-branding.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { ChargebackImportsService } from './chargeback-imports.service';
 import { PayStatementsService } from './pay-statements.service';
@@ -42,6 +43,7 @@ import { PayoutSettingsService } from './payout-settings.service';
 import { PayoutsAdminController } from './payouts-admin.controller';
 import { PayoutsImportsController } from './payouts-imports.controller';
 import { PayoutsStatementsController } from './payouts-statements.controller';
+import { StatementIssueService } from './statement-issue.service';
 import {
   ChargebackImport,
   ChargebackImportSchema,
@@ -60,16 +62,21 @@ import {
  * Payouts (PAC-176). PAC-177 brought the admin half — payout settings and
  * payment structures; PAC-178/179 the monthly statements, the run that drafts
  * them and the activity behind them; PAC-180 the carrier chargeback report
- * import. The PDF and the sign-off follow in PAC-181/182.
+ * import; PAC-181 the Commission Statement PDF and sending it
+ * (`StatementIssueService`). The sign-off follows in PAC-182.
  *
  * `LeadSourcesModule` for the structures' lead-source rates: the service
- * checks each source is the agency's to use and names it on read. The
- * statement engine itself reads only models (`PayoutModelsService`), the
- * same ones the monthly job registers in the worker.
+ * checks each source is the agency's to use and names it on read.
+ * `TenantBrandingModule` for the statement PDF's agency name and its
+ * dark-surface logo (the header band is navy), by the same rule as the
+ * app and the email masthead. The statement engine itself reads only models
+ * (`PayoutModelsService`), the same ones the monthly job registers in the
+ * worker.
  */
 @Module({
   imports: [
     LeadSourcesModule,
+    TenantBrandingModule,
     MongooseModule.forFeature([
       { name: PaymentStructure.name, schema: PaymentStructureSchema },
       { name: PayoutRun.name, schema: PayoutRunSchema },
@@ -103,6 +110,7 @@ import {
     PayStatementsService,
     PayoutActivityService,
     ChargebackImportsService,
+    StatementIssueService,
   ],
 })
 export class PayoutsModule {}

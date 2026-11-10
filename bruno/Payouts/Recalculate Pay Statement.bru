@@ -32,7 +32,9 @@ docs {
   # POST /payouts/statements/:id/recalculate — recompute one draft (PAC-178)
 
   **Module** — `payouts`. **Permission** — `payouts:write`, within your data
-  scope (a statement outside it is a `404`).
+  scope (a statement outside it is a `404`). Not your **own** statement
+  without `agency:payouts:admin` (PAC-181 review fixes — the rule the
+  entered figures already had).
 
   Re-reads the person's sales and chargebacks and applies their **current**
   structure (the one the statement was drafted with, if they have left every
@@ -43,6 +45,8 @@ docs {
 
   **Response `200`** — the statement, as **Get Pay Statement**.
 
-  **Errors** — `403` without `payouts:write`; `404` outside your scope; `409`
+  **Errors** — `403` without `payouts:write`, or
+  `PAYOUT_STATEMENT_OWN_STATEMENT` on your own statement without
+  `agency:payouts:admin`; `404` outside your scope; `409`
   `PAYOUT_STATEMENT_NOT_EDITABLE` once it has been sent or accepted.
 }

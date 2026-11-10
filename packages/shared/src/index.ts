@@ -32,6 +32,7 @@ export * from './domain/analytics';
 export * from './domain/data-export';
 export * from './domain/owner-dashboard';
 export * from './domain/payouts';
+export * from './domain/payout-labels';
 export * from './domain/payout-math';
 export * from './domain/management-dashboard';
 export * from './domain/lead-status';

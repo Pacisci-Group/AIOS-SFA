@@ -469,15 +469,19 @@ describe('Payouts — monthly statements (e2e)', () => {
           line.chargebacks,
           line.ratePercent,
           line.grossCommission,
-          line.chargebackImpact,
           line.netCommission,
         ]),
       ).toEqual([
-        ['Allstate', null, 4000, 0, 10, 400, 0, 400],
-        ['Allstate', 'JYA', 1500, 1500, 6, 90, 90, 0],
-        ['Progressive', null, 2000, 0, 5, 100, 0, 100],
-        [PAYOUT_NO_CARRIER, null, 500, 0, 5, 25, 0, 25],
+        ['Allstate', null, 4000, 0, 10, 400, 400],
+        // The rate on net premium (owner, 10 Nov 2026): $1,500 sold, $1,500
+        // charged back — nothing earned, and nothing deducted a second time.
+        ['Allstate', 'JYA', 1500, 1500, 6, 0, 0],
+        ['Progressive', null, 2000, 0, 5, 100, 100],
+        [PAYOUT_NO_CARRIER, null, 500, 0, 5, 25, 25],
       ]);
+      for (const line of s.premiumLines) {
+        expect(line).not.toHaveProperty('chargebackImpact');
+      }
       for (const line of s.premiumLines.filter(
         (l) => l.carrier === 'Allstate',
       )) {
@@ -505,10 +509,10 @@ describe('Payouts — monthly statements (e2e)', () => {
         carrier: 'Allstate',
         leadSourceId: jya,
         ratePercent: 6,
-        commissionDeduction: 90,
         reason: 'cancellation',
         source: 'app',
       });
+      expect(s.chargebacks[0]).not.toHaveProperty('commissionDeduction');
 
       expect(s.bonuses.hatTrick).toMatchObject({
         days: ['2026-03-10'],
@@ -543,8 +547,8 @@ describe('Payouts — monthly statements (e2e)', () => {
         grossPremium: 8000,
         chargebackTotal: 1500,
         netPremium: 6500,
-        grossCommission: 615,
-        chargebackImpact: 90,
+        // The rate on net premium: 615 − 90 before (same net pay).
+        grossCommission: 525,
         tierBonus: 100,
         teamBonus: 711.11,
         somBonus: 250,
@@ -761,6 +765,31 @@ describe('Payouts — monthly statements (e2e)', () => {
           chargebackTotal: statement.totals.chargebackTotal,
         },
       });
+    });
+
+    // What the Activity tab opens when a row is clicked (10 Nov 2026).
+    it("carries each sale's and chargeback's household", async () => {
+      const body = (await activity(`month=${MONTH}&userId=${p1}`).expect(200))
+        .body as PayoutActivityView;
+      expect(body.deals.length).toBeGreaterThan(0);
+      for (const deal of body.deals) {
+        const stored = await dealModel
+          .findById(deal.dealId)
+          .select({ householdId: 1 })
+          .lean();
+        expect(deal.householdId).toBe(String(stored!.householdId));
+      }
+      expect(body.chargebacks).toHaveLength(1);
+      const policy = await policyModel
+        .findById(body.chargebacks[0].policyId)
+        .select({ householdId: 1 })
+        .lean();
+      expect(body.chargebacks[0].householdId).toBe(String(policy!.householdId));
+      // New statements carry it in their snapshot too.
+      const statement = await detail(await statementOf(p1));
+      expect(statement.deals.every((deal) => Boolean(deal.householdId))).toBe(
+        true,
+      );
     });
 
     it('names the source of each chargeback, statement or not', async () => {

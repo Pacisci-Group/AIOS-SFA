@@ -1,0 +1,31 @@
+meta {
+  name: Reopen Pay Statement (Draft, 409)
+  type: http
+  seq: 65
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/reopen
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 409 PAYOUT_STATEMENT_NOT_SENT", function () {
+    expect(res.getStatus()).to.equal(409);
+    expect(res.getBody().code).to.equal("PAYOUT_STATEMENT_NOT_SENT");
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/reopen — a draft
+
+  Only a sent statement can be reopened. See **Reopen Pay Statement**.
+}

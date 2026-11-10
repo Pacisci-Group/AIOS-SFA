@@ -7,14 +7,17 @@ import {
   FileUp,
   ListChecks,
   Loader2,
+  Send,
   Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   AgencyPermission,
+  ModuleKey,
   PAY_STATEMENT_STATUSES,
   PAYOUT_RUN_GENERATING,
   type PayStatementStatus,
+  type SendAllDraftsResponse,
 } from "@sfa/shared";
 import { MonthPicker } from "@/components/common/MonthPicker";
 import { AppShell } from "@/components/layout/AppShell";
@@ -41,6 +44,7 @@ import {
   getPayoutRun,
   payoutRunKey,
   payStatementsKey,
+  sendAllDrafts,
 } from "@/lib/payouts-api";
 import { RunSummary } from "./components/RunSummary";
 import { ChargebackImportsPanel } from "./imports/ChargebackImportsPanel";
@@ -71,13 +75,17 @@ const URL_ALLOWED = {
  * (`agency:payouts:admin`), and only ever rewrites draft and disputed
  * statements. So is the chargeback report (PAC-180): Upload chargebacks
  * opens its preview, and the month's reports are listed below.
+ *
+ * **Send all drafts** (PAC-181, any reviewer) sends every draft the caller
+ * may see — within the branch the table is filtered to, when it is.
  */
 export default function PayoutsPage() {
   const { user } = useAuth();
-  const { can } = usePermissions();
+  const { can, canWrite } = usePermissions();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const isAdmin = can(AgencyPermission.PayoutsAdmin);
+  const reviewer = canWrite(ModuleKey.Payouts);
   const [uploading, setUploading] = useState(false);
   const currentMonth = agencyMonth(user?.timeZone);
   const [values, setValues] = useUrlState({
@@ -132,9 +140,48 @@ export default function PayoutsPage() {
     },
   });
 
+  const [sendingAll, setSendingAll] = useState(false);
+  const sendAll = useMutation({
+    mutationFn: (runId: string) =>
+      sendAllDrafts(runId, { branchId: values.branch || undefined }),
+    onSuccess: async (result: SendAllDraftsResponse) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: payoutRunKey(month) }),
+        queryClient.invalidateQueries({ queryKey: payStatementsKey }),
+      ]);
+      setSendingAll(false);
+      const extra = [
+        result.skipped
+          ? `${result.skipped} had changed and ${result.skipped === 1 ? "was" : "were"} left alone.`
+          : null,
+        result.failed.length
+          ? `Not sent: ${result.failed.map((row) => row.userName).join(", ")}.`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const title =
+        result.sent === 0
+          ? "No drafts were left to send."
+          : `${result.sent} statement${result.sent === 1 ? "" : "s"} sent.`;
+      if (result.failed.length) toast.warning(title, { description: extra });
+      else toast.success(title, extra ? { description: extra } : undefined);
+    },
+    onError: (error) => {
+      setSendingAll(false);
+      toast.error(payoutErrorMessage(error));
+    },
+  });
+
   const existing = run.data?.run ?? null;
   const generating = existing?.status === "generating" || generate.isPending;
   const partial = month === (run.data?.currentMonth ?? currentMonth);
+  const drafts = existing?.counts.draft ?? 0;
+  const branchName =
+    values.branch && branches.data
+      ? (branches.data.find((branch) => branch._id === values.branch)?.name ??
+        null)
+      : null;
 
   return (
     <AppShell>
@@ -173,6 +220,21 @@ export default function PayoutsPage() {
             >
               <FileUp aria-hidden />
               Upload chargebacks
+            </Button>
+          )}
+          {reviewer && existing?.status === "ready" && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={drafts === 0 || sendAll.isPending || generating}
+              onClick={() => setSendingAll(true)}
+            >
+              {sendAll.isPending ? (
+                <Loader2 aria-hidden className="animate-spin" />
+              ) : (
+                <Send aria-hidden />
+              )}
+              Send all drafts
             </Button>
           )}
           {isAdmin && (
@@ -279,6 +341,45 @@ export default function PayoutsPage() {
           onImported={(importId) => navigate(`/payouts/imports/${importId}`)}
         />
       )}
+
+      <AlertDialog
+        open={sendingAll}
+        onOpenChange={(next) =>
+          !next && !sendAll.isPending && setSendingAll(false)
+        }
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {branchName
+                ? `Send the draft statements for ${formatMonth(month)} in ${branchName}?`
+                : `Send ${drafts} draft statement${drafts === 1 ? "" : "s"} for ${formatMonth(month)}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Each person gets a notification and can open their statement from
+              My Pay. Drafts are sent as they are calculated now; sent and
+              accepted statements are not touched.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={sendAll.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={sendAll.isPending || !existing}
+              onClick={(event) => {
+                event.preventDefault();
+                if (existing) sendAll.mutate(existing.id);
+              }}
+            >
+              {sendAll.isPending && (
+                <Loader2 aria-hidden className="size-4 animate-spin" />
+              )}
+              Send
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={confirming}

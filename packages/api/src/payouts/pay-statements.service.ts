@@ -2,13 +2,14 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  NotFoundException,
 } from '@nestjs/common';
 import {
-  AgencyPermission,
   DataScope,
   EDITABLE_PAY_STATEMENT_STATUSES,
+  ENTERED_ADJUSTMENT_KEYS,
+  ENTERED_ADJUSTMENTS,
   isEditableStatementStatus,
+  PAYOUT_STATEMENT_CHANGED,
   PAYOUT_STATEMENT_NOT_EDITABLE,
   PAYOUT_STATEMENT_OWN_INPUTS,
   type AccessContext,
@@ -20,6 +21,7 @@ import { escapeRegex } from '../common/mongo/escape-regex';
 import { recomputeStatement } from '../common/payouts/generate-run';
 import type {
   ListPayStatementsQueryDto,
+  UpdateStatementAdjustmentsDto,
   UpdateStatementInputsDto,
 } from './dto/payouts.dto';
 import { PayoutModelsService } from './payout-models.service';
@@ -31,13 +33,17 @@ import {
 import type { PayStatement } from './schemas/pay-statement.schema';
 import {
   agencyOf,
+  assertNotOwnStatement,
+  issuesOwnStatement,
+  loadVisibleStatement,
   readsOthersPay,
   statementVisibility,
 } from './statement-visibility';
 
 /**
  * Pay statements (PAC-178): the Payouts table, My Pay, one statement, and
- * recalculating one. Every read starts from `statementVisibility` — the
+ * recalculating one. Issuing them — the PDF, send, reopen — is
+ * `StatementIssueService`'s (PAC-181). Every read starts from `statementVisibility` — the
  * employee sees their own sent statements, a reviewer what their scope
  * reaches — and a statement the caller may not see is a 404, never a 403,
  * so its existence is not given away.
@@ -86,8 +92,9 @@ export class PayStatementsService {
       this.models.payStatement.countDocuments(filter),
       this.models.payStatement
         .find(filter)
-        // The heavy arrays are the detail page's; a row needs the totals.
-        .select({ premiumLines: 0, deals: 0, chargebacks: 0 })
+        // The heavy arrays are the detail page's; a row needs the totals
+        // (and `sentAt`, not the issued versions' history).
+        .select({ premiumLines: 0, deals: 0, chargebacks: 0, history: 0 })
         .sort({ month: -1, userName: 1, _id: 1 })
         .skip((query.page - 1) * query.pageSize)
         .limit(query.pageSize)
@@ -102,19 +109,12 @@ export class PayStatementsService {
     };
   }
 
-  private async findVisible(
+  private findVisible(
     access: AccessContext,
     branchId: string | null,
     id: string,
   ): Promise<LeanStatement> {
-    const doc = await this.models.payStatement
-      .findOne({
-        ...statementVisibility(access, branchId),
-        _id: new Types.ObjectId(id),
-      })
-      .lean<LeanStatement | null>();
-    if (!doc) throw new NotFoundException('Statement not found');
-    return doc;
+    return loadVisibleStatement(this.models.payStatement, access, branchId, id);
   }
 
   async detail(
@@ -127,7 +127,9 @@ export class PayStatementsService {
 
   /**
    * Recompute one draft or disputed statement from today's data. 409
-   * `PAYOUT_STATEMENT_NOT_EDITABLE` once it has been sent or accepted.
+   * `PAYOUT_STATEMENT_NOT_EDITABLE` once it has been sent or accepted; 403
+   * `PAYOUT_STATEMENT_OWN_STATEMENT` on one's own without
+   * `agency:payouts:admin` (PAC-181 review fixes, widening the inputs rule).
    */
   async recalculate(
     access: AccessContext,
@@ -135,6 +137,7 @@ export class PayStatementsService {
     id: string,
   ): Promise<PayStatementView> {
     const doc = await this.findVisible(access, branchId, id);
+    assertNotOwnStatement(access, doc);
     const notEditable = () =>
       new ConflictException({
         code: PAYOUT_STATEMENT_NOT_EDITABLE,
@@ -169,10 +172,7 @@ export class PayStatementsService {
     dto: UpdateStatementInputsDto,
   ): Promise<PayStatementView> {
     const doc = await this.findVisible(access, branchId, id);
-    if (
-      String(doc.userId) === access.userId &&
-      !access.permissions.includes(AgencyPermission.PayoutsAdmin)
-    ) {
+    if (issuesOwnStatement(access, doc)) {
       throw new ForbiddenException({
         code: PAYOUT_STATEMENT_OWN_INPUTS,
         message: 'Someone else enters the figures on your own statement.',
@@ -202,6 +202,91 @@ export class PayStatementsService {
       },
     );
     if (saved.matchedCount !== 1) throw notEditable();
+    const done = await recomputeStatement(this.models, {
+      agencyId: agencyOf(access),
+      statementId: id,
+    });
+    if (!done) throw notEditable();
+    return this.detail(access, branchId, id);
+  }
+
+  /**
+   * The amounts a reviewer works out outside the app and enters (owner,
+   * 10 Nov 2026): Other bonuses / SPIFFs (added), the compliance adjustment
+   * and other adjustments (deducted), whole — each replaces the statement's
+   * adjustments of its kind (`spiff`, `compliance`, `manual`) with one row,
+   * or none for `null`. A left-out chargeback (`exclude_chargeback`) is never
+   * touched. Then the statement is recalculated.
+   *
+   * `payouts:write`, draft and disputed statements only (409
+   * `PAYOUT_STATEMENT_NOT_EDITABLE`); not one's own without
+   * `agency:payouts:admin` (403 `PAYOUT_STATEMENT_OWN_STATEMENT`). The write
+   * is conditional on the statement's last write, as a send is: a statement
+   * that changed meanwhile is a 409 `PAYOUT_STATEMENT_CHANGED`.
+   */
+  async updateAdjustments(
+    access: AccessContext,
+    branchId: string | null,
+    id: string,
+    dto: UpdateStatementAdjustmentsDto,
+  ): Promise<PayStatementView> {
+    const doc = await this.findVisible(access, branchId, id);
+    assertNotOwnStatement(access, doc);
+    const notEditable = () =>
+      new ConflictException({
+        code: PAYOUT_STATEMENT_NOT_EDITABLE,
+        message:
+          'This statement has been sent, so its adjustments can no longer change.',
+      });
+    if (!isEditableStatementStatus(doc.status)) throw notEditable();
+
+    const now = new Date();
+    const enteredKinds = new Set<string>(
+      ENTERED_ADJUSTMENT_KEYS.map((key) => ENTERED_ADJUSTMENTS[key].kind),
+    );
+    const kept = (doc.adjustments ?? []).filter(
+      (row) => !enteredKinds.has(row.kind),
+    );
+    const entered = ENTERED_ADJUSTMENT_KEYS.flatMap((key) => {
+      const amount = dto[key];
+      if (amount === null || amount === 0) return [];
+      const { kind, sign } = ENTERED_ADJUSTMENTS[key];
+      return [
+        {
+          _id: new Types.ObjectId(),
+          kind,
+          chargebackId: null,
+          // Stored signed, as the engine sums it: deductions negative.
+          amount: sign * amount,
+          note: '',
+          createdBy: new Types.ObjectId(access.userId),
+          createdAt: now,
+        },
+      ];
+    });
+
+    const saved = await this.models.payStatement.updateOne(
+      {
+        _id: doc._id,
+        agencyId: agencyOf(access),
+        status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
+        updatedAt: doc.updatedAt ?? null,
+      },
+      { $set: { adjustments: [...kept, ...entered] } },
+    );
+    if (saved.matchedCount !== 1) {
+      const current = await this.models.payStatement
+        .findById(doc._id)
+        .select({ status: 1 })
+        .lean<{ status: PayStatement['status'] } | null>();
+      throw current && isEditableStatementStatus(current.status)
+        ? new ConflictException({
+            code: PAYOUT_STATEMENT_CHANGED,
+            message:
+              'It changed while the adjustments were being saved. Review it and save again.',
+          })
+        : notEditable();
+    }
     const done = await recomputeStatement(this.models, {
       agencyId: agencyOf(access),
       statementId: id,

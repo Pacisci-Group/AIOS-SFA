@@ -1,10 +1,32 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Calculator, Loader2 } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  Calculator,
+  Loader2,
+  Send,
+  Undo2,
+} from "lucide-react";
 import { toast } from "sonner";
-import { isEditableStatementStatus, ModuleKey } from "@sfa/shared";
+import {
+  isEditableStatementStatus,
+  ModuleKey,
+  type PayStatementView,
+} from "@sfa/shared";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,18 +37,25 @@ import {
   getPayStatement,
   payoutRunsKey,
   payStatementKey,
-  payStatementsKey,
+  payStatementListsKey,
   recalculatePayStatement,
+  reopenPayStatement,
+  sendPayStatement,
 } from "@/lib/payouts-api";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { StatementAdjustmentsCard } from "./components/StatementAdjustmentsCard";
 import { StatementBreakdown } from "./components/StatementBreakdown";
 import { StatementInputsCard } from "./components/StatementInputsCard";
+import { StatementPdfPanel } from "./components/StatementPdfPanel";
 import { StatementStatusBadge } from "./components/StatementStatusBadge";
 import { payoutErrorMessage } from "./payout-errors";
-import { POOL_LABELS } from "./payout-format";
+import { useOwnStatementBlocked } from "./own-statement";
+import { formatInstantDay, POOL_LABELS } from "./payout-format";
 
 const TAB_DEFAULTS = { tab: "" };
-const TAB_ALLOWED = { tab: ["activity"] as const };
+const TAB_ALLOWED = { tab: ["pdf", "activity"] as const };
+
+type Confirming = "send" | "reopen" | null;
 
 /**
  * One commission statement (PAC-178), the same page for the reviewer and the
@@ -38,8 +67,12 @@ const TAB_ALLOWED = { tab: ["activity"] as const };
  * A reviewer (`payouts:write`) may recalculate a draft or disputed one, and
  * enter the figures its structure needs (the compliance rate, retention, …;
  * 2026 comp plans) — not on their own statement without
- * `agency:payouts:admin`. Sending, accepting and disputing arrive with
- * PAC-181/182.
+ * `agency:payouts:admin`, and the same holds for sending and reopening it.
+ *
+ * PAC-181: the PDF tab shows the issued Commission Statement (or, for a
+ * reviewer, a preview of a draft); a reviewer sends a draft or disputed
+ * statement, and reopens a sent one until the employee answers. Accepting
+ * and disputing arrive with PAC-182.
  */
 export default function StatementDetailPage() {
   const { id = "" } = useParams();
@@ -61,7 +94,7 @@ export default function StatementDetailPage() {
     onSuccess: async (updated) => {
       queryClient.setQueryData(payStatementKey(id), updated);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: payStatementsKey }),
+        queryClient.invalidateQueries({ queryKey: payStatementListsKey }),
         queryClient.invalidateQueries({ queryKey: payoutRunsKey }),
       ]);
       toast.success("Statement recalculated.");
@@ -69,8 +102,46 @@ export default function StatementDetailPage() {
     onError: (error) => toast.error(payoutErrorMessage(error)),
   });
 
+  const [confirming, setConfirming] = useState<Confirming>(null);
+  const applied = async (updated: PayStatementView) => {
+    queryClient.setQueryData(payStatementKey(id), updated);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: payStatementListsKey }),
+      queryClient.invalidateQueries({ queryKey: payoutRunsKey }),
+    ]);
+    setConfirming(null);
+  };
+  const send = useMutation({
+    mutationFn: () => sendPayStatement(id),
+    onSuccess: async (updated) => {
+      await applied(updated);
+      toast.success(`Statement sent to ${updated.userName}.`);
+    },
+    onError: (error) => {
+      setConfirming(null);
+      toast.error(payoutErrorMessage(error));
+    },
+  });
+  const reopen = useMutation({
+    mutationFn: () => reopenPayStatement(id),
+    onSuccess: async (updated) => {
+      await applied(updated);
+      toast.success("Statement reopened.");
+    },
+    onError: (error) => {
+      setConfirming(null);
+      toast.error(payoutErrorMessage(error));
+    },
+  });
+  const pending = send.isPending || reopen.isPending;
+
   const s = statement.data;
+  // Not on one's own statement without `agency:payouts:admin` (the API's
+  // `PAYOUT_STATEMENT_OWN_STATEMENT`): someone else decides one's pay.
+  const ownBlocked = useOwnStatementBlocked(s);
+  const issues = reviewer && !ownBlocked;
   const backTo = reviewer && s ? `/payouts?month=${s.month}` : "/my-pay";
+  const firstName = s?.userName.split(" ")[0] ?? "";
 
   return (
     <AppShell>
@@ -91,6 +162,21 @@ export default function StatementDetailPage() {
                 ? `Commission statement · ${formatMonth(s.month)} · ${POOL_LABELS[s.pool]}`
                 : "Loading"}
             </p>
+            {s?.sentAt && (
+              <p className="truncate text-xs text-muted-foreground">
+                Sent {formatInstantDay(s.sentAt, s.timeZone)}
+                {s.sentBy?.name ? ` by ${s.sentBy.name}` : ""}
+              </p>
+            )}
+            {reviewer &&
+              ownBlocked &&
+              s &&
+              (isEditableStatementStatus(s.status) || s.status === "sent") && (
+                <p className="truncate text-xs text-muted-foreground">
+                  Someone else recalculates, sends and reopens your own
+                  statement.
+                </p>
+              )}
           </div>
           {s && <StatementStatusBadge status={s.status} version={s.version} />}
         </div>
@@ -98,19 +184,24 @@ export default function StatementDetailPage() {
           <Tabs
             value={view.tab || "statement"}
             onValueChange={(next) =>
-              setView({ tab: next === "activity" ? "activity" : "" })
+              setView({
+                tab: next === "activity" || next === "pdf" ? next : "",
+              })
             }
           >
             <TabsList>
               <TabsTrigger value="statement">Statement</TabsTrigger>
+              <TabsTrigger value="pdf">PDF</TabsTrigger>
               <TabsTrigger value="activity">Activity</TabsTrigger>
             </TabsList>
           </Tabs>
-          {reviewer && s && isEditableStatementStatus(s.status) && (
+          {issues && s && isEditableStatementStatus(s.status) && (
             <Button
               size="sm"
               variant="outline"
-              disabled={recalculate.isPending}
+              // Never while a send or reopen is in flight: a recalculation
+              // landing mid-send is what makes the send a 409.
+              disabled={recalculate.isPending || pending}
               onClick={() => recalculate.mutate()}
             >
               {recalculate.isPending ? (
@@ -119,6 +210,27 @@ export default function StatementDetailPage() {
                 <Calculator aria-hidden />
               )}
               Recalculate
+            </Button>
+          )}
+          {issues && s && s.status === "sent" && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() => setConfirming("reopen")}
+            >
+              <Undo2 aria-hidden />
+              Reopen
+            </Button>
+          )}
+          {issues && s && isEditableStatementStatus(s.status) && (
+            <Button
+              size="sm"
+              disabled={pending || recalculate.isPending}
+              onClick={() => setConfirming("send")}
+            >
+              <Send aria-hidden />
+              {s.status === "rejected" ? "Send again" : "Send"}
             </Button>
           )}
         </div>
@@ -142,13 +254,68 @@ export default function StatementDetailPage() {
           </div>
         ) : view.tab === "activity" ? (
           <ActivityPanel userId={s.userId} month={s.month} />
+        ) : view.tab === "pdf" ? (
+          <StatementPdfPanel statement={s} reviewer={reviewer} />
         ) : (
           <StatementBreakdown
             statement={s}
-            figures={<StatementInputsCard statement={s} />}
+            figures={
+              <>
+                <StatementInputsCard statement={s} />
+                <StatementAdjustmentsCard statement={s} />
+              </>
+            }
           />
         )}
       </main>
+
+      {s && (
+        <AlertDialog
+          open={confirming !== null}
+          onOpenChange={(next) => !next && !pending && setConfirming(null)}
+        >
+          <AlertDialogContent>
+            {confirming === "reopen" ? (
+              <AlertDialogHeader>
+                <AlertDialogTitle>Reopen this statement?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  It goes back to draft as version {s.version + 1}. {firstName}{" "}
+                  can no longer open it until it is sent again. The version they
+                  were sent is kept.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+            ) : (
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Send this statement to {s.userName}?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  They get a notification and can open it from My Pay. The PDF
+                  is stored as version{" "}
+                  {s.status === "rejected" ? s.version + 1 : s.version}, and its
+                  figures cannot change unless you reopen it.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={pending}
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (confirming === "reopen") reopen.mutate();
+                  else send.mutate();
+                }}
+              >
+                {pending && (
+                  <Loader2 aria-hidden className="size-4 animate-spin" />
+                )}
+                {confirming === "reopen" ? "Reopen" : "Send"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </AppShell>
   );
 }

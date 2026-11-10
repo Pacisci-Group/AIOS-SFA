@@ -1032,6 +1032,83 @@ export function statementInputsError(inputs: StatementInputs): string | null {
   return null;
 }
 
+/**
+ * The three amounts a reviewer types onto a statement (owner, 10 Nov 2026),
+ * worked out outside the app. Each is a positive amount, or `null` for
+ * none: Other bonuses / SPIFFs are **added**, the compliance adjustment and
+ * other adjustments **deducted**.
+ *
+ * Stored as the statement's adjustments of kind `spiff`, `compliance` and
+ * `manual` — the two deductions as negative amounts, which is how the engine
+ * sums them into `totals.spiffs`, `complianceAdjustment` and
+ * `otherAdjustments`. A recalculation keeps them.
+ */
+export interface StatementEnteredAdjustments {
+  spiffs: number | null;
+  complianceAdjustment: number | null;
+  otherAdjustments: number | null;
+}
+
+export const EMPTY_STATEMENT_ENTERED_ADJUSTMENTS: StatementEnteredAdjustments =
+  { spiffs: null, complianceAdjustment: null, otherAdjustments: null };
+
+/** Each entered amount's adjustment kind, the sign it is stored with, and its label. */
+export const ENTERED_ADJUSTMENTS = {
+  spiffs: { kind: 'spiff', sign: 1, label: 'Other bonuses / SPIFFs' },
+  complianceAdjustment: {
+    kind: 'compliance',
+    sign: -1,
+    label: 'The compliance adjustment',
+  },
+  otherAdjustments: { kind: 'manual', sign: -1, label: 'Other adjustments' },
+} as const satisfies Record<
+  keyof StatementEnteredAdjustments,
+  { kind: StatementAdjustmentKind; sign: 1 | -1; label: string }
+>;
+
+export const ENTERED_ADJUSTMENT_KEYS = Object.keys(
+  ENTERED_ADJUSTMENTS,
+) as (keyof StatementEnteredAdjustments)[];
+
+/** Why the entered amounts cannot be stored, or `null` when they can. */
+export function statementEnteredAdjustmentsError(
+  value: StatementEnteredAdjustments,
+): string | null {
+  for (const key of ENTERED_ADJUSTMENT_KEYS) {
+    const amount = value[key];
+    if (amount === null) continue;
+    const error = amountError(amount, ENTERED_ADJUSTMENTS[key].label);
+    if (error) return error;
+  }
+  return null;
+}
+
+/**
+ * The entered amounts as a statement stores them, read back as typed:
+ * positive, `null` where there is none.
+ */
+export function enteredAdjustmentsOf(
+  adjustments: readonly {
+    kind: StatementAdjustmentKind;
+    amount: number | null;
+  }[],
+): StatementEnteredAdjustments {
+  const result = { ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS };
+  for (const key of ENTERED_ADJUSTMENT_KEYS) {
+    const { kind, sign } = ENTERED_ADJUSTMENTS[key];
+    const rows = adjustments.filter(
+      (row) => row.kind === kind && row.amount !== null,
+    );
+    if (rows.length === 0) continue;
+    const cents = rows.reduce(
+      (sum, row) => sum + Math.round((row.amount as number) * 100),
+      0,
+    );
+    result[key] = (sign * cents) / 100;
+  }
+  return result;
+}
+
 /** Why Producer of the Year settings cannot be stored, or `null` when they can. */
 export function producerOfYearError(
   settings: ProducerOfYearSettings,
@@ -1381,8 +1458,9 @@ export const PAYOUT_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /**
  * `draft` → `sent` → `accepted` (final), or `sent` → `rejected` (disputed)
- * → `sent` again as the next version. Only PAC-178's `draft` is written
- * today; sending and sign-off arrive with PAC-181/182.
+ * → `sent` again as the next version. A sent statement may be reopened
+ * (`sent` → `draft`) until the employee answers. PAC-181 writes `sent` and
+ * the reopen; sign-off (`accepted` / `rejected`) arrives with PAC-182.
  */
 export const PAY_STATEMENT_STATUSES = [
   'draft',
@@ -1432,6 +1510,45 @@ export const PAYOUT_STATEMENT_NOT_EDITABLE = 'PAYOUT_STATEMENT_NOT_EDITABLE';
  * enter them on their own statement unless they hold `agency:payouts:admin`.
  */
 export const PAYOUT_STATEMENT_OWN_INPUTS = 'PAYOUT_STATEMENT_OWN_INPUTS';
+
+/** 409: only a sent statement can be reopened (PAC-181). */
+export const PAYOUT_STATEMENT_NOT_SENT = 'PAYOUT_STATEMENT_NOT_SENT';
+
+/**
+ * 403: a reviewer may not send, reopen or recalculate their own statement
+ * unless they hold `agency:payouts:admin` (PAC-181 review fixes) — the
+ * same rule as `PAYOUT_STATEMENT_OWN_INPUTS`, for the actions that issue it.
+ * Send all leaves such a reviewer's own draft out instead of refusing.
+ */
+export const PAYOUT_STATEMENT_OWN_STATEMENT = 'PAYOUT_STATEMENT_OWN_STATEMENT';
+
+/**
+ * 409: the statement changed (new figures, a recalculation) while it was
+ * being sent or reopened, so what was rendered is no longer what it holds.
+ * It is still editable: review it and send again (PAC-181 review fixes).
+ */
+export const PAYOUT_STATEMENT_CHANGED = 'PAYOUT_STATEMENT_CHANGED';
+
+/**
+ * Why an issued version of a statement is no longer the current one
+ * (PAC-181). `reopened` — a reviewer took a sent statement back to draft;
+ * `superseded` — a disputed statement was sent again as the next version.
+ *
+ * **`version === history.length + 1`, always.** Every issued version that is
+ * no longer current has exactly one row, written in the same update that
+ * bumps `version`: reopening does both, and so does re-sending a disputed
+ * statement. A first send writes no row. A rejection (PAC-182) is not an
+ * outcome — the disputed statement is still the current version, and leaves
+ * history only when it is superseded.
+ */
+export const STATEMENT_HISTORY_OUTCOMES = ['reopened', 'superseded'] as const;
+export type StatementHistoryOutcome =
+  (typeof STATEMENT_HISTORY_OUTCOMES)[number];
+
+/** The file name an issued statement is stored and downloaded under. */
+export function statementPdfFilename(month: string, version: number): string {
+  return `commission-statement-${month}-v${version}.pdf`;
+}
 
 /**
  * Which half of the team pool a person shares in. CSRs are licensed and sell
@@ -1500,9 +1617,18 @@ export interface PremiumLineView {
   netPremium: number;
   ratePercent: number;
   rateSource: StatementRateSource;
+  /**
+   * The line's commission: the rate on net premium (sold less charged back).
+   * Equal to `netCommission` since 10 Nov 2026; on a statement calculated
+   * before, it was the rate on sold premium, less `chargebackImpact`.
+   */
   grossCommission: number;
-  /** The commission given back on the chargebacks. */
-  chargebackImpact: number;
+  /**
+   * Only on statements calculated before 10 Nov 2026: the commission given
+   * back on the chargebacks, then deducted from `grossCommission`. Commission
+   * is now the rate on net premium, so nothing is deducted a second time.
+   */
+  chargebackImpact?: number;
   netCommission: number;
   /**
    * The person's bundle rate on this carrier for the month (`null` with no
@@ -1537,12 +1663,22 @@ export interface StatementDealView {
   leadSourceName: string | null;
   /** Two or more policies ({@link PAYOUT_BUNDLE_MIN_POLICIES}). */
   isBundle: boolean;
+  /**
+   * The client's household — what the Activity tab opens. `null` for a sale
+   * with none; absent on statements stored before 10 Nov 2026.
+   */
+  householdId?: string | null;
 }
 
 /** One chargeback ledger row, as the activity view lists it. */
 export interface PayoutActivityChargebackView {
   chargebackId: string;
   policyId: string | null;
+  /**
+   * The client's household (the row's own, else its policy's or deal's) —
+   * what the Activity tab opens. Absent on statements stored before 10 Nov 2026.
+   */
+  householdId?: string | null;
   policyNumber: string | null;
   policyType: string | null;
   carrier: string;
@@ -1557,12 +1693,16 @@ export interface PayoutActivityChargebackView {
   source: ChargebackSource;
 }
 
-/** A chargeback on a statement: the activity row plus what it cost in commission. */
+/** A chargeback on a statement: the activity row, the line it is taken off and its rate. */
 export interface StatementChargebackView extends PayoutActivityChargebackView {
   /** Set when it reverses a sale paid a lead-source rate. */
   leadSourceId: string | null;
   ratePercent: number;
-  commissionDeduction: number;
+  /**
+   * Only on statements calculated before 10 Nov 2026: the commission this
+   * chargeback cost, deducted on its own. It now comes off the line's premium.
+   */
+  commissionDeduction?: number;
   /** Left out by the manager (an `exclude_chargeback` adjustment). */
   excluded: boolean;
   excludedNote: string | null;
@@ -1661,8 +1801,13 @@ export interface StatementTotalsView {
   grossPremium: number;
   chargebackTotal: number;
   netPremium: number;
+  /** The lines' commission — on net premium since 10 Nov 2026 (see `PremiumLineView`). */
   grossCommission: number;
-  chargebackImpact: number;
+  /**
+   * Only on statements calculated before 10 Nov 2026, deducted from
+   * `grossCommission` there. Read it as 0 when absent.
+   */
+  chargebackImpact?: number;
   tierBonus: number;
   teamBonus: number;
   somBonus: number;
@@ -1749,6 +1894,8 @@ export interface PayStatementSummary {
   warningCount: number;
   /** ISO-8601. */
   computedAt: string;
+  /** When the current version was sent (ISO-8601); `null` while a draft. */
+  sentAt: string | null;
 }
 
 export interface PayStatementView extends PayStatementSummary {
@@ -1767,6 +1914,59 @@ export interface PayStatementView extends PayStatementSummary {
   /** Which of them this statement's structure reads. */
   inputsNeeded: StatementInputsNeeded;
   warnings: string[];
+  /** The issued PDF of the current version; `null` until it is sent. */
+  pdf: PayStatementPdfView | null;
+  /** Who sent the current version; `null` while a draft. */
+  sentBy: { id: string; name: string } | null;
+  /** The earlier issued versions, oldest first (see {@link STATEMENT_HISTORY_OUTCOMES}). */
+  history: StatementHistoryEntryView[];
+}
+
+/**
+ * An issued Commission Statement PDF (PAC-181). The storage key never leaves
+ * the API: the file is reached through `GET /payouts/statements/:id/pdf`,
+ * which mints a short-lived link per read.
+ */
+export interface PayStatementPdfView {
+  /** SHA-256 of the file, hex — what a signed copy (PAC-182) will cite. */
+  sha256: string;
+  size: number;
+  /** ISO-8601. */
+  renderedAt: string;
+}
+
+/** An issued version that is no longer the current one. */
+export interface StatementHistoryEntryView {
+  version: number;
+  outcome: StatementHistoryOutcome;
+  pdf: PayStatementPdfView | null;
+  /** ISO-8601. */
+  sentAt: string | null;
+  sentBy: { id: string; name: string } | null;
+  /** When it stopped being current (ISO-8601). */
+  at: string;
+}
+
+/**
+ * `GET /payouts/statements/:id/pdf` — a presigned inline link to the file,
+ * minted for this read and never stored; it expires after `expiresIn`
+ * seconds.
+ */
+export interface PayStatementPdfLinkResponse {
+  url: string;
+  filename: string;
+  expiresIn: number;
+}
+
+/**
+ * `POST /payouts/runs/:id/send-all`. `skipped` — drafts that were no longer
+ * drafts when their turn came (sent or recalculated meanwhile); `failed` —
+ * drafts that could not be sent, with why.
+ */
+export interface SendAllDraftsResponse {
+  sent: number;
+  skipped: number;
+  failed: { statementId: string; userName: string; message: string }[];
 }
 
 /**
@@ -1775,6 +1975,7 @@ export interface PayStatementView extends PayStatementSummary {
  * Salesperson of the Month (as Recalculate does).
  */
 export type UpdateStatementInputsInput = StatementInputs;
+export type UpdateStatementAdjustmentsInput = StatementEnteredAdjustments;
 
 export interface PayStatementsResponse {
   statements: PayStatementSummary[];

@@ -58,6 +58,9 @@ The epic carries the two layout screenshots and the "to confirm" list.
 - **A3 Individual tiers** `{ thresholdPremium, bonusAmount }[]`: highest reached pays.
   Thresholds (team + individual) use **gross** sold premium (the dashboards' figure);
   the rate applies to **net** (gross − chargebacks).
+  **Amended 10 Nov (owner):** literally so — commission is the rate on net premium,
+  once per line, and there is no separate "chargeback commission impact" (see "Owner
+  changes" under the PAC-181 as-built).
   **Amended 5 Nov (§13):** `tiersStackable` on the structure — ticked, every tier
   reached pays and the bonuses add up.
 - **A4** Team-bonus settings (threshold, pool, split %) are agency-wide on
@@ -1120,3 +1123,299 @@ check structure was archived and the settings restored afterwards.
   and the **Net pay** banner; "10% · step 1" on carrier lines. Tables, My
   Pay and the run summary show net pay; the run summary names Producer of
   the Year in December.
+
+---
+
+## As built — PAC-181, PR 5 (6–10 Nov 2026)
+
+Branch `awaris/pac-181-commission-statement-pdf-and-sending-render-each-statement`, cut
+from the comp-plans branch (#174, `c87e0a6`); PR base = that branch. The stack is #162 ←
+#169 ← #171 ← #172 ← #174. Sign-off, disputes and adjustments stay in PAC-182.
+
+**What landed**
+
+- **Dependency.** `pdfkit` **0.20.2** (exact) in `@sfa/api`, `@types/pdfkit` (dev). Webpack
+  keeps it external, so its bundled Helvetica AFM metrics load at runtime; no font files.
+- **Shared.** `domain/payouts.ts`: `PAYOUT_STATEMENT_NOT_SENT` (409),
+  `STATEMENT_HISTORY_OUTCOMES = ['reopened', 'superseded']`, `statementPdfFilename`,
+  `PayStatementPdfView` (sha256, size, renderedAt — never the key),
+  `StatementHistoryEntryView`, `PayStatementPdfLinkResponse`, `SendAllDraftsResponse`;
+  `PayStatementSummary.sentAt`; `PayStatementView.pdf / sentBy / history`. New
+  `domain/payout-labels.ts` — `statementReference`, `premiumLineLabel`,
+  `complianceLabel`, `somStatusLabel` — moved from the web so the page and the PDF print
+  the same words (the web's `payout-format.ts` re-exports them). Notification
+  `payouts.statement_sent` (email + push; renderer and fixtures).
+- **PDF, `common/payouts/pdf/` (worker-importable).** `statement-pdf-model.ts` is the only
+  file that reads the stored statement; it turns it into pre-formatted strings
+  (`StatementPdfModel`). `sections/` draws them: header band (logo or name, CONFIDENTIAL),
+  statement details, performance indicators, carrier production (Rate column with the
+  step, TOTAL row, a note per carrier below its minimum bundle rate), commission summary
+  (two columns, NET PAY box), chargeback detail (excluded rows struck through with
+  "Left out: …", TOTAL CHARGEBACK IMPACT), producer acknowledgment (empty) and the "Page x
+  of y" footer. `table.ts` cuts a table into page-sized chunks and draws each with its
+  header. `format.ts` (money, percent, agency-day dates, `winAnsi`), `hash.ts`,
+  `read-all.ts`. `render-statement-pdf.ts` returns `{ buffer, pageCount,
+  chargebackHeaderPages }`. `common/payouts/statement-sent.ts` builds the notification.
+- **Collections.** `payStatements` gains `pdf { key, sha256, size, renderedAt }`,
+  `sentAt`, `sentBy`, `sentByName` and `history[] { version, outcome, pdf, sentAt,
+  sentBy, sentByName, at }`, all nullable or defaulted. No migration, no new index.
+- **Endpoints** (`PayoutsStatementsController`; `StatementIssueService`):
+
+  | Route | Guard | |
+  |---|---|---|
+  | `POST /payouts/statements/:id/send` | `payouts:write` | draft or disputed → render, store, `sent`, notify; 409 `PAYOUT_STATEMENT_NOT_EDITABLE` / `PAYOUT_RUN_GENERATING` |
+  | `POST /payouts/runs/:id/send-all?branchId` | `payouts:write` | every draft the caller may see → `{ sent, skipped, failed[] }` |
+  | `POST /payouts/statements/:id/reopen` | `payouts:write` | `sent` → `draft`; 409 `PAYOUT_STATEMENT_NOT_SENT` otherwise |
+  | `GET /payouts/statements/:id/pdf?version` | `payouts:read` (visibility rule) | `{ url, filename, expiresIn }`, presigned inline, minted per read |
+  | `GET /payouts/statements/:id/pdf-preview` | `payouts:write` | a draft's PDF, streamed (`no-store`), never stored |
+
+  `loadVisibleStatement` moved into `statement-visibility.ts` and is shared by both
+  statement services.
+- **Recalculation.** `generateRun`'s "drafts of people no longer on a structure"
+  delete skips a draft with history: a reopened statement is a record of what was sent.
+- **Web.** Statement page: tabs **Statement · PDF · Activity**; the PDF tab shows the
+  issued file in a frame (link fetched once per visit, `staleTime: Infinity`, `gcTime:
+  0`, so the frame never reloads or mounts an expired link) or, for a reviewer, a draft
+  preview from a blob URL; "Open in a new tab"; an **Earlier versions** list.
+  "Sent <date> by <name>" under the title. Reviewer actions **Send** (or **Send again**
+  for a disputed one) and **Reopen**, each behind a confirmation. Payouts page: **Send
+  all drafts**, passing the table's branch filter. The notification stream refreshes the
+  statement lists on `payouts.statement_sent`. The breakdown shows Base pay whenever the
+  statement carries it, as the PDF does. Statement actions now refresh only the
+  statement lists (`payStatementListsKey`), not the open statement's PDF link or preview
+  — refreshing those raced the unmount and asked for a link or preview that no longer
+  existed.
+- **Bruno.** 14 requests (seq 51–64; 64 in the folder) and README rows; the three
+  missing rows for **Update Pay Statement Inputs** (#174) were added too. **Send All
+  Drafts** sends and notifies every draft of the month, so it runs only when **Generate
+  Payout Run** found the month holding the folder's statement alone (it captures
+  `payoutsRunStatements`); the cleanup reopen is skipped with it. Found the hard way: on
+  a local database with another active structure, an unguarded run sent eleven other
+  people's November drafts.
+
+**Decisions taken while building** (state them in the PR)
+
+1. **`version === history.length + 1`, stored.** Reopen pushes `{ outcome: 'reopened' }`
+   and `$inc`s `version` in one update, so the reopened draft is "Draft · v2". Sending a
+   disputed statement pushes `{ outcome: 'superseded' }` and bumps the version in the
+   send. A first send writes no row. PAC-182's reject must not touch `version` or
+   `history`.
+2. **Each upload gets a unique key** (`buildObjectKey` with its default UUID prefix, the
+   statement id in `parts`, `commission-statement-<month>-v<n>.pdf` as the name). The
+   plan said `unique: false`; with a shared key, a send that lost a race would delete the
+   winner's file when it cleaned up its own upload.
+3. **The send is one conditional write** on `{ status, version, computedAt }` of what
+   was rendered; a miss removes the upload and is a 409. Sending twice neither stores
+   nor notifies twice; a reissued version notifies again (`…:sent:v<n>`, event id
+   `deterministicEventId('payouts.statement_sent', '<id>:v<n>')`).
+4. **No amounts in the notification** (title names the month; "…has been reissued"
+   from v2). The email links to the statement through `TenantUrlService` as every
+   notification does.
+5. **Reopen** is for a sent statement only; the employee is not told, and the statement
+   is a 404 to them again until it is resent.
+6. **Preview** is for draft and disputed statements; its Generated Date box reads
+   "Draft · not issued".
+7. **Logo.** PNG or JPEG up to 2 MB is embedded; SVG, WebP, a missing or unreadable
+   file, or one pdfkit refuses falls back to the agency's name, which the band always
+   prints. The name is the branded display name, else the agency's name (as the email
+   masthead).
+8. **Commission summary.** Base pay prints whenever the statement carries it, even
+   $0.00; the other 2026 lines print when present and non-zero; NET PAY =
+   `statementNetPay`. A statement computed before the 2026 fields prints the original
+   grid. Compliance adjustment and other adjustments are tinted as deductions, as in the
+   layout.
+9. **Carrier production** gains a Rate column ("12% · step 1"); statement warnings
+   are not printed (they are the reviewer's), only the bundle-rate notes.
+10. **Text** goes through `winAnsi`: Helvetica's metrics cover WinAnsi only, so an
+    accent outside it is dropped and anything else prints as `?`.
+11. **No Download button** on an issued PDF: the presigned link is cross-origin, so a
+    `download` attribute is ignored; "Open in a new tab" opens the browser's viewer,
+    which downloads.
+12. Send all runs in the request, one statement at a time, and reads the agency and its
+    logo once.
+
+**Verified (6–10 Nov):**
+- **Tests.** Shared 474 (labels, filename and the notification renderer new); API unit
+  1,656 (PDF model 13 and renderer 7 new); e2e `payouts-lifecycle` 24 (new), with
+  structures, run, import, comp-plans and the monthly job: 6 suites, 127 tests.
+- **Static checks.** API `tsc` at the 24-error baseline, none in touched files; ESLint
+  clean on `src/payouts`, `src/common/payouts` and the new e2e; Prettier clean on the
+  touched api and shared files with `--config packages/api/.prettierrc`, and on the web
+  files with its defaults. `shared/src/notifications/render.ts` and `render.spec.ts`,
+  and the web's `use-notification-stream.ts`, already failed `prettier --check` at HEAD
+  and were left in their own style. Web `npm run lint` clean. `npm run build -w @sfa/api`
+  keeps pdfkit a runtime `require`.
+- **Bruno.** Payouts 64/64 (119 tests), twice, against `app.sfa.local:4000` on 6 Nov.
+  With the guard on 10 Nov, against a scratch API on `:4100` because the watch servers
+  were down: 62 passed, 2 skipped (the guard), 116 tests, twice.
+- **PDF.** The renders were rasterised and compared with the two layout screenshots: a
+  typical month on one page; 40 chargebacks on two, with the table header repeated and
+  "Page 2 of 2"; an excluded row struck through with its note.
+- **Headless Chrome.** Demo agency, scratch Vite on `:5180` from 10 Nov, light and dark.
+  As owner: the Payouts page; a draft's PDF tab preview ("Draft · not issued"); Send →
+  "Sent Nov 6, 2026 by Olivia Smith" and the issued file in the frame; Reopen → "Draft ·
+  v2" with Earlier versions; resend as v2; Send all drafts (11 sent) and the button
+  disabled at 0 drafts. As producer: My Pay, the PDF tab, no reviewer buttons. At 375px
+  there is no horizontal scroll. A reopen and resend made no failing request once
+  statement actions refreshed only the lists. The remaining console messages are the
+  known `forwardRef` warnings and a missing `favicon.ico`. A 403 from MinIO and 401s in
+  one pass came from the machine sleeping mid-run and did not recur.
+- **Email.** The dev transport refuses real sends without `MAIL_DEV_ALLOWED_RECIPIENTS`;
+  the `payouts.statement_sent` emails were logged only, to `@demoagency.local`.
+
+**Left in the local demo agency** (removing them was refused by the session's
+permission check). The "PAC-181 check" structure is archived. Still there: the October
+2026 run with its 12 sent statements; 11 sent November statements, one per check member
+except Pat Producer; their `payouts.statement_sent` notifications; and their PDFs in
+MinIO under `agencies/<demo>/pay-statements/2026/<statementId>/`.
+
+**Review fixes — PAC-181 (10 Nov 2026).** `/code-review` raised 15 findings on the
+uncommitted PR; each was reproduced in a test (or, for the web, in headless Chrome) and
+all 15 were fixed. None was wrong. Decisions 3 and 12 above are superseded by fixes 4 and
+6.
+
+1. **A bad logo no longer crashes the API.** pdfkit decodes a PNG with an alpha channel, a
+   transparent palette or interlacing in png-js's `zlib.inflate` **callback**; bad IDAT data
+   threw there (uncaught, the process down) and the render promise never settled. New
+   `common/payouts/pdf/probe-logo.ts` (`usableLogo`) walks the chunks, inflates the joined
+   IDAT synchronously (`maxOutputLength`, at most 32 MB decoded) and checks every filter
+   byte — both things png-js throws on; an interlaced or doubtful PNG is refused and the
+   name stands in. `drawHeaderBand` calls it, so every caller is covered, and the service
+   logs a logo it refuses. `renderStatementPdf` also rejects after 15 s
+   (`RENDER_TIMEOUT_MS`) and settles once. The unit test (an RGBA PNG with a valid header
+   and broken IDAT) failed on the old code with an uncaught "incorrect header check" and a
+   timeout.
+2. **The dark-surface logo on the navy band**: `TenantBrandingService.logoKeyFor(agencyId,
+   'dark')` (`logoDarkKey ?? logoKey`). `PayoutsModule` imports `TenantBrandingModule` (no
+   cycle: it imports only its model and the global `StorageModule`).
+3. **One's own statement.** Send, reopen **and recalculate** (the rule widened beyond
+   PAC-181) refuse the caller's own statement without `agency:payouts:admin`: 403
+   `PAYOUT_STATEMENT_OWN_STATEMENT` (shared), through `assertNotOwnStatement` /
+   `issuesOwnStatement` in `statement-visibility.ts` — the predicate `updateInputs` now
+   shares, keeping its `PAYOUT_STATEMENT_OWN_INPUTS`. Send all leaves the caller's own
+   draft out (`$and: [{ userId: { $ne } }]`). The web hides Recalculate, Send and Reopen
+   and says "Someone else recalculates, sends and reopens your own statement."
+   (`features/payouts/own-statement.ts`, also used by the inputs card).
+4. **A send cannot race new figures.** Send and reopen are conditional on `updatedAt` too.
+   Every `payStatements` write is an `updateOne` or `findOneAndUpdate` on a `timestamps:
+   true` schema (six sites; no `bulkWrite`, `save` or native write), so `updatedAt` moves
+   on each — `updateInputs`' first write included. Its resolution is a millisecond: two
+   writes in the same millisecond around the send's read are not told apart (a revision
+   counter would close that; not done).
+5. **Reopened drafts are kept fresh.** After writing the run, `generateRun` recalculates
+   every editable statement of someone who is no longer a recipient — a kept reopened
+   draft, or a disputed one — with `recomputeStatement`: the rules it was drafted with,
+   the split just stored on the run, and its existing "no longer on a payment structure"
+   warning. Chosen over leaving such drafts out of Send all: the statement then always
+   holds the month's current figures, and Send all needs no exception.
+6. **Send all** reads ids only, then loads, renders, stores and writes each draft four at
+   a time (`SEND_ALL_CONCURRENCY`, the existing `mapWithConcurrency`), re-reading each and
+   skipping one that is no longer a draft; the log line gives its duration. Measured over
+   60 drafts on the e2e database: 385 ms → 210 ms with no storage latency, 5.7 s → 1.4 s
+   with an 80 ms upload round trip. A move to an Inngest worker job is **not** done — the
+   owner's call.
+7. **"It changed", not "already sent".** A missed conditional write re-reads the
+   statement: still editable → 409 `PAYOUT_STATEMENT_CHANGED` (shared); a reopen that
+   finds it still sent → the same code. The web maps it and `PAYOUT_STATEMENT_NOT_EDITABLE`
+   in `payout-errors.ts`, and disables Recalculate while a send or reopen is pending.
+8. **Time zone.** The Generated Date is a day in the statement's own `timeZone`, read by
+   `statement-pdf-model.ts` (still the only file reading the stored statement), with
+   `DEFAULT_AGENCY_TIME_ZONE` as the last fallback; `StatementPdfContext.timeZone` is gone.
+   The agency's name comes from `TenantBrandingService.forAgency` (branded display name,
+   else the agency's name).
+9. The draft preview's "Open in a new tab" has no `download` attribute (it saved a file);
+   with no file name left to set, the subheading names the version it will issue ("How
+   version 3 will look…", `version + 1` for a disputed one).
+10. `apiFetchBlob` throws an `ApiError` with the parsed JSON body, so the preview's 409 shows
+    its code's words. `apiFetch`, `apiFetchBlob` and `publicFetch` share `apiErrorFrom`; the
+    avatar and the Dash export ignore error details and are unaffected.
+11. The `payouts.statement_sent` stream hook invalidates `payStatementListsKey` and
+    `payoutRunsKey`, never an open PDF's link.
+12. The issued PDF's link query and "Open in a new tab" pass the version on screen.
+13. `loadVisibleStatement` takes an inclusion projection (`pdfLink`: month, version, pdf,
+    and `history` only when a version is asked for; `reopen`: what its write needs). The
+    statements list leaves out `history`. The logo's bytes are cached per agency for 60 s,
+    keyed by its storage key — the branding is still read per render, so a new logo shows
+    at once and only the download is saved.
+14. **Left-out notes show whole.** pdfkit cuts a cell's text with an ellipsis, and the row
+    was a fixed 25 pt. `fittedRowHeight` (`table.ts`) sizes a row to its wrapped text with
+    `heightOfString` at the column width less padding, at least 25 pt and at most what fits
+    under a header on a fresh page (`MAX_ROW_HEIGHT`).
+15. Send all's `failed[].message` is always "It could not be sent. Try sending it on its
+    own." (`SEND_ALL_FAILED_MESSAGE`); the cause and stack are logged.
+
+**Verified (10 Nov):** shared 474; API unit 1,669 (`probe-logo` 8, renderer 4 and model 1
+new); e2e `payouts-lifecycle` 31 (7 new: the send/new-figures race, the dark logo, a
+broken PNG, the recalculated reopened draft, and a branch manager's own statement in
+their branch — send, recalculate, inputs, Send all, reopen, and all of it with
+`agency:payouts:admin`), 5 further runs green; with structures, run, import, comp-plans
+and the monthly job: 6 suites, 134 tests. Each new e2e failed with its fix taken out
+(race 2, own statement 4, reopened draft 3, dark logo 1). API `tsc` at the 24-error
+baseline, none in touched files; ESLint clean on `src/payouts`, `src/common/payouts` and
+the e2e; Prettier clean on the touched api and shared files (`--config
+packages/api/.prettierrc`) and web files, except `api-client.ts` and
+`use-notification-stream.ts`, which already failed at HEAD and keep their style. Web
+`npm run lint` clean. Bruno Payouts against the watch API on `:4000`, three times: 62
+passed, 2 skipped (the Send-all guard), 116 tests. PDFs rasterised: long notes wrap whole
+across three pages with the header repeated. Headless Chrome on the watch Vite (`:5173`),
+demo agency, light and dark, 13/13: the preview link opens a tab and names version 17; a
+stubbed preview 409 shows its words; the issued PDF asks for `?version=1`; Taylor Nguyen
+(branch manager) sees Send and Recalculate on Pat's draft, and neither — with the note —
+when the response names them as its owner; no horizontal scroll at 375px. No demo data
+was changed by the checks; each Bruno run added two versions to Pat Producer's November
+draft, as before (now v17).
+
+**Owner changes — 10 Nov 2026** (uncommitted, on the PAC-181 branch).
+
+1. **Commission is the rate on net premium; no "chargeback commission impact".** The
+   statement read as charging a chargeback twice: the carrier table showed premium net of
+   chargebacks, then the summary deducted the chargebacks' commission. The math was a
+   single deduction (commission on sold premium, less `chargebackImpact`), but the owner
+   asked that the chargeback come off the sold premium and the rate apply to what
+   remains, with no second line. `computeStatement` now does exactly that, once per line;
+   `grossCommission` = `netCommission` on each line and `totals.grossCommission` is the
+   lines' commission. `chargebackImpact` and a chargeback row's `commissionDeduction` are
+   no longer written (optional in the types). Net pay is unchanged (the rate is linear):
+   one rounding per line instead of one per chargeback row, so at most a cent. Every
+   existing e2e net pay held (`payouts-run` 1,636.11; the import's 40.55 drop). Tiers,
+   rate steps, the team bonus and Salesperson of the Month still use sold premium.
+   Readers (web breakdown, statements table, PDF) show "Carrier commission", no impact
+   line, and a chargeback detail of premium charged back with "Total charged back". A
+   statement calculated before still carries `chargebackImpact` and is shown as it was
+   calculated ("Gross carrier commission", the impact line, "Commission deduction",
+   "TOTAL CHARGEBACK IMPACT"), so its stored figures still add up; drafts take the new
+   shape on their next recalculation. No migration.
+2. **Activity rows open the household.** `loadRunInputs` already resolved each sale's
+   and chargeback's household and dropped it; it is now carried as `householdId` on
+   `PayoutSale` / `PayoutChargeback`, `StatementDealView` and
+   `PayoutActivityChargebackView` (also in new statement snapshots). `ActivityPanel` (the
+   statement's Activity tab, My Pay, the activity page) makes a row with one clickable
+   and Enter-able, to `/clients/:id`, for a viewer with `clients` or `crm_service` read;
+   the household page keeps its own branch scope.
+3. **Entered adjustments.** `PATCH /payouts/statements/:id/adjustments` with `{ spiffs,
+   complianceAdjustment, otherAdjustments }`, each positive or `null`
+   (`statementEnteredAdjustmentsError`): SPIFFs added, the two adjustments deducted. Each
+   replaces the statement's adjustments of its kind (`spiff`, `compliance`, `manual`) with
+   one row, the deductions stored negative — the engine already summed these kinds into
+   `totals.spiffs` / `complianceAdjustment` / `otherAdjustments`, and a recalculation
+   already kept `adjustments[]`. `exclude_chargeback` rows are never touched.
+   `payouts:write` (owner's choice: any reviewer), not one's own without
+   `agency:payouts:admin` (403 `PAYOUT_STATEMENT_OWN_STATEMENT`), editable only (409),
+   conditional on `updatedAt` (409 `PAYOUT_STATEMENT_CHANGED`), then
+   `recomputeStatement`. Web: `StatementAdjustmentsCard` ("Bonuses and adjustments") under
+   the entered figures; read-only once sent. PAC-182's per-line adjustments with notes are
+   not built; they would use the same rows.
+
+**Verified (10 Nov):** shared 477 (1 engine and 2 adjustment tests new); API unit 1,670
+(PDF model 2 new); e2e 6 suites, 139 tests (`payouts-run` household ids; `payouts-comp-plans`
+adjustments: signs and net pay, kept through a month recalculation, replaced whole without
+touching an exclusion, 400 / 403 / 409; `payouts-lifecycle` own-statement 403). API `tsc` at
+the 24-error baseline; ESLint and Prettier clean on touched files; web `npm run lint` clean.
+Bruno Payouts twice against the watch API on `:4000`: 68 requests (66 passed, 2 skipped by
+the Send-all guard), 124 tests — four new adjustments requests at seq 51–54, the rest moved
+up four; the set-then-clear leaves Pat Producer's draft as it was. PDF rasterised: "Carrier
+commission" $4,900 equals the carrier table's total, no impact line, chargebacks listed by
+premium. Headless Chrome, light and dark, 11/11: no impact line and the card on Pat's
+recalculated draft; Alex Rivera's statement sent earlier keeps its impact line and shows the
+card read-only; an Activity row opens `/clients/:id` on Enter; no horizontal scroll at 375px.
+Nothing was saved from the browser.

@@ -88,6 +88,33 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
       href: month ? `/payouts?month=${month}` : '/payouts',
     };
   },
+  'payouts.statement_sent': (data) => {
+    const statementId =
+      typeof data.statementId === 'string' &&
+      /^[a-f0-9]{24}$/.test(data.statementId)
+        ? data.statementId
+        : null;
+    const month =
+      typeof data.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(data.month)
+        ? data.month
+        : null;
+    const label = text(data.monthLabel) ?? month;
+    const reissued =
+      typeof data.version === 'number' &&
+      Number.isInteger(data.version) &&
+      data.version > 1;
+    const sender = text(data.senderName);
+    const subject = label
+      ? `Your commission statement for ${label}`
+      : 'Your commission statement';
+    return {
+      title: `${subject} ${reissued ? 'has been reissued' : 'is ready'}`,
+      body: sender
+        ? `${sender} sent it. Open it to review it.`
+        : 'Open it to review it.',
+      href: statementId ? `/payouts/statements/${statementId}` : '/my-pay',
+    };
+  },
 };
 
 /**

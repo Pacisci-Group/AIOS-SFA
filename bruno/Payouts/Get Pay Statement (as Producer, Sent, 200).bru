@@ -1,0 +1,37 @@
+meta {
+  name: Get Pay Statement (as Producer, Sent, 200)
+  type: http
+  seq: 60
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the employee sees their sent statement", function () {
+    const s = res.getBody();
+    expect(s.status).to.equal("sent");
+    expect(s.userId).to.equal(bru.getVar("payoutsProducerUserId"));
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id — once sent, as the producer
+
+  The draft that was a `404` to them (**Get Pay Statement (as Producer,
+  Draft, 404)**) is theirs to open once it is sent.
+}

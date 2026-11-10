@@ -1,0 +1,93 @@
+meta {
+  name: Update Pay Statement Adjustments
+  type: http
+  seq: 51
+}
+
+patch {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "spiffs": 150,
+    "complianceAdjustment": 40,
+    "otherAdjustments": 10.5
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("adds the SPIFFs and deducts the two adjustments", function () {
+    const totals = res.getBody().totals;
+    expect(totals.spiffs).to.equal(150);
+    expect(totals.complianceAdjustment).to.equal(-40);
+    expect(totals.otherAdjustments).to.equal(-10.5);
+  });
+
+  test("moves net pay by exactly that", function () {
+    const before = bru.getVar("payoutsNetPay");
+    if (typeof before !== "number") return;
+    const cents = function (n) { return Math.round(n * 100); };
+    expect(cents(res.getBody().totals.netPay)).to.equal(cents(before) + 9950);
+  });
+
+  test("stores them as the statement's spiff, compliance and manual adjustments", function () {
+    const rows = res.getBody().adjustments
+      .filter(function (a) { return a.kind !== "exclude_chargeback"; })
+      .map(function (a) { return a.kind + ":" + a.amount; })
+      .sort();
+    expect(rows).to.eql(["compliance:-40", "manual:-10.5", "spiff:150"]);
+  });
+}
+
+docs {
+  # PATCH /payouts/statements/:id/adjustments — the amounts a reviewer enters (10 Nov 2026)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope (a statement outside it is a `404`). Not on your **own** statement
+  unless you also hold `agency:payouts:admin` — they decide your pay.
+
+  Amounts the agency works out outside the app, entered on a draft or
+  disputed statement. Each is a **positive** amount (two decimals, up to
+  $10,000,000) or `null` for none:
+
+  | Field | Summary line | Effect |
+  |---|---|---|
+  | `spiffs` | Other bonuses / SPIFFs | **added** |
+  | `complianceAdjustment` | Compliance adjustment | **deducted** |
+  | `otherAdjustments` | Other adjustments | **deducted** |
+
+  The body is all three, whole: each replaces the statement's adjustments of
+  its kind (`spiff`, `compliance`, `manual`) with one row — the deductions
+  stored negative, as the totals show them — or none for `null`. A left-out
+  chargeback (`exclude_chargeback`) is never touched. The statement is then
+  recalculated as **Recalculate Pay Statement** does; a month's
+  recalculation keeps them.
+
+  **Response `200`** — the statement, as **Get Pay Statement**: `totals.spiffs`,
+  `complianceAdjustment` and `otherAdjustments` (the last two negative) are in
+  `netCommission` and `netPay`; `adjustments[]` lists the rows.
+
+  **Errors** — `400` a negative amount, more than two decimals, or over the
+  maximum; `403` without `payouts:write`, or `PAYOUT_STATEMENT_OWN_STATEMENT`
+  on your own statement; `404` outside your scope; `409`
+  `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted,
+  `PAYOUT_STATEMENT_CHANGED` when it changed while they were being saved.
+
+  In the collection, **Update Pay Statement Adjustments (Clear)** sets them
+  back to none before the statement is sent.
+}

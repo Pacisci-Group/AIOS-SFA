@@ -27,6 +27,14 @@ script:pre-request {
   if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
 }
 
+script:post-response {
+  // Net pay before any entered adjustments: Update Pay Statement Adjustments
+  // checks its amounts against it.
+  if (res.getStatus() === 200) {
+    bru.setVar("payoutsNetPay", res.getBody().totals.netPay);
+  }
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);

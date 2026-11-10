@@ -209,10 +209,11 @@ export function StatementsTable({
             const t = row.totals;
             // Commission includes overrides (pay on others' premium); the
             // 2026 comp-plan lines are absent on statements computed before
-            // them.
+            // them. `chargebackImpact` only on one calculated before
+            // commission moved to net premium (10 Nov 2026).
             const commission =
               t.grossCommission -
-              t.chargebackImpact +
+              (t.chargebackImpact ?? 0) +
               (t.overrideCommission ?? 0);
             const bonuses =
               t.tierBonus +

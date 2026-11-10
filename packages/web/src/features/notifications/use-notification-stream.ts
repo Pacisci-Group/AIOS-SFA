@@ -13,6 +13,7 @@ import {
 } from '@/lib/api-client';
 import { reconciliationAssignedKey } from '@/lib/carrier-reconciliation-api';
 import { notificationsKey } from '@/lib/notifications-api';
+import { payoutRunsKey, payStatementListsKey } from '@/lib/payouts-api';
 import { setNotificationStreamConnected } from './notification-stream-status';
 
 /** Reconnect delay after a failed attempt, doubling per attempt up to this. */
@@ -164,6 +165,13 @@ export function useNotificationStream(): void {
           void queryClient.invalidateQueries({
             queryKey: reconciliationAssignedKey,
           });
+        }
+        // A statement sent to this user (PAC-181): My Pay and the lists
+        // re-ask. Not every statement query: an open PDF's link would be
+        // refetched and its frame reloaded.
+        if (record.type === 'payouts.statement_sent') {
+          void queryClient.invalidateQueries({ queryKey: payStatementListsKey });
+          void queryClient.invalidateQueries({ queryKey: payoutRunsKey });
         }
         toast(record.title, {
           description: record.body,

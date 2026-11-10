@@ -1,0 +1,49 @@
+meta {
+  name: Get Pay Statement PDF Link
+  type: http
+  seq: 59
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/pdf
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is a short-lived link to the issued file", function () {
+    const body = res.getBody();
+    expect(body.url).to.be.a("string");
+    expect(body.filename).to.match(/^commission-statement-\d{4}-\d{2}-v\d+\.pdf$/);
+    expect(body.expiresIn).to.be.a("number");
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id/pdf — the issued PDF (PAC-181)
+
+  **Module** — `payouts`. **Permission** — `payouts:read`, under the same
+  rule as **Get Pay Statement**: your own once sent, or anything your scope
+  reaches with `payouts:write`. Anything else is a `404`.
+
+  **Query** — `version` (optional): an earlier issued version's file, from
+  the statement's `history`; omitted, the current version's.
+
+  **Response `200`** — `{ url, filename, expiresIn }`: a presigned `inline`
+  link (`application/pdf`) minted for this read, valid `expiresIn` seconds.
+  It is never stored — ask again when it is needed.
+
+  **Errors** — `404` when the statement is not yours to see, or that version
+  has no file (a draft; a version never issued).
+}

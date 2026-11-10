@@ -53,12 +53,14 @@ import { normalizePolicyType } from './policy-type';
  *   line** (owner's choice, 5 Nov 2026) — the totals are the same either way,
  *   and a structure with no overrides prints the plain carrier table.
  * - **Chargebacks** are premium dollars taken off the bucket of the sale they
- *   reverse; each costs its amount at that bucket's rate. A bucket may go
- *   negative — there is no floor.
+ *   reverse. A bucket may go negative — there is no floor.
+ * - **Commission is the rate on net premium** (sold premium less the
+ *   chargebacks), once per line — and nothing else: there is no separate
+ *   "chargeback commission impact" taken off afterwards (owner, 10 Nov 2026;
+ *   until then the statement printed commission on sold premium and then
+ *   deducted the chargebacks' commission, which read as charging twice).
  * - **Thresholds use gross premium** (tiers, the team levels, Salesperson of
- *   the Month); the rate applies to net. Gross commission minus the
- *   chargebacks' commission is the same thing as the rate on net premium,
- *   line by line — the PDF prints it that way round.
+ *   the Month, rate steps).
  * - **A bundle is a sale with two or more policies**
  *   ({@link PAYOUT_BUNDLE_MIN_POLICIES}), not `Deal.isBundle`. A carrier's
  *   minimum bundle rate only **flags** the statement.
@@ -200,6 +202,8 @@ export interface PayoutSale {
   policyTypes: readonly string[];
   /** The lead's source, the deal's own as the fallback (`sourceStages`). */
   leadSourceId: string | null;
+  /** The client's household, for the Activity tab's link. */
+  householdId?: string | null;
   lines: readonly PayoutSaleLine[];
   /**
    * The agency-local day the sale was entered in the app (`Deal.createdAt`),
@@ -223,6 +227,8 @@ export interface AgencySaleLine {
 export interface PayoutChargeback {
   chargebackId: string;
   policyId: string | null;
+  /** The client's household, for the Activity tab's link. */
+  householdId?: string | null;
   policyNumber: string | null;
   policyType: string | null;
   /** The policy's carrier as stored. */
@@ -339,6 +345,7 @@ export function toDealView(
       ? (leadSourceNames.get(sale.leadSourceId) ?? null)
       : null,
     isBundle: typed.length >= PAYOUT_BUNDLE_MIN_POLICIES,
+    householdId: sale.householdId ?? null,
   };
 }
 
@@ -591,7 +598,6 @@ interface LineAccumulator {
   appointed: boolean;
   grossCents: number;
   chargebackCents: number;
-  impactCents: number;
 }
 
 /**
@@ -865,7 +871,6 @@ export function computeStatement(
         appointed: appointedKeys.has(carrierKey(target.carrier)),
         grossCents: 0,
         chargebackCents: 0,
-        impactCents: 0,
       };
       lines.set(target.key, line);
     }
@@ -921,19 +926,18 @@ export function computeStatement(
       const carrier = nameOf(row.carrier);
       const target = lineTarget(carrier, row.leadSourceId);
       const line = ensureLine(target);
-      const deduction = percentOf(row.amount, target.ratePercent);
       const outOfWindow =
         windowMonths !== null &&
         /^\d{4}-\d{2}/.test(row.occurredDay) &&
         monthsBetween(row.occurredDay.slice(0, 7), input.month) > windowMonths;
       const excluded = exclusions.has(row.chargebackId) || outOfWindow;
-      if (!excluded) {
-        line.chargebackCents += toCents(row.amount);
-        line.impactCents += toCents(deduction);
-      }
+      // Off the line's premium: the line's commission is the rate on what
+      // remains, so the chargeback costs its commission there, once.
+      if (!excluded) line.chargebackCents += toCents(row.amount);
       return {
         chargebackId: row.chargebackId,
         policyId: row.policyId,
+        householdId: row.householdId ?? null,
         policyNumber: row.policyNumber,
         policyType: row.policyType ? normalizePolicyType(row.policyType) : null,
         carrier,
@@ -945,7 +949,6 @@ export function computeStatement(
         source: row.source,
         leadSourceId: target.leadSourceId,
         ratePercent: target.ratePercent,
-        commissionDeduction: deduction,
         excluded,
         excludedNote: exclusions.has(row.chargebackId)
           ? (exclusions.get(row.chargebackId) ?? '')
@@ -984,8 +987,9 @@ export function computeStatement(
             `${minimum}% minimum.`,
         );
       }
-      const grossCommissionCents = percentOfCents(
-        line.grossCents,
+      // The rate on net premium: sold premium less the chargebacks.
+      const commissionCents = percentOfCents(
+        line.grossCents - line.chargebackCents,
         line.ratePercent,
       );
       return {
@@ -1000,9 +1004,8 @@ export function computeStatement(
         netPremium: fromCents(line.grossCents - line.chargebackCents),
         ratePercent: line.ratePercent,
         rateSource: line.rateSource,
-        grossCommission: fromCents(grossCommissionCents),
-        chargebackImpact: fromCents(line.impactCents),
-        netCommission: fromCents(grossCommissionCents - line.impactCents),
+        grossCommission: fromCents(commissionCents),
+        netCommission: fromCents(commissionCents),
         bundleRate,
         minBundleRatePercent: minimum,
         bundleShortfall: shortfall,
@@ -1206,19 +1209,15 @@ export function computeStatement(
     (sum, line) => sum + toCents(line.chargebacks),
     0,
   );
-  const grossCommissionCents = premiumLines.reduce(
+  // The lines' commission, each already on net premium.
+  const commissionCents = premiumLines.reduce(
     (sum, line) => sum + toCents(line.grossCommission),
-    0,
-  );
-  const impactCents = premiumLines.reduce(
-    (sum, line) => sum + toCents(line.chargebackImpact),
     0,
   );
   const tierBonusCents = toCents(tiers.amount);
   // Variable pay — what the compliance floor's reduction is a share of.
   const variableCents =
-    grossCommissionCents -
-    impactCents +
+    commissionCents +
     overrideCents +
     stepBonusCents +
     tierBonusCents +
@@ -1309,8 +1308,7 @@ export function computeStatement(
       grossPremium,
       chargebackTotal: fromCents(chargebackCents),
       netPremium: fromCents(grossCents - chargebackCents),
-      grossCommission: fromCents(grossCommissionCents),
-      chargebackImpact: fromCents(impactCents),
+      grossCommission: fromCents(commissionCents),
       tierBonus: fromCents(tierBonusCents),
       teamBonus,
       somBonus,

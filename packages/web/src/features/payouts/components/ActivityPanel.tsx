@@ -1,5 +1,7 @@
+import type { KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { ModuleKey } from "@sfa/shared";
 import { DataPanel } from "@/components/common/DataPanel";
 import { KpiCard } from "@/components/common/KpiCard";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { usePermissions } from "@/hooks/usePermissions";
 import { formatMoney } from "@/lib/money";
 import { formatMonth } from "@/lib/months";
 import { NOT_AVAILABLE } from "@/lib/not-available";
@@ -33,6 +36,10 @@ interface ActivityPanelProps {
  * (PAC-179): the policies, the chargebacks with where each came from, and
  * the totals — for any month, statement or not. The same loader computes
  * the statements, so for a month with one the totals are its figures.
+ *
+ * A row opens the client's household (10 Nov 2026), for a viewer who may
+ * open households (`clients` or `crm_service`); the household page applies
+ * its own branch scope.
  */
 export function ActivityPanel({
   userId,
@@ -43,6 +50,24 @@ export function ActivityPanel({
     queryKey: payoutActivityKey(userId ?? "me", month),
     queryFn: () => getPayoutActivity({ month, userId }),
   });
+  const navigate = useNavigate();
+  const { canRead } = usePermissions();
+  const opensHouseholds =
+    canRead(ModuleKey.Clients) || canRead(ModuleKey.CrmService);
+  /** A row's props when it can open a household; none otherwise. */
+  const householdRow = (householdId: string | null | undefined) => {
+    if (!opensHouseholds || !householdId) return {};
+    const open = () => navigate(`/clients/${householdId}`);
+    return {
+      className: "cursor-pointer",
+      tabIndex: 0,
+      title: "Open the household",
+      onClick: open,
+      onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+        if (event.key === "Enter") open();
+      },
+    };
+  };
   const data = activity.data;
   const pending = activity.isPending;
 
@@ -116,7 +141,7 @@ export function ActivityPanel({
           </TableHeader>
           <TableBody>
             {data?.deals.map((deal) => (
-              <TableRow key={deal.dealId}>
+              <TableRow key={deal.dealId} {...householdRow(deal.householdId)}>
                 <TableCell className="pl-5 tabular-nums text-muted-foreground">
                   {formatDay(deal.soldDay)}
                 </TableCell>
@@ -190,7 +215,10 @@ export function ActivityPanel({
           </TableHeader>
           <TableBody>
             {data?.chargebacks.map((row) => (
-              <TableRow key={row.chargebackId}>
+              <TableRow
+                key={row.chargebackId}
+                {...householdRow(row.householdId)}
+              >
                 <TableCell className="pl-5 tabular-nums text-muted-foreground">
                   {formatDay(row.occurredDay)}
                 </TableCell>

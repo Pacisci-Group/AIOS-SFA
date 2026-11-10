@@ -1,0 +1,31 @@
+meta {
+  name: Reopen Pay Statement (as Producer, 403)
+  type: http
+  seq: 63
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/reopen
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/reopen — refused to the employee
+
+  Reopening is the reviewer's (`payouts:write`). See **Reopen Pay
+  Statement**.
+}

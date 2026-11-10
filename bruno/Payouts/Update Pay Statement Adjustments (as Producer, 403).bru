@@ -1,0 +1,39 @@
+meta {
+  name: Update Pay Statement Adjustments (as Producer, 403)
+  type: http
+  seq: 53
+}
+
+patch {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+body:json {
+  {
+    "spiffs": 1000,
+    "complianceAdjustment": null,
+    "otherAdjustments": null
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # PATCH /payouts/statements/:id/adjustments — a producer cannot enter adjustments
+
+  Entering them needs `payouts:write`. See **Update Pay Statement Adjustments**.
+}

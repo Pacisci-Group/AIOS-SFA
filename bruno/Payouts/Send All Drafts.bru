@@ -1,0 +1,71 @@
+meta {
+  name: Send All Drafts
+  type: http
+  seq: 66
+}
+
+post {
+  url: {{baseUrl}}/payouts/runs/{{payoutsRunId}}/send-all
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  // Send all sends every draft of the month, and notifies each person. Only
+  // when the month holds nothing but the folder's own statement — never
+  // anyone else's on a shared database.
+  if (
+    !bru.getVar("payoutsStatementId") ||
+    !bru.getVar("payoutsRunId") ||
+    Number(bru.getVar("payoutsRunStatements")) !== 1
+  ) {
+    bru.runner.skipRequest();
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("sends the month's drafts — the statement reopened just now among them", function () {
+    const body = res.getBody();
+    expect(body.sent).to.be.at.least(1);
+    expect(body.skipped).to.be.a("number");
+    expect(body.failed).to.eql([]);
+  });
+}
+
+docs {
+  # POST /payouts/runs/:id/send-all — Send all drafts (PAC-181)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`.
+
+  Sends every **draft** of the run that you may see, four at a time, as
+  **Send Pay Statement** does — each employee is notified. A branch manager
+  sends their branch's; the owner the agency's, or one branch's with
+  `branchId` (what the Payouts page passes when its table is filtered).
+  Your **own** draft is left out without `agency:payouts:admin`. Disputed,
+  sent and accepted statements are not touched.
+
+  **Query** — `branchId` (optional): narrows an agency-wide reviewer to one
+  branch.
+
+  **Response `200`** — `{ sent, skipped, failed[] }`: `skipped` — drafts that
+  stopped being drafts, or changed, before their turn; `failed` —
+  `{ statementId, userName, message }` for any that could not be sent (the
+  rest still go). `message` is always "It could not be sent. Try sending it
+  on its own."; the cause is in the API's log.
+
+  **Errors** — `403` without `payouts:write`; `404` for a run that is not
+  the agency's; `409` `PAYOUT_RUN_GENERATING` while the month is being
+  calculated.
+
+  ⚠ In the collection it runs only when **Generate Payout Run** found the
+  month holding a single statement (the demo producer's): on a database
+  where other structures are active it would send, and notify, everyone's
+  drafts. It is skipped otherwise.
+}

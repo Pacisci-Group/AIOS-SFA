@@ -1,0 +1,71 @@
+meta {
+  name: Send Pay Statement
+  type: http
+  seq: 57
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/send
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is sent, with its file and its sender", function () {
+    const s = res.getBody();
+    expect(s.status).to.equal("sent");
+    expect(s.version).to.equal(s.history.length + 1);
+    expect(s.pdf.sha256).to.match(/^[a-f0-9]{64}$/);
+    expect(s.pdf.size).to.be.above(1000);
+    expect(s.sentAt).to.be.a("string");
+    expect(s.sentBy.id).to.be.a("string");
+    expect(JSON.stringify(s)).to.not.contain("pay-statements/");
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/send — send a statement (PAC-181)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope (a statement outside it is a `404`). Not your **own** statement
+  without `agency:payouts:admin` — it is your pay, so someone else sends it.
+
+  For a **draft or disputed** statement: renders the Commission Statement
+  PDF, stores it under `agencies/<agencyId>/pay-statements/<year>/<id>/…-
+  commission-statement-<month>-v<n>.pdf` (`buildObjectKey`, purpose
+  `pay-statements`), and marks the statement `sent` with who sent it. The
+  employee is told in-app, by push and by email — a link to the statement,
+  never an attachment, and no amounts (`payouts.statement_sent`, dedupe
+  `pay-statement:<id>:sent:v<version>`).
+
+  **Version** — `version === history.length + 1`, always. A draft is sent
+  as its current version; a disputed statement (PAC-182) goes out as the
+  next one, and the disputed version moves into `history` as `superseded`.
+
+  **Response `200`** — the statement, as **Get Pay Statement**, now with
+  `status: "sent"`, `sentAt`, `sentBy { id, name }` and `pdf { sha256, size,
+  renderedAt }` (the storage key never leaves the API).
+
+  The write is conditional on the statement being exactly what was
+  rendered — same status, version, calculation and last write — so new
+  figures saved during the send cannot be left on a sent statement.
+
+  **Errors** — `403` without `payouts:write`, or
+  `PAYOUT_STATEMENT_OWN_STATEMENT` on your own statement without
+  `agency:payouts:admin`; `404` outside your scope; `409`
+  `PAYOUT_STATEMENT_NOT_EDITABLE` once sent (sending twice neither stores
+  nor notifies twice), `409` `PAYOUT_STATEMENT_CHANGED` when it changed
+  while it was being sent (still a draft: review it and send again), `409`
+  `PAYOUT_RUN_GENERATING` while the month is being calculated.
+}

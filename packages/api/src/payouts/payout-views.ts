@@ -5,12 +5,18 @@ import {
   type PayoutRunView,
   type PayStatementStatus,
   type PayStatementSummary,
+  type PayStatementPdfView,
   type PayStatementView,
   type StatementAdjustmentView,
+  type StatementHistoryEntryView,
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import type { PayoutRun } from './schemas/payout-run.schema';
-import type { PayStatement } from './schemas/pay-statement.schema';
+import type {
+  PayStatement,
+  PayStatementHistoryEntry,
+  PayStatementPdf,
+} from './schemas/pay-statement.schema';
 
 /**
  * Stored runs and statements → the wire shapes in `@sfa/shared`. Reads are
@@ -130,6 +136,39 @@ export function statementSummary(doc: LeanStatement): PayStatementSummary {
     totals: doc.totals,
     warningCount: doc.warnings?.length ?? 0,
     computedAt: doc.computedAt.toISOString(),
+    sentAt: doc.sentAt ? doc.sentAt.toISOString() : null,
+  };
+}
+
+/** The issued file's facts — never its key, which only the API may hold. */
+function pdfView(
+  pdf: PayStatementPdf | null | undefined,
+): PayStatementPdfView | null {
+  if (!pdf) return null;
+  return {
+    sha256: pdf.sha256,
+    size: pdf.size,
+    renderedAt: pdf.renderedAt.toISOString(),
+  };
+}
+
+function senderView(
+  id: Types.ObjectId | null | undefined,
+  name: string | null | undefined,
+): { id: string; name: string } | null {
+  return id ? { id: String(id), name: name ?? '' } : null;
+}
+
+function historyEntryView(
+  entry: PayStatementHistoryEntry,
+): StatementHistoryEntryView {
+  return {
+    version: entry.version,
+    outcome: entry.outcome,
+    pdf: pdfView(entry.pdf),
+    sentAt: entry.sentAt ? entry.sentAt.toISOString() : null,
+    sentBy: senderView(entry.sentBy, entry.sentByName),
+    at: entry.at.toISOString(),
   };
 }
 
@@ -175,5 +214,9 @@ export function statementView(doc: LeanStatement): PayStatementView {
         teamBonusEligible: snapshot?.teamBonusEligible ?? false,
       }),
     warnings: doc.warnings ?? [],
+    // Absent on statements written before PAC-181.
+    pdf: pdfView(doc.pdf),
+    sentBy: senderView(doc.sentBy, doc.sentByName),
+    history: (doc.history ?? []).map(historyEntryView),
   };
 }

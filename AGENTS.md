@@ -275,8 +275,33 @@ temperature/aging that aren't first-class in legacy payloads. See
   **entered on each statement** (`PATCH /payouts/statements/:id/inputs`): a
   gate is unmet until its figure is entered, a penalty applies only to an
   entered one. Statements carry `netPay` = base pay + stipend + net
-  commission. Life Specialist pay is not built (no term/permanent or
+  commission. ⚠ **Commission is the rate on net premium** (sold less
+  charged back), once per line — there is no separate "chargeback commission
+  impact" (owner, 10 Nov 2026; only statements calculated before carry
+  `chargebackImpact`, and are shown as calculated). A reviewer also enters
+  **Other bonuses / SPIFFs** (added), the **compliance adjustment** and
+  **other adjustments** (deducted) as positive amounts
+  (`PATCH /payouts/statements/:id/adjustments`), stored as the statement's
+  `spiff` / `compliance` / `manual` adjustments, the deductions negative. Life Specialist pay is not built (no term/permanent or
   issued-and-paid data).
+  **Sending (PAC-181):** a reviewer sends one statement or every draft of a
+  month (`POST /payouts/statements/:id/send`, `POST /payouts/runs/:id/send-all`),
+  which renders the Commission Statement PDF in the API (pdfkit, pure renderer
+  in `common/payouts/pdf/`, the only file reading the stored shape being
+  `statement-pdf-model.ts`), stores it under the `pay-statements` key purpose,
+  marks it `sent` and notifies the employee (`payouts.statement_sent`, a link
+  and no amounts). A sent statement can be reopened to draft before the
+  employee answers. ⚠ **A reviewer never decides their own pay**: entering
+  the figures on, recalculating, sending or reopening one's own statement
+  needs `agency:payouts:admin` (403 `PAYOUT_STATEMENT_OWN_INPUTS` /
+  `PAYOUT_STATEMENT_OWN_STATEMENT`, `issuesOwnStatement` in
+  `statement-visibility.ts`), and Send all leaves one's own draft out.
+  ⚠ **`version === history.length + 1`, always**: reopening
+  and re-sending a disputed statement both move the issued version into
+  `history` and bump `version` in one update, so every issued version keeps
+  its own file and the notification dedupes per version. PAC-182's reject
+  must not touch either. The file is reached only through
+  `GET …/:id/pdf`, a presigned link minted per read.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

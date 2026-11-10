@@ -120,6 +120,7 @@ export class PayoutActivityService {
     const chargebacks = (inputs.chargebacks.get(userId) ?? []).map((row) => ({
       chargebackId: row.chargebackId,
       policyId: row.policyId,
+      householdId: row.householdId ?? null,
       policyNumber: row.policyNumber,
       policyType: row.policyType ? normalizePolicyType(row.policyType) : null,
       carrier: payoutCarrierName(row.carrier),

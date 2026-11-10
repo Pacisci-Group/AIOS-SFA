@@ -330,6 +330,8 @@ export async function loadRunInputs(
         UNNAMED_CLIENT,
       policyTypes: row.policyTypes ?? [],
       leadSourceId: row.sourceId ? String(row.sourceId) : null,
+      // What the Activity tab opens.
+      householdId: row.householdId ? String(row.householdId) : null,
       // When it was typed in, for the Sold Log requirement.
       enteredDay: row.createdAt ? businessDay(row.createdAt, timeZone) : null,
       lines: row.lines.map((line) => ({
@@ -353,6 +355,7 @@ export async function loadRunInputs(
     const chargeback: PayoutChargeback = {
       chargebackId: String(row._id),
       policyId: row.policyId ? String(row.policyId) : null,
+      householdId: householdId ? String(householdId) : null,
       policyNumber: row.policyNumber ?? policy?.policyNumber ?? null,
       policyType: row.policyType ?? policy?.policyType ?? null,
       carrier: row.carrier?.trim() || policy?.carrier || null,
