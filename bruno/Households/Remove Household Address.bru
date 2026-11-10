@@ -1,0 +1,53 @@
+meta {
+  name: Remove Household Address
+  type: http
+  seq: 19
+}
+
+delete {
+  url: {{baseUrl}}/households/{{householdId}}/addresses/{{householdAddressEntryId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the entry is gone from the book", function () {
+    const id = bru.getVar("householdAddressEntryId");
+    const ids = (res.getBody().otherAddresses || []).map((e) => e.id);
+    expect(ids).to.not.include(id);
+  });
+}
+
+docs {
+  # DELETE /households/:id/addresses/:addressId
+
+  Remove an address from the household's book — here, the one **Add Household
+  Address** added, so a run leaves the household as it found it.
+
+  - **Module:** `clients` OR `crm_service`
+  - **Permission:** `clients:write` **OR** `crm_service:write`
+  - **Data scope:** `own` collapses to **branch**
+
+  The **primary** address cannot be removed this way: it is not in the book. A
+  household never loses the address it lives at by accident — replace it with
+  **Add Household Address** (`makePrimary: true`) or promote an entry with
+  **Set Primary Household Address** instead.
+
+  ## Response
+  The whole **`HouseholdView`**.
+
+  ## Errors
+  | Status | When |
+  |---|---|
+  | 401 | Missing/expired bearer token |
+  | 403 | Both modules disabled, or the caller holds neither write |
+  | 404 | Household outside scope, or `addressId` is not an entry in its book |
+}

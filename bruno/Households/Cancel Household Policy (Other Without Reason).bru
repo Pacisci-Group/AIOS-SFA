@@ -1,0 +1,42 @@
+meta {
+  name: Cancel Household Policy (Other Without Reason)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/households/{{policyEditHouseholdId}}/policies/{{policyEditPolicyId}}/cancel
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "reason": "other",
+    "note": "   "
+  }
+}
+
+tests {
+  test("returns 400 — Other has to say what it means", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("names the note as the field at fault", function () {
+    const errors = res.getBody().errors || {};
+    expect(errors.fieldErrors || {}).to.have.property("note");
+  });
+}
+
+docs {
+  # POST /households/:id/policies/:policyId/cancel — `other` with no reason
+
+  The validation case for **Cancel Household Policy**: `reason: "other"` requires
+  a `note`, and a blank one (whitespace is trimmed first) is a **400** before any
+  record is read — so this request changes nothing, whichever policy it names.
+}

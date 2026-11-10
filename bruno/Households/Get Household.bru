@@ -62,6 +62,15 @@ tests {
     expect(body).to.have.property("dataQuality");
     expect(body.contacts).to.be.an("array");
     expect(body.policies).to.be.an("array");
+    // The address book — every address besides the primary. `[]` for a
+    // household that has only ever had the one.
+    expect(body.otherAddresses).to.be.an("array");
+  });
+
+  test("every policy says why it was cancelled, or null", function () {
+    for (const policy of res.getBody().policies) {
+      expect(policy).to.have.property("cancellation");
+    }
   });
 
   test("every member carries its own deceased marker (PAC-91 §7)", function () {
@@ -151,11 +160,12 @@ docs {
   | `id`, `name`, `status`, `totalActivePolicies` | `status` is normalized on read as well as on import: 2,095 migrated households store the raw choice code `b5qvJ` (PAC-80) |
   | `primaryContactName` | **Resolved** from `primaryContactId`, see below |
   | `address` | **Normalized** `{street, city, state, zip}`, or null |
-  | `propertyAddress`, `mailingAddress` | The raw stored objects. Prefer `address` |
+  | `propertyAddress`, `mailingAddress` | The raw stored objects. Prefer `address`. `propertyAddress` is the household's **primary** address |
+  | `otherAddresses` | The **address book**: every address the household holds besides the primary, newest first — `{ id, label, address, addedAt }`. Managed by **Add Household Address**, **Set Primary Household Address** and **Remove Household Address** |
   | `primaryEmail`, `primaryPhone` | The primary contact's, **resolved** from `primaryContactId` — scalars, and no longer stored on the household (PAC-91 §1, §4) |
   | `assignedCrmId` | The assigned CRM user, or null |
   | `contacts` | `ContactSummary[]`, primary first then by `lastName`. The roster comes from `householdMembers` (PAC-91 §5); each row's `roleInHousehold` is the role on **that** membership and `isPrimary` is resolved against the household's own `primaryContactId` |
-  | `policies` | `PolicySummary[]`, active first then by `renewalDate` |
+  | `policies` | `PolicySummary[]`, active first then by `renewalDate`. Each carries `cancellation` — `{ reason, note, cancelledAt }` when it was cancelled through **Cancel Household Policy**, otherwise null |
 
   ## Why the primary contact's details and `address` are resolved here
 

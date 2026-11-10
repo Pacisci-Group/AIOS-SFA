@@ -104,6 +104,11 @@ docs {
   full field table, the `null`-clears-vs-omitted rule, the `items` normalization
   and the `status` vocabulary. Every field optional, object must not be empty.
 
+  `status: "Cancelled"` is refused with a 400 — cancel with **Cancel Household
+  Policy**, which records why. Re-sending a status the policy already holds is
+  accepted, and `status: "Active"` on a cancelled policy reinstates it (see
+  **Reinstate Cancelled Policy**).
+
   ## `renewalDate` is derived, never sent
   `policies.renewalDate` is the anchor every renewal call counts backwards from,
   and the schema is explicit: *"never accept it from a client — an anchor that
@@ -133,7 +138,7 @@ docs {
   ## Errors
   | Status | When |
   |---|---|
-  | 400 | Empty object, an unknown `status`, or a malformed date |
+  | 400 | Empty object, an unknown `status`, a change *to* a flow-only status (`Cancelled`, `Cancel Rewrite`, `Company Transfer`), or a malformed date |
   | 401 | Missing/expired bearer token |
   | 403 | Both `clients` and `crm_service` disabled, or the caller holds neither write |
   | 404 | Policy or household outside the caller's scope, or the policy is not this household's |

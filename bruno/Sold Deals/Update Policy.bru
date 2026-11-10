@@ -140,8 +140,16 @@ docs {
   | `Active` | `true` (a real correction — reinstating a policy cancelled by mistake) |
   | `Quoted`, `Pending`, any uncatalogued code | **unchanged** — neither is terminal, and a code nobody catalogued must not be guessed either way |
 
-  ### Two statuses are refused here — `400`
-  `Cancel Rewrite` and `Company Transfer` are **set by a flow, not by an edit**.
+  ### Three statuses are refused here — `400`
+  `Cancelled`, `Cancel Rewrite` and `Company Transfer` are **set by a flow, not
+  by an edit**.
+
+  `Cancelled` is the household page's **Cancel policy** button —
+  `POST /households/:id/policies/:policyId/cancel` (**Households › Cancel
+  Household Policy**) — because a cancellation has to say *why* (sold, changed
+  carrier, or other with free text) and a status field has nowhere to put that.
+
+  `Cancel Rewrite` and `Company Transfer`
   Each means "replaced by *that* policy", and the flow that sets it writes the
   replacement in the same transaction. Both run the same chain (PAC-126):
   `GET /leads/for-replacement` to find where to start, `POST /leads` with a
@@ -152,8 +160,12 @@ docs {
   Accepting either here would produce a cancelled policy pointing at nothing and,
   for a rewrite, no chargeback. They are filtered out of `POLICY_STATUS_OPTIONS`
   for the same reason, so the select never offers an option that always 400s.
-  Plain `Cancelled` stays selectable — a client who simply cancels is the common
-  case and must not be pushed through the replacement chain to record it.
+
+  **Re-sending the status a policy already holds is not a change**, flow-only or
+  not, and is accepted: a cancelled policy whose carrier is being corrected may
+  carry `"Cancelled"` back without a 400. Only *moving to* a flow-only status is
+  refused. Moving *from* one to `Active` reinstates the policy and clears its
+  stored cancellation reason.
 
   ⚠ The uncatalogued codes `1943j` / `4krtk`, which thousands of migrated
   policies still hold, are **rejected with a 400**. That is the point — they must

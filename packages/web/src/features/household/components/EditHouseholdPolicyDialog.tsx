@@ -52,6 +52,7 @@ export function EditHouseholdPolicyDialog({
       canEdit={canWrite(ModuleKey.Clients) || canWrite(ModuleKey.CrmService)}
       isPending={mutation.isPending}
       onSave={mutation.mutateAsync}
+      cancelHint="To cancel the policy, use Cancel policy — it records why."
     />
   );
 }
