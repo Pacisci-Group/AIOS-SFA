@@ -1,0 +1,49 @@
+meta {
+  name: List Policy People
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/hr/policies/people
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the agency's people with their current policies", function () {
+    const people = res.getBody().people;
+    expect(people).to.be.an("array").that.is.not.empty;
+    const person = people[0];
+    expect(person).to.have.keys(["id", "name", "email", "branchName", "status", "policies"]);
+    expect(["active", "invited"]).to.include(person.status);
+  });
+}
+
+docs {
+  # GET /hr/policies/people — who a policy can enrol (PAC-161 v3)
+
+  Module `hr`, permission `agency:hr:admin`, agency-wide (`@SkipBranch`).
+
+  Every user of the agency who has not been removed — active accounts **and
+  pending invites** — never a platform admin. Sorted by first name.
+
+  ```json
+  { "people": [{
+      "id": "…", "name": "Pat Producer", "email": "producer@demoagency.local",
+      "branchName": "Main", "status": "active",
+      "policies": { "holiday": { "id": "…", "name": "Paid holidays" },
+                    "work_week": { "id": "…", "name": "Standard week" } }
+  }] }
+  ```
+
+  `policies` names the person's current policy of each single-enrolment type
+  (absent key = none). The wizard uses it to say "Moves from Paid holidays".
+}

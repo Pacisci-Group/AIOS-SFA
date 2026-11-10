@@ -1,0 +1,49 @@
+meta {
+  name: Create Holiday Policy (Duplicate name, 409)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "holiday",
+    "name": "{{hrPolicyName}}",
+    "holiday": {
+      "holidays": ["new_years_day", "memorial_day", "independence_day", "labor_day", "thanksgiving", "day_after_thanksgiving", "christmas_day"],
+      "customHolidays": [
+        {
+          "id": "winter",
+          "name": "Winter closure",
+          "start": "2026-12-28",
+          "end": "2026-12-31",
+          "repeatsYearly": true
+        }
+      ]
+    },
+    "memberIds": []
+  }
+}
+
+tests {
+  test("the same name for the same type is a 409", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+}
+
+docs {
+  # POST /hr/policies — a taken name is a 409
+
+  Re-sends the previous request's name. Names are unique per type among
+  active policies, compared case-insensitively; an archived policy frees its
+  name.
+}

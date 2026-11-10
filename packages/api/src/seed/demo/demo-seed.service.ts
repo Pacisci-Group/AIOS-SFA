@@ -6,6 +6,8 @@ import {
   ALL_MODULE_KEYS,
   DEAL_AUDIT_REASON_CODES,
   DEFAULT_DEAL_AUDIT_STATUS,
+  DEFAULT_WORK_WEEK_DAYS,
+  FEDERAL_HOLIDAY_KEYS,
   SERVICE_TICKET_CATEGORY_PREFIX,
   carrierSlug,
   type StoredAddress,
@@ -31,6 +33,8 @@ import { Policy } from '../../policies/schemas/policy.schema';
 import { DealAuditItem } from '../../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from '../../deal-audits/schemas/deal-audit.schema';
 import { AuditTemplate } from '../../audit-templates/schemas/audit-template.schema';
+import { HolidayPolicy } from '../../hr/schemas/holiday-policy.schema';
+import { WorkWeekPolicy } from '../../hr/schemas/work-week-policy.schema';
 import { InterestedParty } from '../../interested-parties/schemas/interested-party.schema';
 import { PriorInsurance } from '../../prior-insurance/schemas/prior-insurance.schema';
 import { PriorPolicy } from '../../prior-policies/schemas/prior-policy.schema';
@@ -248,6 +252,10 @@ export class DemoSeedService {
     private readonly dealAuditModel: Model<DealAudit>,
     @InjectModel(AuditTemplate.name)
     private readonly auditTemplateModel: Model<AuditTemplate>,
+    @InjectModel(HolidayPolicy.name)
+    private readonly holidayPolicyModel: Model<HolidayPolicy>,
+    @InjectModel(WorkWeekPolicy.name)
+    private readonly workWeekPolicyModel: Model<WorkWeekPolicy>,
     @InjectModel(InterestedParty.name)
     private readonly interestedPartyModel: Model<InterestedParty>,
     @InjectModel(PriorInsurance.name)
@@ -320,6 +328,7 @@ export class DemoSeedService {
     const policies = await this.seedPolicies(ctx, deals, rng);
 
     await this.seedAuditTemplates(ctx);
+    await this.seedHrPolicies(ctx, team);
     /*
      * Roll-ups **before** items (PAC-72): the board pages over `dealAudits`,
      * and an item needs its parent's `_id` to be loadable from a card. The
@@ -1244,6 +1253,35 @@ export class DemoSeedService {
    * documents is exactly the kind of incoherence that makes demo data
    * untrustworthy.
    */
+  /**
+   * A Holiday and a Work week policy with the whole demo team enrolled
+   * (PAC-161 v3), so Settings → HR policies has something to show. Keyed on
+   * `{ agencyId, name }` in each collection: a reseed refreshes the members
+   * and leaves rules a demo user has edited alone.
+   */
+  private async seedHrPolicies(ctx: Ctx, team: TeamMember[]): Promise<void> {
+    const memberIds = team.map((member) => member.userId);
+    await this.holidayPolicyModel.updateOne(
+      { agencyId: ctx.agencyId, name: 'Paid holidays', archivedAt: null },
+      {
+        $set: { memberIds },
+        $setOnInsert: {
+          holidays: [...FEDERAL_HOLIDAY_KEYS, 'day_after_thanksgiving'],
+          customHolidays: [],
+        },
+      },
+      { upsert: true },
+    );
+    await this.workWeekPolicyModel.updateOne(
+      { agencyId: ctx.agencyId, name: 'Standard week', archivedAt: null },
+      {
+        $set: { memberIds },
+        $setOnInsert: { days: [...DEFAULT_WORK_WEEK_DAYS] },
+      },
+      { upsert: true },
+    );
+  }
+
   private async seedDealAuditItems(
     ctx: Ctx,
     deals: DealRef[],

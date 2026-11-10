@@ -94,6 +94,10 @@ const EmailSenderPage = lazy(
 const CarrierAppointmentsPage = lazy(
   () => import('@/features/settings/CarrierAppointmentsPage'),
 );
+const HrPoliciesPage = lazy(() => import('@/features/hr/policies/HrPoliciesPage'));
+const PolicyWizardPage = lazy(
+  () => import('@/features/hr/policies/PolicyWizardPage'),
+);
 const SuperAdminHomePage = lazy(
   () => import('@/features/platform/SuperAdminHomePage'),
 );
@@ -707,6 +711,43 @@ export function App() {
                       <BrandingPage />
                     </LazyPage>
                   }
+                />
+              </Route>
+              {/* HR policies (PAC-161 v3): Holiday and Work week policies, and
+                  the time off policies of PAC-174. `agency:hr:admin` — an
+                  admin capability the Branch Manager and the owner hold;
+                  `hr:read` alone sees none of this. `/settings/hr` was the
+                  v2 calendar page and redirects here. */}
+              <Route
+                element={<RequirePermission permission="agency:hr:admin" />}
+              >
+                <Route
+                  path="/settings/hr-policies"
+                  element={
+                    <LazyPage>
+                      <HrPoliciesPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/settings/hr-policies/new/:typeSlug"
+                  element={
+                    <LazyPage>
+                      <PolicyWizardPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/settings/hr-policies/:policyId"
+                  element={
+                    <LazyPage>
+                      <PolicyWizardPage />
+                    </LazyPage>
+                  }
+                />
+                <Route
+                  path="/settings/hr"
+                  element={<Navigate to="/settings/hr-policies" replace />}
                 />
               </Route>
               {/* The agency's working day — time zone and end-of-day hour

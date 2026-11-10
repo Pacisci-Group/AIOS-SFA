@@ -64,6 +64,11 @@ export const ONBOARDING_DEFAULT_MODULES: readonly ModuleKey[] = [
    * `analytics:read`, which a disabled module would filter away.
    */
   ModuleKey.Analytics,
+  /*
+   * PAC-161 — same reason again, for every template: each one holds
+   * `hr:read`, and the Branch Manager `hr:write` too.
+   */
+  ModuleKey.Hr,
 ];
 
 /** `GET /platform/agencies/availability` — live checks for the wizard's fields. */
