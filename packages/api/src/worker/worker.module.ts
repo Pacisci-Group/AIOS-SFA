@@ -11,6 +11,8 @@ import { SweepEventLogFn } from './functions/sweep-event-log.fn';
 import { SyncTicketStatusFn } from './functions/sync-ticket-status.fn';
 import { MaterializeRenewalCyclesFn } from './functions/materialize-renewal-cycles.fn';
 import { SetUsersAwayFn } from './functions/set-users-away.fn';
+import { AccrueTimeOffFn } from './functions/accrue-time-off.fn';
+import { TimeOffModule } from '../common/time-off/time-off.module';
 import { DataExportExpireFn } from './functions/data-export-expire.fn';
 import { DataExportGenerateFn } from './functions/data-export-generate.fn';
 import { DeliverNotificationFn } from './functions/deliver-notification.fn';
@@ -220,6 +222,10 @@ import {
     // `StorageService` the first time a file needed reading. The mailer campaign
     // jobs (PAC-71) are the next thing that will need it.
     StorageModule,
+    // Time off policies and their ledger (PAC-174). The accrual job reads
+    // the policies and posts through the same ledger service the HR
+    // module uses; `common/` is inside the boundary, `hr/*.service` is not.
+    TimeOffModule,
     // The notification bus (PAC-154 PR2). Same reasoning as `StorageModule`
     // above: not global, so the standalone worker must name it. The worker
     // only publishes on it; subscribing is the API tier's job.
@@ -273,6 +279,8 @@ import {
     // End-of-day Away sweep (PAC-139 §6a). Reads `Agency` and `User`, both
     // registered above.
     SetUsersAwayFn,
+    // Monthly accrual and yearly resets of time off balances (PAC-174).
+    AccrueTimeOffFn,
     // The one writer of `notifications` rows (PAC-154). Every channel is a
     // later step of the same function.
     DeliverNotificationFn,

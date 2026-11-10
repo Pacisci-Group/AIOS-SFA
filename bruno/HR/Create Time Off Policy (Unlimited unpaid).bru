@@ -1,0 +1,76 @@
+meta {
+  name: Create Time Off Policy (Unlimited unpaid)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/hr/policies
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+body:json {
+  {
+    "type": "time_off",
+    "name": "{{hrUnlimitedPolicyName}}",
+    "timeOff": {
+      "timeOffType": "unpaid",
+      "description": null,
+      "compensation": "unpaid",
+      "accrualType": "unlimited",
+      "hoursPerYear": null,
+      "accrualFrequency": null,
+      "resetDateKind": null,
+      "resetMonthDay": null,
+      "accrualRate": null,
+      "accrualRateUnit": null,
+      "maxBalanceHours": 40,
+      "maxAccruedPerYearHours": null,
+      "carryoverCapHours": null,
+      "annualUsageCapHours": null,
+      "waitingPeriodDays": null,
+      "accrualWaitingPeriodDays": null,
+      "allowNegativeBalance": false,
+      "payOutOnTermination": true,
+      "autoApprove": { "enabled": false, "maxCalendarDays": null, "minNoticeHours": null }
+    },
+    "memberIds": []
+  }
+}
+
+script:pre-request {
+  bru.setVar("hrUnlimitedPolicyName", `Bruno unpaid ${Date.now()}`);
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("hrUnlimitedPolicyId", res.getBody().id);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("nulls what Unlimited cannot hold", function () {
+    const rules = res.getBody().timeOff;
+    expect(rules.accrualType).to.equal("unlimited");
+    expect(rules.compensation).to.equal("unpaid");
+    expect(rules.maxBalanceHours).to.equal(null);
+    expect(rules.payOutOnTermination).to.equal(false);
+  });
+}
+
+docs {
+  # POST /hr/policies — an Unlimited, unpaid policy (PAC-174)
+
+  Unlimited tracks no balance: every accrual field is stored `null` whatever
+  was sent, `payOutOnTermination` is false, members have `balanceHours: null`
+  and no ledger row is written. Unpaid Time Off is always `unpaid`.
+}

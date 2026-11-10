@@ -1,0 +1,39 @@
+meta {
+  name: List HR Policies (Time off)
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/hr/policies?type=time_off
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{hrAdminAccessToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts the run's time off policies and lists their rules", function () {
+    const body = res.getBody();
+    expect(body.counts.time_off).to.be.at.least(3);
+    expect(body.policies.every((p) => p.type === "time_off")).to.equal(true);
+    const ids = body.policies.map((p) => p.id);
+    expect(ids).to.include(bru.getVar("hrTimeOffPolicyId"));
+    expect(ids).to.include(bru.getVar("hrUnlimitedPolicyId"));
+    expect(ids).to.include(bru.getVar("hrSecondTimeOffPolicyId"));
+    const pto = body.policies.find((p) => p.id === bru.getVar("hrTimeOffPolicyId"));
+    expect(pto.timeOff.hoursPerYear).to.equal(96);
+  });
+}
+
+docs {
+  # GET /hr/policies?type=time_off — the Time off card's list (PAC-174)
+
+  As `List HR Policies`; a `time_off` summary carries `timeOff` (the rules,
+  no members) so the page can summarise "96 h a year · all at once on Jan 1".
+}

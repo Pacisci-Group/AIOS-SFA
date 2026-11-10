@@ -82,6 +82,14 @@ import {
   WorkWeekPolicy,
   WorkWeekPolicySchema,
 } from '../../hr/schemas/work-week-policy.schema';
+import {
+  TimeOffPolicy,
+  TimeOffPolicySchema,
+} from '../../hr/schemas/time-off-policy.schema';
+import {
+  LeaveLedger,
+  LeaveLedgerSchema,
+} from '../../hr/schemas/leave-ledger.schema';
 import { Mailer, MailerSchema } from '../../mailers/schemas/mailer.schema';
 import {
   MailerCampaign,
@@ -145,6 +153,9 @@ import { DemoSeedService } from './demo-seed.service';
       // A Holiday and a Work week policy holding the whole team (PAC-161).
       { name: HolidayPolicy.name, schema: HolidayPolicySchema },
       { name: WorkWeekPolicy.name, schema: WorkWeekPolicySchema },
+      // Two time off policies with the team's starting balances (PAC-174).
+      { name: TimeOffPolicy.name, schema: TimeOffPolicySchema },
+      { name: LeaveLedger.name, schema: LeaveLedgerSchema },
       { name: Mailer.name, schema: MailerSchema },
       // `Mailer.campaignId` is required (PAC-71), so the demo mailers need a
       // campaign of their own — marked `source: 'demo'` and purged with them.

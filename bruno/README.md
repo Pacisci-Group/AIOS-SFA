@@ -134,7 +134,7 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
 | HR | Login as Manager | `POST /auth/login` | **PAC-161** — the Branch Manager is the Office Manager and holds `agency:hr:admin` by template + migration; the folder asserts the four HR permissions and captures `hrAdminAccessToken`. |
 | HR | List HR Policies (as Producer, 403) | `GET /hr/policies` | **PAC-161 v3** — every policy route is `agency:hr:admin`; a producer sees none of it. |
-| HR | List Policy People | `GET /hr/policies/people` | **PAC-161 v3** — who a policy can enrol (active + invited, never a platform admin) and each person's current Holiday / Work week policy. |
+| HR | List Policy People | `GET /hr/policies/people` | **PAC-161 v3** — who a policy can enrol (active + invited, never a platform admin) and each person's current Holiday / Work week policy and (PAC-174) time off policy per kind. Captures `hrPersonId`. |
 | HR | Create Holiday Policy | `POST /hr/policies` | **PAC-161 v3** — holidays by key (recurring every year, observed on the nearest weekday) plus custom all-day ranges; captures `hrPolicyId`. Unique name per run. |
 | HR | Create Holiday Policy (Duplicate name, 409) | `POST /hr/policies` | **PAC-161 v3** — a name is unique per type among active policies. |
 | HR | Get HR Policy | `GET /hr/policies/:policyId` | **PAC-161 v3** — one policy with its members; `404` once archived. |
@@ -144,6 +144,16 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | HR | Archive HR Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — soft archive (`204`); the people are freed. |
 | HR | Archive HR Policy (Again, 404) | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — an archived policy is a `404`. |
 | HR | Archive Work Week Policy | `POST /hr/policies/:policyId/archive` | **PAC-161 v3** — tidies up the run's Work week policy. |
+| HR | Create Time Off Policy | `POST /hr/policies` | **PAC-174** — a `time_off` policy: kind, paid/unpaid, fixed-amount or unlimited accrual, caps, waiting period, auto-approval; activation posts the starting balances to `leaveLedger`. Captures `hrTimeOffPolicyId`. |
+| HR | Create Time Off Policy (Unlimited unpaid) | `POST /hr/policies` | **PAC-174** — Unlimited nulls every accrual field; Unpaid Time Off is always unpaid. Captures `hrUnlimitedPolicyId`. |
+| HR | Create Time Off Policy (Reserved accrual type, 400) | `POST /hr/policies` | **PAC-174** — `hours_worked` / `per_pay_period` are reserved until PAC-167 / PAC-123. |
+| HR | Create Time Off Policy (Paid Unpaid Time Off, 400) | `POST /hr/policies` | **PAC-174** — the `unpaid` kind cannot be paid. |
+| HR | Update Time Off Policy (Enrol with balance) | `PATCH /hr/policies/:policyId` | **PAC-174** — partial rules merged and re-validated; a newly enrolled person gets an `allocation` row with the balance given. |
+| HR | Update Time Off Policy (Change compensation, 400) | `PATCH /hr/policies/:policyId` | **PAC-174** — paid/unpaid and Unlimited are locked after creation. |
+| HR | Create Time Off Policy (Same kind, moves the person) | `POST /hr/policies` | **PAC-174** — one policy per kind per person; the person leaves the first PTO policy with a `removed_from_policy` row. Captures `hrSecondTimeOffPolicyId`. |
+| HR | Get Time Off Policy (After the move) | `GET /hr/policies/:policyId` | **PAC-174** — `members[].balanceHours` from the ledger; the moved person is gone. |
+| HR | List HR Policies (Time off) | `GET /hr/policies?type=time_off` | **PAC-174** — the Time off card's list and count. |
+| HR | Archive Time Off Policy / (Second) / (Unlimited) | `POST /hr/policies/:policyId/archive` | **PAC-174** — tidies up the run's three time off policies; `409` while a request is `Submitted` against one. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
 | Policies | Download New Business Application | `GET /policies/:id/new-business-application/download` | **PAC-106** — the policy's NBA PDF, inline, for the Deal Audit page's drawer. Uses `reviewPolicyId` + `auditReviewerToken` from Deal Audits; 404 on the demo seed (no files). |
 | Platform Agencies | Login as Super Admin | `POST /auth/login` | **PAC-69** — the platform operator. Each folder is self-contained, so this is duplicated rather than shared with **Platform Mailers**. |

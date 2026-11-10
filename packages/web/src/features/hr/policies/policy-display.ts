@@ -7,6 +7,7 @@ import {
   type WorkWeekDay,
 } from "@sfa/shared";
 import { CalendarHeart, Clock, Plane, type LucideIcon } from "lucide-react";
+import { summarizeTimeOff } from "./time-off/time-off-display";
 
 /**
  * What each policy type looks like on Settings → HR policies (PAC-161 v3): the
@@ -45,10 +46,9 @@ export const POLICY_TYPE_META: Record<HrPolicyType, PolicyTypeMeta> = {
     type: "time_off",
     label: "Time off policies",
     singular: "time off policy",
-    description: "PTO, sick and unpaid leave, with hours per year.",
+    description: "PTO, sick and unpaid leave, with the hours earned each year.",
     icon: Plane,
-    // PAC-174.
-    createPath: null,
+    createPath: "/settings/hr-policies/new/time-off",
   },
 };
 
@@ -148,6 +148,7 @@ export function formatClock(value: string): string {
 
 /** The rules column on the list. */
 export function summarizePolicy(policy: HrPolicySummary, today: string): string {
+  if (policy.type === "time_off") return summarizeTimeOff(policy.timeOff);
   if (policy.type === "holiday") {
     const year = Number(today.slice(0, 4));
     const count = holidaysInYear(policy.holiday, year).length;

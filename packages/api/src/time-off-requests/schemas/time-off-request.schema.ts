@@ -42,6 +42,15 @@ export class TimeOffRequest extends TenantRecord {
 
   @Prop()
   legacyProducerId?: string;
+
+  /**
+   * The time off policy the request draws on (PAC-174 declares it, PAC-165
+   * writes it). Migrated rows have none — their `type` is a legacy label,
+   * not a policy. Read today only by the policy archive guard, which refuses
+   * to archive a policy with a `Submitted` request against it.
+   */
+  @Prop({ type: ObjectIdType, ref: 'TimeOffPolicy', default: null })
+  policyId?: Types.ObjectId | null;
 }
 
 export const TimeOffRequestSchema =
