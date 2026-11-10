@@ -1,0 +1,45 @@
+meta {
+  name: List My Pay Statements (as Producer, After Send)
+  type: http
+  seq: 62
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements?mine=true
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+params:query {
+  mine: true
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("now lists the sent statement", function () {
+    const rows = res.getBody().statements;
+    const row = rows.find(function (r) {
+      return r.id === bru.getVar("payoutsStatementId");
+    });
+    expect(row).to.be.an("object");
+    expect(row.status).to.equal("sent");
+    expect(row.sentAt).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /payouts/statements?mine=true — My Pay, after the send
+
+  The statement **Send Pay Statement** sent is now on the producer's My Pay
+  (rows carry `sentAt`).
+}

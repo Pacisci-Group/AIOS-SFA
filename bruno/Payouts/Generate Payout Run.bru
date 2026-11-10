@@ -27,6 +27,9 @@ body:json {
 script:post-response {
   if (res.getStatus() === 200 && res.getBody().run) {
     bru.setVar("payoutsRunId", res.getBody().run.id);
+    // How many statements the month holds — Send All Drafts runs only when
+    // it is just the folder's own (PAC-181).
+    bru.setVar("payoutsRunStatements", res.getBody().run.counts.statements);
   }
 }
 

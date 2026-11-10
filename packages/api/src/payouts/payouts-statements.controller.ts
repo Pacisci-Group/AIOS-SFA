@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import {
   AgencyPermission,
@@ -16,9 +17,12 @@ import {
   type PayoutActivityPeopleResponse,
   type PayoutActivityView,
   type PayoutRunResponse,
+  type PayStatementPdfLinkResponse,
   type PayStatementsResponse,
   type PayStatementView,
+  type SendAllDraftsResponse,
 } from '@sfa/shared';
+import type { Response } from 'express';
 import {
   RequireModule,
   RequirePermissions,
@@ -31,17 +35,25 @@ import {
   getPayoutRunQuerySchema,
   listPayStatementsQuerySchema,
   payoutActivityQuerySchema,
+  payoutRunIdSchema,
   payStatementIdSchema,
+  payStatementPdfQuerySchema,
+  sendAllDraftsQuerySchema,
+  updateStatementAdjustmentsSchema,
   updateStatementInputsSchema,
   type GeneratePayoutRunDto,
+  type UpdateStatementAdjustmentsDto,
   type UpdateStatementInputsDto,
   type GetPayoutRunQueryDto,
   type ListPayStatementsQueryDto,
   type PayoutActivityQueryDto,
+  type PayStatementPdfQueryDto,
+  type SendAllDraftsQueryDto,
 } from './dto/payouts.dto';
 import { PayStatementsService } from './pay-statements.service';
 import { PayoutActivityService } from './payout-activity.service';
 import { PayoutRunsService } from './payout-runs.service';
+import { StatementIssueService } from './statement-issue.service';
 
 /**
  * Pay statements (PAC-178) and the activity behind them (PAC-179).
@@ -56,6 +68,10 @@ import { PayoutRunsService } from './payout-runs.service';
  *   recalculating a draft.
  * - `agency:payouts:admin` — **the owner**: Generate / Recalculate a month.
  *
+ * Issuing (PAC-181) is the reviewer's: send one statement or every draft of
+ * a month, reopen a sent one, preview a draft's PDF. Opening an issued PDF
+ * is anyone's who may see the statement — the employee included.
+ *
  * The branch header is honoured (no `@SkipBranch`): a branch manager's scope
  * is their branch.
  */
@@ -67,6 +83,7 @@ export class PayoutsStatementsController {
     private readonly runs: PayoutRunsService,
     private readonly statements: PayStatementsService,
     private readonly activityService: PayoutActivityService,
+    private readonly issuing: StatementIssueService,
   ) {}
 
   // --- Runs --------------------------------------------------------------
@@ -98,6 +115,24 @@ export class PayoutsStatementsController {
     body: GeneratePayoutRunDto,
   ): Promise<PayoutRunResponse> {
     return this.runs.generate(access, branchId, body.month);
+  }
+
+  /**
+   * Send every draft of the run the caller may see (PAC-181); `branchId`
+   * narrows an agency-wide reviewer to one branch. 409
+   * `PAYOUT_RUN_GENERATING` while the month is being calculated.
+   */
+  @Post('runs/:id/send-all')
+  @HttpCode(200)
+  @RequireWrite(ModuleKey.Payouts)
+  sendAllDrafts(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payoutRunIdSchema)) id: string,
+    @Query(new ZodValidationPipe(sendAllDraftsQuerySchema))
+    query: SendAllDraftsQueryDto,
+  ): Promise<SendAllDraftsResponse> {
+    return this.issuing.sendAll(access, branchId, id, query);
   }
 
   // --- Statements --------------------------------------------------------
@@ -150,6 +185,86 @@ export class PayoutsStatementsController {
     body: UpdateStatementInputsDto,
   ): Promise<PayStatementView> {
     return this.statements.updateInputs(access, branchId, id, body);
+  }
+
+  /**
+   * The amounts a reviewer enters (10 Nov 2026): Other bonuses / SPIFFs
+   * (added), the compliance adjustment and other adjustments (deducted),
+   * whole; the statement is recalculated. 409 `PAYOUT_STATEMENT_NOT_EDITABLE`
+   * once sent, `PAYOUT_STATEMENT_CHANGED` when it changed meanwhile; 403
+   * `PAYOUT_STATEMENT_OWN_STATEMENT` on one's own without the admin permission.
+   */
+  @Patch('statements/:id/adjustments')
+  @RequireWrite(ModuleKey.Payouts)
+  updateStatementAdjustments(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Body(new ZodValidationPipe(updateStatementAdjustmentsSchema))
+    body: UpdateStatementAdjustmentsDto,
+  ): Promise<PayStatementView> {
+    return this.statements.updateAdjustments(access, branchId, id, body);
+  }
+
+  // --- Issuing (PAC-181) -------------------------------------------------
+
+  /**
+   * Render the Commission Statement PDF, store it and send the statement to
+   * its employee (in-app, push and email; a link, never an attachment). 409
+   * `PAYOUT_STATEMENT_NOT_EDITABLE` once sent; `PAYOUT_RUN_GENERATING` while
+   * the month is being calculated.
+   */
+  @Post('statements/:id/send')
+  @HttpCode(200)
+  @RequireWrite(ModuleKey.Payouts)
+  sendStatement(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+  ): Promise<PayStatementView> {
+    return this.issuing.send(access, branchId, id);
+  }
+
+  /**
+   * A sent statement back to draft, before the employee answers. 409
+   * `PAYOUT_STATEMENT_NOT_SENT` for anything else.
+   */
+  @Post('statements/:id/reopen')
+  @HttpCode(200)
+  @RequireWrite(ModuleKey.Payouts)
+  reopenStatement(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+  ): Promise<PayStatementView> {
+    return this.issuing.reopen(access, branchId, id);
+  }
+
+  /**
+   * A presigned inline link to the issued PDF, minted per read. 404 when the
+   * statement is not visible or the version has no file.
+   */
+  @Get('statements/:id/pdf')
+  statementPdf(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Query(new ZodValidationPipe(payStatementPdfQuerySchema))
+    query: PayStatementPdfQueryDto,
+  ): Promise<PayStatementPdfLinkResponse> {
+    return this.issuing.pdfLink(access, branchId, id, query.version);
+  }
+
+  /** A draft's PDF, rendered now and streamed (`application/pdf`), not stored. */
+  @Get('statements/:id/pdf-preview')
+  @RequireWrite(ModuleKey.Payouts)
+  statementPdfPreview(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    return this.issuing.streamPreview(access, branchId, id, res);
   }
 
   // --- Activity (PAC-179) ------------------------------------------------

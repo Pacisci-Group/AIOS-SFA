@@ -38,7 +38,9 @@ tests {
     const gross = s.premiumLines.reduce(function (sum, l) { return sum + cents(l.grossPremium); }, 0);
     const net = s.premiumLines.reduce(function (sum, l) { return sum + cents(l.netCommission); }, 0);
     expect(gross).to.equal(cents(s.totals.grossPremium));
-    expect(net).to.equal(cents(s.totals.grossCommission) - cents(s.totals.chargebackImpact));
+    // Commission is the rate on net premium (10 Nov 2026); only a statement
+    // calculated before carries chargebackImpact.
+    expect(net).to.equal(cents(s.totals.grossCommission) - cents(s.totals.chargebackImpact || 0));
   });
 }
 
@@ -56,17 +58,18 @@ docs {
   | allstateBindId | the "SOK number", the statement's Producer ID |
   | timeZone | the agency's zone the month was cut in |
   | structure | the payment structure as it was when computed (rates, lead-source rates named, hat trick, tiers, `tiersStackable`, `teamBonusEligible`) |
-  | premiumLines[] | the carrier production table: `{ carrier, leadSourceId, leadSourceName, appointed, grossPremium, chargebacks, netPremium, ratePercent, rateSource, grossCommission, chargebackImpact, netCommission, bundleRate, minBundleRatePercent, bundleShortfall }`. A sale paid a **lead-source rate** is on a line of its own ("Allstate · JYA leads"); every other sale on a carrier is on the carrier's line. Every appointed carrier is listed, sold or not. `rateSource` is `carrier`, `any`, `lead_source_carrier`, `lead_source` or `none` (no rule covers it — paid 0%, with a warning). |
-  | deals[] | the month's sales: `{ dealId, soldDate, soldDay, clientName, policyTypes, carriers, policyCount, premium, leadSourceId, leadSourceName, isBundle }` (a bundle = 2+ policies) |
-  | chargebacks[] | `{ chargebackId, policyId, policyNumber, policyType, carrier, customerName, amount, occurredAt, occurredDay, reason, source, leadSourceId, ratePercent, commissionDeduction, excluded, excludedNote }` — each on the line of the sale it reverses, costing its premium at that line's rate |
+  | premiumLines[] | the carrier production table: `{ carrier, leadSourceId, leadSourceName, appointed, grossPremium, chargebacks, netPremium, ratePercent, rateSource, grossCommission, netCommission, bundleRate, minBundleRatePercent, bundleShortfall }`. Commission is the rate on **net premium** (sold less charged back), so `grossCommission` = `netCommission`; a statement calculated before 10 Nov 2026 also has `chargebackImpact`, deducted from its commission on sold premium. A sale paid a **lead-source rate** is on a line of its own ("Allstate · JYA leads"); every other sale on a carrier is on the carrier's line. Every appointed carrier is listed, sold or not. `rateSource` is `carrier`, `any`, `lead_source_carrier`, `lead_source` or `none` (no rule covers it — paid 0%, with a warning). |
+  | deals[] | the month's sales: `{ dealId, soldDate, soldDay, clientName, policyTypes, carriers, policyCount, premium, leadSourceId, leadSourceName, isBundle, householdId }` (a bundle = 2+ policies; `householdId` absent on statements stored before 10 Nov 2026) |
+  | chargebacks[] | `{ chargebackId, policyId, householdId, policyNumber, policyType, carrier, customerName, amount, occurredAt, occurredDay, reason, source, leadSourceId, ratePercent, excluded, excludedNote }` — each taken off the premium of the line of the sale it reverses (`commissionDeduction` only on statements calculated before 10 Nov 2026) |
   | bonuses | `hatTrick { enabled, dealsPerDay, bonusAmount, days[], amount }`, `individual { stackable, reached[], amount }`, `team { eligible, met, poolAmount, pool, groupPool, groupPremium, amount }`, `salespersonOfMonth { enabled, winner, amount }` |
   | indicators | `{ tier: { level, thresholdPremium } \| null, bundleRate, hatTricks, somStatus: winner\|none\|off, complianceStatus: compliant\|non_compliant, failedAudits }` |
-  | adjustments[] | the manager's corrections (written from PAC-182) |
+  | adjustments[] | the manager's corrections: the entered SPIFFs, compliance adjustment and other adjustments (**Update Pay Statement Adjustments**), and left-out chargebacks (PAC-182) |
   | warnings[] | e.g. "Allstate bundle rate 71% is below the 83% minimum." — a flag; pay is not changed |
 
-  `totals.netCommission` = gross commission − chargeback impact + tier + team
+  `totals.netCommission` = commission (the rate on net premium) + tier + team
   + Salesperson of the Month + hat trick + SPIFFs + compliance adjustment +
-  other adjustments. Sold premium is gross (the Owner dashboard's figure);
+  other adjustments (the two adjustments are negative). A chargeback comes off
+  the premium once; its commission is not deducted again (owner, 10 Nov 2026). Sold premium is gross (the Owner dashboard's figure);
   `Deal.chargebackAdjustment` is not applied — the ledger row carries it.
 
   Skipped when the run had no statement to read.

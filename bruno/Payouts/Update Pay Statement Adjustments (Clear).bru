@@ -1,0 +1,54 @@
+meta {
+  name: Update Pay Statement Adjustments (Clear)
+  type: http
+  seq: 54
+}
+
+patch {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "spiffs": null,
+    "complianceAdjustment": null,
+    "otherAdjustments": null
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("leaves none, and net pay as it was", function () {
+    const body = res.getBody();
+    expect(body.totals.spiffs).to.equal(0);
+    expect(body.totals.complianceAdjustment).to.equal(0);
+    expect(body.totals.otherAdjustments).to.equal(0);
+    const kinds = body.adjustments.map(function (a) { return a.kind; });
+    expect(kinds).to.not.include.members(["spiff", "compliance", "manual"]);
+    const before = bru.getVar("payoutsNetPay");
+    if (typeof before === "number") {
+      expect(body.totals.netPay).to.equal(before);
+    }
+  });
+}
+
+docs {
+  # PATCH /payouts/statements/:id/adjustments — all three back to none
+
+  `null` removes an amount. Run before **Send Pay Statement**, so the demo
+  statement is sent without the amounts **Update Pay Statement Adjustments**
+  entered. See that request.
+}

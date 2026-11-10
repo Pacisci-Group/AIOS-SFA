@@ -295,19 +295,7 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
-    const text = await res.text();
-    let message = text || res.statusText;
-    let body: unknown;
-    try {
-      const json = JSON.parse(text) as { message?: string | string[] };
-      body = json;
-      if (json.message) {
-        message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
-      }
-    } catch {
-      // use raw text
-    }
-    throw new ApiError(message, res.status, body);
+    throw await apiErrorFrom(res);
   }
 
   if (res.status === 204) {
@@ -324,6 +312,10 @@ export async function apiFetch<T>(
  * Exists for the profile photo (PAC-81): `GET /me/avatar` is authenticated,
  * and an `<img src>` cannot send an `Authorization` header — so the bytes are
  * fetched here and rendered through an object URL instead.
+ *
+ * A refusal is an `ApiError` carrying the API's JSON body, as from
+ * `apiFetch`, so a page can show its `code`'s words (the statement preview's
+ * 409, PAC-181) rather than a bare status text.
  */
 export async function apiFetchBlob(path: string): Promise<Blob> {
   const headers = new Headers();
@@ -343,10 +335,31 @@ export async function apiFetchBlob(path: string): Promise<Blob> {
   }
 
   if (!res.ok) {
-    throw new ApiError(res.statusText, res.status);
+    throw await apiErrorFrom(res);
   }
 
   return res.blob();
+}
+
+/**
+ * The `ApiError` for a failed response: the JSON body (`{ code, message }`,
+ * or a validation error's `errors`) when there is one, its `message` as the
+ * error's; otherwise the raw text or the status text.
+ */
+async function apiErrorFrom(res: Response): Promise<ApiError> {
+  const text = await res.text();
+  let message = text || res.statusText;
+  let body: unknown;
+  try {
+    const json = JSON.parse(text) as { message?: string | string[] };
+    body = json;
+    if (json.message) {
+      message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
+    }
+  } catch {
+    // use raw text
+  }
+  return new ApiError(message, res.status, body);
 }
 
 /**
@@ -372,19 +385,7 @@ export async function publicFetch<T>(
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
   if (!res.ok) {
-    const text = await res.text();
-    let message = text || res.statusText;
-    let body: unknown;
-    try {
-      const json = JSON.parse(text) as { message?: string | string[] };
-      body = json;
-      if (json.message) {
-        message = Array.isArray(json.message) ? json.message.join(', ') : json.message;
-      }
-    } catch {
-      // use raw text
-    }
-    throw new ApiError(message, res.status, body);
+    throw await apiErrorFrom(res);
   }
 
   if (res.status === 204) {

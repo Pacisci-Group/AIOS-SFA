@@ -55,8 +55,9 @@ docs {
     "statementId": "…",
     "deals": [{ "dealId": "…", "soldDate": "…", "soldDay": "2026-10-31", "clientName": "…",
                 "policyTypes": ["Auto", "Home"], "carriers": ["Allstate"], "policyCount": 2,
-                "premium": 3200, "leadSourceId": "…", "leadSourceName": "JYA", "isBundle": true }],
-    "chargebacks": [{ "chargebackId": "…", "policyId": "…", "policyNumber": "…",
+                "premium": 3200, "leadSourceId": "…", "leadSourceName": "JYA", "isBundle": true,
+                "householdId": "…" }],
+    "chargebacks": [{ "chargebackId": "…", "policyId": "…", "householdId": "…", "policyNumber": "…",
                       "policyType": "Auto", "carrier": "Allstate", "customerName": "…",
                       "amount": 1500, "occurredAt": "…", "occurredDay": "2026-10-20",
                       "reason": "cancellation", "source": "app" }],
@@ -64,6 +65,8 @@ docs {
                 "chargebacks": 1, "chargebackTotal": 1500 }
   }
   ```
+  `householdId` (10 Nov 2026) is the client's household, `null` when there is
+  none — what a row of the Activity tab opens (`/clients/:id`).
   `statementId` is set only when you may open that statement. A chargeback's
   `reason` / `source` say where it came from (`cancellation`,
   `cancel_rewrite`; carrier report rows arrive with PAC-180).

@@ -1,0 +1,56 @@
+meta {
+  name: Preview Pay Statement PDF
+  type: http
+  seq: 55
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/pdf-preview
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is a PDF, rendered now and never cached", function () {
+    expect(res.getHeader("content-type")).to.contain("application/pdf");
+    expect(res.getHeader("content-disposition")).to.match(
+      /^inline; filename="preview-commission-statement-\d{4}-\d{2}-v\d+\.pdf"$/
+    );
+    expect(res.getHeader("cache-control")).to.equal("no-store");
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id/pdf-preview — a draft's PDF (PAC-181)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope (a statement outside it is a `404`).
+
+  Renders the Commission Statement for a **draft or disputed** statement now
+  and streams it — `application/pdf`, `inline`, `Cache-Control: no-store`.
+  Nothing is stored and nobody is told. The Generated Date box reads
+  "Draft · not issued", so a preview cannot pass for an issued statement.
+
+  The layout is the agency's (PAC-176 screenshots): header band with the
+  logo (PNG or JPEG; SVG, WebP or none → the agency's name), statement
+  details, performance indicators, carrier production (every appointed
+  carrier, the rate with its step, a TOTAL row), the commission summary
+  (Base pay on its own line and the 2026 lines when present; NET PAY =
+  base pay + stipend + net commission), chargeback detail (continues on the
+  next page with its header repeated), the producer acknowledgment (empty
+  until PAC-182), and "Page x of y". Always the light layout.
+
+  **Errors** — `403` without `payouts:write`; `404` outside your scope;
+  `409` `PAYOUT_STATEMENT_NOT_EDITABLE` once sent (open its PDF instead).
+}

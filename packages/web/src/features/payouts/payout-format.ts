@@ -1,11 +1,11 @@
 import {
   CHARGEBACK_REASON_LABELS,
+  SOM_STATUSES,
+  somStatusLabel,
   type ChargebackReason,
   type ChargebackSource,
-  type ComplianceStatus,
   type PayoutPool,
   type PayStatementStatus,
-  type PremiumLineView,
   type SomStatus,
   type StatementRateSource,
 } from "@sfa/shared";
@@ -44,12 +44,12 @@ export const RATE_SOURCE_LABELS: Record<StatementRateSource, string> = {
   none: "No rate",
 };
 
-/** "Allstate · JYA leads" for a lead-source line, else the carrier. */
-export function premiumLineLabel(line: PremiumLineView): string {
-  return line.leadSourceName
-    ? `${line.carrier} · ${line.leadSourceName} leads`
-    : line.carrier;
-}
+// The words the page and the PDF share (PAC-181) live in `@sfa/shared`.
+export {
+  complianceLabel,
+  premiumLineLabel,
+  statementReference,
+} from "@sfa/shared";
 
 /**
  * Where a chargeback came from — the ledger's own labels, so the statement
@@ -65,32 +65,12 @@ export function chargebackSourceLabel(row: {
     : CHARGEBACK_REASON_LABELS[row.reason];
 }
 
-export const SOM_LABELS: Record<SomStatus, string> = {
-  winner: "Winner",
-  none: "Not this month",
-  off: NOT_AVAILABLE,
-};
-
-/**
- * A statement is non-compliant on a failed deal audit, or (2026 comp plans)
- * an entered compliance rate below its structure's floor.
- */
-export function complianceLabel(
-  status: ComplianceStatus,
-  failedAudits: number,
-  belowFloor = false,
-): string {
-  if (status === "compliant") return "Compliant";
-  const audits =
-    failedAudits > 0
-      ? `${failedAudits} failed audit${failedAudits === 1 ? "" : "s"}`
-      : null;
-  return (
-    [belowFloor ? "Below the floor" : null, audits]
-      .filter(Boolean)
-      .join(" · ") || "Not compliant"
-  );
-}
+export const SOM_LABELS = Object.fromEntries(
+  SOM_STATUSES.map((status) => [
+    status,
+    somStatusLabel(status) ?? NOT_AVAILABLE,
+  ]),
+) as Record<SomStatus, string>;
 
 /** "Yes", "No" or "Not entered" — the manager's meeting-attendance tick. */
 export function attendanceLabel(value: boolean | null): string {
@@ -108,9 +88,18 @@ export function formatDay(ymd: string | null | undefined): string {
   });
 }
 
-/** A statement's short reference: the id's last six characters. */
-export function statementReference(id: string, version: number): string {
-  return `${id.slice(-6).toUpperCase()} · v${version}`;
+/** "Nov 6, 2026", on the agency's calendar. */
+export function formatInstantDay(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
+  if (!iso) return NOT_AVAILABLE;
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone,
+  });
 }
 
 /** A deduction shown as a negative amount; never "-$0". */

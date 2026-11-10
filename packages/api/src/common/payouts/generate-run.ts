@@ -519,11 +519,15 @@ async function computeRun(
     }
   }
 
-  // Drafts for people no longer on a structure go; anything issued stays.
+  // Drafts for people no longer on a structure go; anything issued stays —
+  // including a draft that was issued once and reopened (PAC-181), whose
+  // history is the record of what the person was sent. Those kept are
+  // recalculated once the run is written (below).
   await models.payStatement.deleteMany({
     agencyId,
     runId,
     status: 'draft',
+    'history.0': { $exists: false },
     userId: {
       $nin: recipients.map((r) => new Types.ObjectId(r.person.id)),
     },
@@ -589,6 +593,32 @@ async function computeRun(
       },
     },
   );
+
+  // Editable statements of people who are no longer recipients — a reopened
+  // draft kept above, or a disputed one — were not written by the loop.
+  // Left as they were, Send all would issue them with the figures of the
+  // last calculation. Each is recalculated as Recalculate does: by the rules
+  // it was drafted with, against the split just stored on the run, and
+  // saying the person is no longer on a payment structure. After the run's
+  // write, because that is what `recomputeStatement` reads.
+  const leftOver = await models.payStatement
+    .find({
+      agencyId,
+      runId,
+      status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
+      userId: {
+        $nin: recipients.map((r) => new Types.ObjectId(r.person.id)),
+      },
+    })
+    .select({ _id: 1 })
+    .lean<{ _id: Types.ObjectId }[]>();
+  for (const row of leftOver) {
+    await recomputeStatement(models, {
+      agencyId,
+      statementId: String(row._id),
+      now,
+    });
+  }
 
   return { runId: String(runId), statements, drafted, untouched };
 }

@@ -17,6 +17,7 @@ import {
   producerOfYearError,
   RATE_STEP_BASES,
   referralRuleError,
+  statementEnteredAdjustmentsError,
   statementInputsError,
   stipendError,
   teamRequirementsError,
@@ -379,6 +380,29 @@ export type ListPayStatementsQueryDto = z.infer<
 /** `:id` of a statement. */
 export const payStatementIdSchema = objectId;
 
+/** `:id` of a payout run. */
+export const payoutRunIdSchema = objectId;
+
+/**
+ * `GET /payouts/statements/:id/pdf` — `version` picks an earlier issued
+ * version's file; omitted, the current one.
+ */
+export const payStatementPdfQuerySchema = z
+  .object({ version: z.coerce.number().int().min(1).max(1000).optional() })
+  .strict();
+export type PayStatementPdfQueryDto = z.infer<
+  typeof payStatementPdfQuerySchema
+>;
+
+/**
+ * `POST /payouts/runs/:id/send-all` — `branchId` narrows an agency-wide
+ * reviewer to one branch (the branch the Payouts page is filtered to).
+ */
+export const sendAllDraftsQuerySchema = z
+  .object({ branchId: objectId.optional() })
+  .strict();
+export type SendAllDraftsQueryDto = z.infer<typeof sendAllDraftsQuerySchema>;
+
 /**
  * `PATCH /payouts/statements/:id/inputs` — the figures the manager enters,
  * whole: each `null` when not entered.
@@ -399,6 +423,26 @@ export const updateStatementInputsSchema = z
   });
 export type UpdateStatementInputsDto = z.infer<
   typeof updateStatementInputsSchema
+>;
+
+/**
+ * `PATCH /payouts/statements/:id/adjustments` — the three amounts a reviewer
+ * enters (10 Nov 2026), whole: each a positive amount, `null` for none.
+ * SPIFFs are added; the compliance adjustment and other adjustments deducted.
+ */
+export const updateStatementAdjustmentsSchema = z
+  .object({
+    spiffs: money.nullable(),
+    complianceAdjustment: money.nullable(),
+    otherAdjustments: money.nullable(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const error = statementEnteredAdjustmentsError(value);
+    if (error) ctx.addIssue({ code: 'custom', message: error });
+  });
+export type UpdateStatementAdjustmentsDto = z.infer<
+  typeof updateStatementAdjustmentsSchema
 >;
 
 /** `GET /payouts/activity` (PAC-179). No `userId` = the caller. */

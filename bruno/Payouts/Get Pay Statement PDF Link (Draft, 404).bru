@@ -1,0 +1,31 @@
+meta {
+  name: Get Pay Statement PDF Link (Draft, 404)
+  type: http
+  seq: 56
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/pdf
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 404", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id/pdf — nothing issued yet
+
+  A draft has no file: the current version is issued only when the
+  statement is sent. See **Get Pay Statement PDF Link**.
+}

@@ -29,6 +29,13 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       monthLabel: 'October 2026',
       statements: 7,
     },
+    'payouts.statement_sent': {
+      statementId: '6ae1bceaa8d09054f813c0bb',
+      month: '2026-10',
+      monthLabel: 'October 2026',
+      version: 1,
+      senderName: 'Olive Owner',
+    },
   };
 
 describe('renderNotification', () => {
@@ -94,6 +101,41 @@ describe('renderNotification', () => {
     for (const data of [{}, { month: '../admin' }]) {
       expect(renderNotification('payouts.run_ready', data).href).toBe('/payouts');
     }
+  });
+
+  it('tells the employee their statement is ready, and opens it', () => {
+    expect(
+      renderNotification(
+        'payouts.statement_sent',
+        FIXTURES['payouts.statement_sent'],
+      ),
+    ).toEqual({
+      title: 'Your commission statement for October 2026 is ready',
+      body: 'Olive Owner sent it. Open it to review it.',
+      href: '/payouts/statements/6ae1bceaa8d09054f813c0bb',
+    });
+  });
+
+  it('says a later version has been reissued', () => {
+    const rendered = renderNotification('payouts.statement_sent', {
+      ...FIXTURES['payouts.statement_sent'],
+      version: 2,
+    });
+    expect(rendered.title).toBe(
+      'Your commission statement for October 2026 has been reissued',
+    );
+  });
+
+  it('never prints an amount, and falls back to My Pay without a statement id', () => {
+    const rendered = renderNotification('payouts.statement_sent', {
+      statementId: '../admin',
+    });
+    expect(rendered).toEqual({
+      title: 'Your commission statement is ready',
+      body: 'Open it to review it.',
+      href: '/my-pay',
+    });
+    expect(JSON.stringify(rendered)).not.toMatch(/\$/);
   });
 
   it('falls back to the assignee page when the row is missing or not an id', () => {

@@ -4,7 +4,10 @@ import {
   bonusTiersError,
   bundleMinimumFor,
   chargebackWindowError,
+  EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+  enteredAdjustmentsOf,
   memberStartsError,
+  statementEnteredAdjustmentsError,
   overridesError,
   referralRuleError,
   statementInputsError,
@@ -41,6 +44,45 @@ import {
 /** Two `leadSources` ids, as the API stores them. */
 const JYA = '6ab279758bded56c719a429b';
 const MAIL_JYA = '6ab279758bded56c719a4285';
+
+describe('the entered adjustments (10 Nov 2026)', () => {
+  it('takes positive amounts, or none', () => {
+    expect(
+      statementEnteredAdjustmentsError({
+        spiffs: 150,
+        complianceAdjustment: 25.5,
+        otherAdjustments: null,
+      }),
+    ).toBeNull();
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        complianceAdjustment: -25,
+      }),
+    ).toBe('The compliance adjustment cannot be negative.');
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        spiffs: 1.005,
+      }),
+    ).toBe('Other bonuses / SPIFFs has more than two decimals.');
+  });
+
+  it('reads the stored rows back as typed: deductions positive again', () => {
+    expect(
+      enteredAdjustmentsOf([
+        { kind: 'spiff', amount: 100 },
+        { kind: 'spiff', amount: 50.25 },
+        { kind: 'compliance', amount: -40 },
+        { kind: 'exclude_chargeback', amount: null },
+      ]),
+    ).toEqual({
+      spiffs: 150.25,
+      complianceAdjustment: 40,
+      otherAdjustments: null,
+    });
+  });
+});
 
 describe('amountError / percentError', () => {
   it('accepts cents and refuses a third decimal', () => {

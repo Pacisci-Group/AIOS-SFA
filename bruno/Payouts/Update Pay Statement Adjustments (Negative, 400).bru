@@ -1,0 +1,40 @@
+meta {
+  name: Update Pay Statement Adjustments (Negative, 400)
+  type: http
+  seq: 52
+}
+
+patch {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "spiffs": null,
+    "complianceAdjustment": -40,
+    "otherAdjustments": null
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH /payouts/statements/:id/adjustments — a negative amount is refused
+
+  Every amount is entered positive; the compliance adjustment and other
+  adjustments are deducted by the API. See **Update Pay Statement Adjustments**.
+}

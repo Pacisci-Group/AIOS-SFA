@@ -1,0 +1,32 @@
+meta {
+  name: Send All Drafts (as Producer, 403)
+  type: http
+  seq: 67
+}
+
+post {
+  url: {{baseUrl}}/payouts/runs/{{payoutsRunId}}/send-all
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId") || !bru.getVar("payoutsRunId")) {
+    bru.runner.skipRequest();
+  }
+}
+
+tests {
+  test("returns 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # POST /payouts/runs/:id/send-all — refused to a producer
+
+  Sending is the reviewer's (`payouts:write`).
+}

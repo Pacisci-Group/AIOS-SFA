@@ -10,9 +10,11 @@ import type {
   PayoutActivityPeopleResponse,
   PayoutActivityView,
   PayoutRunResponse,
+  PayStatementPdfLinkResponse,
   PayStatementsResponse,
   PayStatementStatus,
   PayStatementView,
+  SendAllDraftsResponse,
   PaymentStructureSummary,
   PaymentStructureView,
   PaymentStructuresResponse,
@@ -20,17 +22,19 @@ import type {
   PayoutSettingsView,
   UpdatePaymentStructureInput,
   UpdatePayoutSettingsInput,
+  UpdateStatementAdjustmentsInput,
   UpdateStatementInputsInput,
   UpsertPaymentStructureInput,
 } from "@sfa/shared";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchBlob } from "@/lib/api-client";
 import { uploadToPresignedUrl } from "@/lib/presigned-upload";
 
 /**
  * Payouts (PAC-176). PAC-177: the agency's payout settings and its payment
  * structures, both behind `agency:payouts:admin`. PAC-178/179: the monthly
  * runs, the statements and the activity behind them. PAC-180: the carrier
- * chargeback report import (admin).
+ * chargeback report import (admin). PAC-181: the Commission Statement PDF,
+ * sending and reopening.
  */
 
 export const payoutsKey = ["payouts"] as const;
@@ -55,10 +59,22 @@ export const payoutRunsKey = [...payoutsKey, "runs"] as const;
 export const payoutRunKey = (month: string) =>
   [...payoutRunsKey, month] as const;
 export const payStatementsKey = [...payoutsKey, "statements"] as const;
+/**
+ * Every statements list (the Payouts table, My Pay). A statement action
+ * replaces the detail it returns and refreshes these — not the detail's own
+ * PDF link or preview, which belong to the version on screen.
+ */
+export const payStatementListsKey = [...payStatementsKey, "list"] as const;
 export const payStatementsListKey = (params: PayStatementsParams) =>
-  [...payStatementsKey, "list", params] as const;
+  [...payStatementListsKey, params] as const;
 export const payStatementKey = (id: string) =>
   [...payStatementsKey, "detail", id] as const;
+/** One issued version's link — fetched once per mount, never kept (`gcTime: 0`). */
+export const payStatementPdfKey = (id: string, version: number) =>
+  [...payStatementKey(id), "pdf", version] as const;
+/** A draft's preview, keyed by its calculation so a recalculation refreshes it. */
+export const payStatementPreviewKey = (id: string, computedAt: string) =>
+  [...payStatementKey(id), "preview", computedAt] as const;
 export const payoutActivityKey = (userId: string, month: string) =>
   [...payoutsKey, "activity", userId, month] as const;
 export const payoutActivityPeopleKey = [
@@ -192,6 +208,81 @@ export function updatePayStatementInputs(
   return apiFetch<PayStatementView>(
     `/payouts/statements/${encodeURIComponent(id)}/inputs`,
     { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * The amounts a reviewer enters (10 Nov 2026), whole: Other bonuses /
+ * SPIFFs (added), the compliance adjustment and other adjustments
+ * (deducted), each positive or `null`. Recalculates the statement. 409
+ * `PAYOUT_STATEMENT_NOT_EDITABLE` once sent; 403
+ * `PAYOUT_STATEMENT_OWN_STATEMENT` on one's own without the admin permission.
+ */
+export function updatePayStatementAdjustments(
+  id: string,
+  input: UpdateStatementAdjustmentsInput,
+): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/adjustments`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+// ── Sending (PAC-181) ───────────────────────────────────────────────────
+
+/**
+ * Render the Commission Statement PDF, store it and send it to the employee.
+ * `payouts:write`; 409 `PAYOUT_STATEMENT_NOT_EDITABLE` once sent, 409
+ * `PAYOUT_RUN_GENERATING` while the month is being calculated.
+ */
+export function sendPayStatement(id: string): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/send`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * Send every draft of the month the caller may see; `branchId` narrows an
+ * agency-wide reviewer to the branch the page is filtered to.
+ */
+export function sendAllDrafts(
+  runId: string,
+  { branchId }: { branchId?: string } = {},
+): Promise<SendAllDraftsResponse> {
+  const query = branchId ? `?branchId=${encodeURIComponent(branchId)}` : "";
+  return apiFetch<SendAllDraftsResponse>(
+    `/payouts/runs/${encodeURIComponent(runId)}/send-all${query}`,
+    { method: "POST" },
+  );
+}
+
+/** A sent statement back to draft. 409 `PAYOUT_STATEMENT_NOT_SENT` otherwise. */
+export function reopenPayStatement(id: string): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/reopen`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * A short-lived inline link to an issued PDF (the current version, or an
+ * earlier one). Fetched when it is needed and never stored.
+ */
+export function getPayStatementPdfLink(
+  id: string,
+  version?: number,
+): Promise<PayStatementPdfLinkResponse> {
+  const query = version ? `?version=${version}` : "";
+  return apiFetch<PayStatementPdfLinkResponse>(
+    `/payouts/statements/${encodeURIComponent(id)}/pdf${query}`,
+  );
+}
+
+/** A draft's PDF, rendered now (`payouts:write`). */
+export function fetchPayStatementPreview(id: string): Promise<Blob> {
+  return apiFetchBlob(
+    `/payouts/statements/${encodeURIComponent(id)}/pdf-preview`,
   );
 }
 

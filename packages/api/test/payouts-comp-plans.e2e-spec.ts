@@ -708,6 +708,109 @@ describe('Payouts — 2026 comp plans (e2e)', () => {
     });
   });
 
+  // The amounts a reviewer works out outside the app (owner, 10 Nov 2026).
+  describe('PATCH /payouts/statements/:id/adjustments', () => {
+    const adjust = async (
+      userId: string,
+      body: Record<string, unknown>,
+      expected = 200,
+      token = managerToken,
+    ) =>
+      api()
+        .patch(
+          `/api/v1/payouts/statements/${await statementOf(userId)}/adjustments`,
+        )
+        .set(authHeader(token))
+        .send({
+          spiffs: null,
+          complianceAdjustment: null,
+          otherAdjustments: null,
+          ...body,
+        })
+        .expect(expected);
+
+    it('adds the SPIFFs and deducts the two adjustments, into net pay', async () => {
+      const before = await detail(crm);
+      const s = (
+        await adjust(crm, {
+          spiffs: 150,
+          complianceAdjustment: 40,
+          otherAdjustments: 10.5,
+        })
+      ).body as PayStatementView;
+      expect(s.totals).toMatchObject({
+        spiffs: 150,
+        complianceAdjustment: -40,
+        otherAdjustments: -10.5,
+        netPay: before.totals.netPay! + 150 - 40 - 10.5,
+      });
+      expect(s.adjustments.map((row) => [row.kind, row.amount]).sort()).toEqual(
+        [
+          ['compliance', -40],
+          ['manual', -10.5],
+          ['spiff', 150],
+        ],
+      );
+    });
+
+    it('keeps them through a month recalculation', async () => {
+      const before = await detail(crm);
+      await generate(JUNE);
+      const after = await detail(crm);
+      expect(after.totals).toMatchObject({
+        spiffs: 150,
+        complianceAdjustment: -40,
+        otherAdjustments: -10.5,
+      });
+      expect(after.totals.netPay).toBe(before.totals.netPay);
+    });
+
+    it('replaces them whole, and never touches a left-out chargeback', async () => {
+      const exclusion = new Types.ObjectId();
+      await statements.updateOne(
+        { _id: new Types.ObjectId(await statementOf(crm)) },
+        {
+          $push: {
+            adjustments: {
+              _id: new Types.ObjectId(),
+              kind: 'exclude_chargeback',
+              chargebackId: exclusion,
+              amount: null,
+              note: 'Rewritten',
+              createdBy: null,
+              createdAt: new Date(),
+            },
+          },
+        },
+      );
+      const s = (await adjust(crm, { complianceAdjustment: 25 }))
+        .body as PayStatementView;
+      expect(s.totals).toMatchObject({
+        spiffs: 0,
+        complianceAdjustment: -25,
+        otherAdjustments: 0,
+      });
+      expect(s.adjustments.map((row) => row.kind).sort()).toEqual([
+        'compliance',
+        'exclude_chargeback',
+      ]);
+      expect(
+        s.adjustments.find((row) => row.kind === 'exclude_chargeback'),
+      ).toMatchObject({ chargebackId: String(exclusion), note: 'Rewritten' });
+    });
+
+    it('refuses a producer, a negative amount, and a sent statement', async () => {
+      await adjust(inside, { spiffs: 10 }, 403, producerToken);
+      await adjust(crm, { complianceAdjustment: -40 }, 400);
+      await adjust(crm, { spiffs: 1.005 }, 400);
+      // OM's statement was marked sent above.
+      const res = await adjust(om, { spiffs: 10 }, 409);
+      expect((res.body as { code: string }).code).toBe(
+        PAYOUT_STATEMENT_NOT_EDITABLE,
+      );
+    });
+  });
+
   describe('Producer of the Year', () => {
     it("goes to the year's top compliant producer on December's run", async () => {
       const first = (await generate(DECEMBER)).run!;

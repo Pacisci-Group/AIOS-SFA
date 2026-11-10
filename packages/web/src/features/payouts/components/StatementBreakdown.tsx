@@ -55,11 +55,19 @@ export function StatementBreakdown({
   figures,
 }: {
   statement: PayStatementView;
-  /** The entered-figures card, shown under the warnings it answers. */
+  /**
+   * The entered-figures and bonuses-and-adjustments cards, shown under the
+   * warnings they answer.
+   */
   figures?: ReactNode;
 }) {
   const s = statement;
   const t = s.totals;
+  // Commission is the rate on net premium (10 Nov 2026). A statement
+  // calculated before carries `chargebackImpact` — commission on sold premium
+  // with the chargebacks' commission deducted separately — and is shown that
+  // way, so its stored figures still add up.
+  const legacyImpact = t.chargebackImpact;
   const b = s.bonuses;
   const belowFloor = b.compliance?.belowFloor ?? false;
   const fixedPay = (t.basePay ?? 0) + (t.stipend ?? 0);
@@ -256,9 +264,7 @@ export function StatementBreakdown({
               </TableCell>
               <TableCell colSpan={2} />
               <TableCell className="pr-5 text-right font-semibold tabular-nums">
-                {formatMoney(
-                  s.totals.grossCommission - s.totals.chargebackImpact,
-                )}
+                {formatMoney(s.totals.grossCommission - (legacyImpact ?? 0))}
               </TableCell>
             </TableRow>
           </TableFooter>
@@ -269,7 +275,11 @@ export function StatementBreakdown({
         <div className="grid gap-x-10 gap-y-2 md:grid-cols-2">
           <dl className="space-y-2">
             <SummaryLine
-              label="Gross carrier commission"
+              label={
+                legacyImpact === undefined
+                  ? "Carrier commission"
+                  : "Gross carrier commission"
+              }
               amount={t.grossCommission}
             />
             <OptionalLine label="Rate step bonus" amount={t.rateStepBonus} />
@@ -291,7 +301,11 @@ export function StatementBreakdown({
             />
           </dl>
           <dl className="space-y-2">
-            <OptionalLine label="Base pay" amount={t.basePay} />
+            {/* Its own line whenever the statement carries it, even at $0
+                (6 Nov), as on the PDF. */}
+            {t.basePay !== undefined && (
+              <SummaryLine label="Base pay" amount={t.basePay} />
+            )}
             <OptionalLine label="Stipend" amount={t.stipend} />
             <SummaryLine label="Other bonuses / SPIFFs" amount={t.spiffs} />
             <OptionalLine
@@ -310,10 +324,14 @@ export function StatementBreakdown({
               }
               amount={t.complianceReduction}
             />
-            <SummaryLine
-              label="Chargeback commission impact"
-              amount={deduction(t.chargebackImpact)}
-            />
+            {/* Only a statement calculated before 10 Nov 2026: its
+                commission was on sold premium, this deducted separately. */}
+            {legacyImpact !== undefined && (
+              <SummaryLine
+                label="Chargeback commission impact"
+                amount={deduction(legacyImpact)}
+              />
+            )}
             <SummaryLine
               label="Other adjustments"
               amount={t.otherAdjustments}
@@ -358,10 +376,19 @@ export function StatementBreakdown({
                 <TableHead>Policy type</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Source</TableHead>
-                <TableHead className="text-right">Premium</TableHead>
-                <TableHead className="pr-5 text-right">
-                  Commission deduction
+                <TableHead
+                  className={cn(
+                    "text-right",
+                    legacyImpact === undefined && "pr-5",
+                  )}
+                >
+                  Premium
                 </TableHead>
+                {legacyImpact !== undefined && (
+                  <TableHead className="pr-5 text-right">
+                    Commission deduction
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -393,27 +420,51 @@ export function StatementBreakdown({
                       {chargebackSourceLabel(row)}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatMoney(row.amount)}
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      "pr-5 text-right tabular-nums",
-                      row.excluded && "line-through",
-                    )}
-                  >
-                    {formatMoney(deduction(row.commissionDeduction))}
-                  </TableCell>
+                  {legacyImpact === undefined ? (
+                    // What comes off the line's premium; struck through when
+                    // left out, since then it does not.
+                    <TableCell
+                      className={cn(
+                        "pr-5 text-right tabular-nums",
+                        row.excluded && "line-through",
+                      )}
+                    >
+                      {formatMoney(deduction(row.amount))}
+                    </TableCell>
+                  ) : (
+                    <>
+                      <TableCell className="text-right tabular-nums">
+                        {formatMoney(row.amount)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "pr-5 text-right tabular-nums",
+                          row.excluded && "line-through",
+                        )}
+                      >
+                        {formatMoney(deduction(row.commissionDeduction ?? 0))}
+                      </TableCell>
+                    </>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
             <TableFooter>
               <TableRow>
-                <TableCell className="pl-5 font-semibold" colSpan={7}>
-                  Total chargeback impact
+                <TableCell className="pl-5 font-semibold" colSpan={6}>
+                  {legacyImpact === undefined
+                    ? "Total charged back"
+                    : "Total chargeback impact"}
                 </TableCell>
+                {legacyImpact !== undefined && <TableCell />}
                 <TableCell className="pr-5 text-right font-semibold tabular-nums">
-                  {formatMoney(deduction(s.totals.chargebackImpact))}
+                  {formatMoney(
+                    deduction(
+                      legacyImpact === undefined
+                        ? s.totals.chargebackTotal
+                        : legacyImpact,
+                    ),
+                  )}
                 </TableCell>
               </TableRow>
             </TableFooter>

@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
 import {
-  AgencyPermission,
   EMPTY_STATEMENT_INPUTS,
   isEditableStatementStatus,
   ModuleKey,
@@ -16,16 +15,16 @@ import { DataRow, DetailCard } from "@/components/common/DetailCard";
 import { FormGrid } from "@/components/form";
 import type { SelectOption } from "@/components/form/fields";
 import { Button } from "@/components/ui/button";
-import { useAuth } from "@/contexts/auth-context";
 import { useAppForm } from "@/hooks/form";
 import { usePermissions } from "@/hooks/usePermissions";
 import { formatPercent } from "@/lib/money";
 import {
   payoutRunsKey,
   payStatementKey,
-  payStatementsKey,
+  payStatementListsKey,
   updatePayStatementInputs,
 } from "@/lib/payouts-api";
+import { useOwnStatementBlocked } from "../own-statement";
 import { payoutErrorMessage } from "../payout-errors";
 import { blankNumber, toField } from "../payout-form-fields";
 import { attendanceLabel } from "../payout-format";
@@ -47,16 +46,14 @@ export function StatementInputsCard({
 }: {
   statement: PayStatementView;
 }) {
-  const { user } = useAuth();
-  const { can, canWrite } = usePermissions();
+  const { canWrite } = usePermissions();
+  const ownBlocked = useOwnStatementBlocked(statement);
   /** Bumped after a save to re-seed the form from what the server stored. */
   const [seed, setSeed] = useState(0);
   const needed = statement.inputsNeeded;
   if (!needed || !Object.values(needed).some(Boolean)) return null;
 
   const inputs = statement.inputs ?? EMPTY_STATEMENT_INPUTS;
-  const own = statement.userId === user?.id;
-  const ownBlocked = own && !can(AgencyPermission.PayoutsAdmin);
   const editable =
     canWrite(ModuleKey.Payouts) &&
     isEditableStatementStatus(statement.status) &&
@@ -203,7 +200,7 @@ function InputsForm({
       onSaved();
       toast.success("Figures saved and the statement recalculated.");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: payStatementsKey }),
+        queryClient.invalidateQueries({ queryKey: payStatementListsKey }),
         queryClient.invalidateQueries({ queryKey: payoutRunsKey }),
       ]);
     },
