@@ -1,4 +1,49 @@
+import type {
+  AuditItemReviewView,
+  AuditItemVerdict,
+  AuditReviewDecision,
+  AuditWorkflowView,
+  DealAuditQueueOptionsResponse,
+  DealAuditQueueRangeKey,
+  DealAuditQueueResponse,
+  DealAuditQueueSort,
+  DealAuditQueueStatus,
+  DealAuditReasonCode,
+  DealAuditReviewView,
+  DealAuditSentBackView,
+  DealAuditStatus,
+  DocumentDownloadResponse,
+  SetAuditItemVerdictResponse,
+} from '@sfa/shared';
 import { apiFetch } from '@/lib/api-client';
+
+// The workflow and review contracts live in `@sfa/shared` (PAC-106); they are
+// re-exported so components import them from the client module, as elsewhere.
+export { DEAL_AUDIT_REASON_CODES } from '@sfa/shared';
+export type {
+  AuditItemRef,
+  AuditItemReviewView,
+  AuditItemVerdict,
+  AuditOwnerView,
+  AuditReviewCounts,
+  AuditReviewDecision,
+  AuditWorkflowView,
+  DealAuditQueueOptionsResponse,
+  DealAuditQueueRangeKey,
+  DealAuditQueueResponse,
+  DealAuditQueueRow,
+  DealAuditQueueSort,
+  DealAuditQueueStatus,
+  DealAuditReasonCode,
+  DealAuditReviewItem,
+  DealAuditReviewLead,
+  DealAuditReviewPolicy,
+  DealAuditReviewQuoteRecap,
+  DealAuditReviewView,
+  DealAuditSentBackView,
+  DealAuditStatus,
+  SetAuditItemVerdictResponse,
+} from '@sfa/shared';
 
 export type DealAuditType = 'Auto' | 'Home' | 'Bundle' | 'Other';
 
@@ -10,9 +55,6 @@ export interface DealAuditRowAttachment {
   contentType: string;
   size: number;
 }
-
-/** The four audit workflow states (mirrors `DEAL_AUDIT_STATUSES`). */
-export type DealAuditStatus = 'Not Submitted' | 'Pending' | 'Pass' | 'Fail';
 
 /** One requirement on a deal's checklist (mirrors the API `DealAuditItemRow`). */
 export interface DealAuditItemRow {
@@ -31,6 +73,15 @@ export interface DealAuditItemRow {
   dueAt: string | null;
   /** Empty means "no document on file" — the auditor has to call the client. */
   attachments: DealAuditRowAttachment[];
+  /** The producer cannot resolve it without a document (PAC-106). */
+  requiresUpload: boolean;
+  /**
+   * A manager-only item, on the board only because the manager failed it —
+   * fixed through the sale (Fix it), not by uploading here.
+   */
+  managerOnly: boolean;
+  /** The manager's ruling; a `fail` carries the note the producer acts on. */
+  review: AuditItemReviewView;
 }
 
 /** One deal card on the board (mirrors the API `DealAuditDealRow`). */
@@ -47,10 +98,20 @@ export interface DealAuditDealRow {
   client: string;
   type: DealAuditType;
   auditStatus: DealAuditStatus;
-  /** Whole percent resolved. An empty checklist reads 100. */
+  /**
+   * Whole percent resolved, over the **producer's** items only (PAC-106) —
+   * the manager-only ones are the manager's to verify, not theirs to chase.
+   */
   completionPct: number;
   itemCount: number;
   openCount: number;
+  /**
+   * Nothing left open: the card stays on the board until the producer
+   * submits, rather than vanishing before they can (PAC-106).
+   */
+  readyToSubmit: boolean;
+  /** The manager's send-back marker while the audit is `Fail`, else `null`. */
+  sentBack: DealAuditSentBackView | null;
   /** Age of the oldest outstanding requirement; the board's sort key. */
   oldestDaysOpen: number;
   /** Earliest soft deadline across the open items, ISO, or `null`. */
@@ -75,6 +136,11 @@ export interface ListDealAuditsParams {
   page?: number;
   pageSize?: number;
   due?: DealAuditDueFilter;
+  /**
+   * One deal's card only — the `audit.sent_back` notification's deep link
+   * (PAC-106). Empty when the deal is not waiting on the caller.
+   */
+  dealId?: string;
 }
 
 export function listDealAudits(params: ListDealAuditsParams = {}) {
@@ -82,6 +148,7 @@ export function listDealAudits(params: ListDealAuditsParams = {}) {
   if (params.page != null) search.set('page', String(params.page));
   if (params.pageSize != null) search.set('pageSize', String(params.pageSize));
   if (params.due != null && params.due !== 'all') search.set('due', params.due);
+  if (params.dealId) search.set('dealId', params.dealId);
   const qs = search.toString();
   return apiFetch<DealAuditListResponse>(
     `/deal-audits${qs ? `?${qs}` : ''}`,
@@ -101,59 +168,6 @@ export function getAuditAttachmentUrl(itemId: string, index: number) {
 }
 
 // --- Workflow: assign → submit → review (PAC-72 section E) -----------------
-
-/** A user or a role, with its display name resolved server-side. */
-export interface AuditOwnerView {
-  type: 'user' | 'role';
-  id: string;
-  name: string;
-}
-
-/** What a reviewer can do with a submitted audit. */
-export type AuditReviewDecision =
-  | 'approve'
-  | 'request_changes'
-  | 'send_back';
-
-/** The failure vocabulary — SmartSuite's own `reason_codes` select. */
-export const DEAL_AUDIT_REASON_CODES = [
-  'Missing Docs',
-  'Coverage Not Offered',
-  'Incorrect Named Insured',
-  'Incorrect Address',
-  'Underwriting Issue',
-  'Other',
-] as const;
-
-export type DealAuditReasonCode = (typeof DEAL_AUDIT_REASON_CODES)[number];
-
-/** A deal's audit workflow state (mirrors the API `AuditWorkflowView`). */
-export interface AuditWorkflowView {
-  id: string;
-  dealId: string;
-  auditStatus: DealAuditStatus;
-  assignee: AuditOwnerView | null;
-  reviewer: AuditOwnerView | null;
-  submittedAt: string | null;
-  reviewedAt: string | null;
-  reasonCodes: string[];
-  auditScore: number;
-  auditNotes: string | null;
-  itemCount: number;
-  resolvedCount: number;
-  openCount: number;
-  completionPct: number;
-  /**
-   * Decided by the server, not re-derived here.
-   *
-   * `canReview` in particular depends on **who submitted** — the submitter may
-   * not review their own audit — and the client is deliberately not told who
-   * that was. Gating the buttons on these keeps the UI from offering an action
-   * the API would reject.
-   */
-  canSubmit: boolean;
-  canReview: boolean;
-}
 
 /** One entry on the audit's note + workflow thread. */
 export interface AuditNoteView {
@@ -198,15 +212,26 @@ export function submitAudit(dealId: string) {
   });
 }
 
-/** Approve, request changes, or send back. */
-export function reviewAudit(
-  dealId: string,
-  payload: {
-    decision: AuditReviewDecision;
-    reasonCodes?: DealAuditReasonCode[];
-    notes?: string;
-  },
-) {
+/**
+ * The reviewer's decision — `POST /deal-audits/deals/:dealId/review`.
+ *
+ * The Deal Audit page's **Send back** is `request_changes`, and since PAC-106
+ * it needs a note (the producer's red card and the notification say it) and at
+ * least one failed item; **Approve** needs every item passed. Both refusals
+ * come back as a 409 whose body carries a `code`.
+ */
+export type ReviewAuditPayload =
+  | {
+      decision: 'request_changes';
+      notes: string;
+      reasonCodes?: DealAuditReasonCode[];
+    }
+  | {
+      decision: Exclude<AuditReviewDecision, 'request_changes'>;
+      notes?: string;
+    };
+
+export function reviewAudit(dealId: string, payload: ReviewAuditPayload) {
   return apiFetch<AuditWorkflowView>(`/deal-audits/deals/${dealId}/review`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -224,6 +249,120 @@ export function addAuditNote(dealId: string, body: string) {
     body: JSON.stringify({ body }),
   });
 }
+
+// --- The manager's review (PAC-106) ----------------------------------------
+
+/**
+ * Query-key roots for the Deal Audits pages. Both sit under `['deal-audits']`,
+ * so the producer board's invalidation (and every mutation here) refreshes
+ * the queue and the page with it.
+ */
+export const dealAuditQueueKey = (params: ListDealAuditQueueParams) =>
+  ['deal-audits', 'queue', params] as const;
+
+/**
+ * The producer filter's roster. Its own root, outside `['deal-audits']`, so an
+ * audit mutation — which invalidates that whole tree — does not refetch it.
+ */
+export const dealAuditQueueOptionsKey = ['deal-audit-queue-options'] as const;
+
+export const dealAuditReviewKey = (dealId: string) =>
+  ['deal-audits', 'review', dealId] as const;
+
+/**
+ * What the queue is asked for. Arrays arrive in `MultiSelect`'s option order,
+ * so the object is safe inside a query key — the `DashboardFilterParams` rule.
+ */
+export interface ListDealAuditQueueParams {
+  status: DealAuditQueueStatus;
+  /** Already debounced and trimmed; absent for no search. */
+  q?: string;
+  producerIds: readonly string[];
+  policyTypes: readonly string[];
+  aging: boolean;
+  range: DealAuditQueueRangeKey;
+  /** `YYYY-MM-DD`, inclusive; sent only with `range: 'custom'`. */
+  from?: string;
+  to?: string;
+  sort: DealAuditQueueSort;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * `GET /deal-audits/queue` — the manager's Deal Audits queue.
+ *
+ * Serialised the way `dashboardFilterSearch` does it (comma-joined lists,
+ * dates only with `custom`) but not through it: that one is typed on the
+ * dashboards' filter and always sends a period, where the queue's default —
+ * all time — is no period at all.
+ */
+export function listDealAuditQueue(params: ListDealAuditQueueParams) {
+  const search = new URLSearchParams({
+    status: params.status,
+    sort: params.sort,
+    page: String(params.page),
+    pageSize: String(params.pageSize),
+  });
+  if (params.q) search.set('q', params.q);
+  if (params.producerIds.length) {
+    search.set('producerIds', params.producerIds.join(','));
+  }
+  if (params.policyTypes.length) {
+    search.set('policyTypes', params.policyTypes.join(','));
+  }
+  if (params.aging) search.set('aging', 'true');
+  if (params.range !== 'all') {
+    search.set('range', params.range);
+    if (params.range === 'custom' && params.from && params.to) {
+      search.set('from', params.from);
+      search.set('to', params.to);
+    }
+  }
+  return apiFetch<DealAuditQueueResponse>(`/deal-audits/queue?${search}`);
+}
+
+/** `GET /deal-audits/queue/options` — the sellers the producer filter offers. */
+export function getDealAuditQueueOptions() {
+  return apiFetch<DealAuditQueueOptionsResponse>('/deal-audits/queue/options');
+}
+
+/** `GET /deal-audits/deals/:dealId/review` — everything the Deal Audit page shows. */
+export function getDealAuditReview(dealId: string) {
+  return apiFetch<DealAuditReviewView>(
+    `/deal-audits/deals/${encodeURIComponent(dealId)}/review`,
+  );
+}
+
+/**
+ * `PATCH /deal-audits/:itemId/verdict` — Pass / Fail and the note on one item.
+ *
+ * Omit `verdict` to save a note alone; `null` withdraws a ruling; an empty
+ * `note` clears it.
+ */
+export function setAuditItemVerdict(
+  itemId: string,
+  payload: { verdict?: AuditItemVerdict | null; note?: string },
+) {
+  return apiFetch<SetAuditItemVerdictResponse>(
+    `/deal-audits/${encodeURIComponent(itemId)}/verdict`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+  );
+}
+
+/**
+ * The sale's quote document, inline-signed. Reached through the audit because
+ * the manager holds no `quote_recaps:read`; pair with `openDocumentInNewTab`.
+ */
+export function getQuoteRecapDocumentUrl(dealId: string) {
+  return apiFetch<DocumentDownloadResponse>(
+    `/deal-audits/deals/${encodeURIComponent(dealId)}/quote-recap/document/download`,
+  );
+}
+
+/** The 409 `code`s the review endpoints refuse with. */
+export const AUDIT_ITEMS_NOT_PASSED = 'audit_items_not_passed';
+export const AUDIT_NOTHING_FAILED = 'audit_nothing_failed';
 
 // --- Resolve (PAC-14) ------------------------------------------------------
 

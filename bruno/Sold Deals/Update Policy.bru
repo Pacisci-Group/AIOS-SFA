@@ -254,6 +254,14 @@ docs {
   - `404 Not Found` — unknown/malformed id, **or** a policy outside the caller's
     data scope. Both are the same answer on purpose. A policy with no deal
     cannot be attributed and is therefore a 404 under `own` scope.
+  - `409 Conflict` — the policy's sale has a **locked** audit: approved, or
+    submitted by a person and with the reviewer (`auditLocked` on `GET
+    /sold-deals/:id` and on `GET /leads/:id` → `deal`). The manager checks the
+    policies against the application, so a correction under an approval would
+    leave the pass vouching for what is no longer there (PAC-106 review). Open
+    again once the audit is sent back. The household-side correction
+    (`PATCH /households/:id/policies/:policyId`) is **not** locked — after
+    approval the policy is the service team's.
 
   ## Every edit is logged (PAC-65 #9)
 

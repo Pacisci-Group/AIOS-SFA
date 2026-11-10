@@ -1,6 +1,7 @@
 import {
   BarChart3,
   ChartColumn,
+  ClipboardCheck,
   FileDown,
   Home,
   LayoutDashboard,
@@ -10,7 +11,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { ModuleKey } from "@sfa/shared";
+import { ModuleKey, modulePermission } from "@sfa/shared";
 import { SETTINGS_PERMISSIONS } from "@/features/settings/settings-sections";
 
 export type NavItem = {
@@ -29,6 +30,12 @@ export type NavItem = {
    * be able to reach the list.
    */
   anyOf?: string[];
+  /**
+   * Visible only when the user holds **every** one of these — the client side
+   * of an API route gated `@RequirePermissions(a, b)`. Write always implies
+   * read in the resolved set, so listing the read permissions is enough.
+   */
+  allOf?: string[];
 };
 
 export type NavSection = {
@@ -87,6 +94,19 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Command Center",
         icon: BarChart3,
         module: ModuleKey.Management,
+      },
+      {
+        // The manager's audit queue (PAC-106). "Management roles only" is the
+        // capability, never a role name: the review routes require both, so
+        // a producer — who holds `deal_audits:*` for their own board — never
+        // sees the link.
+        to: "/deal-audits",
+        label: "Deal Audits",
+        icon: ClipboardCheck,
+        allOf: [
+          modulePermission(ModuleKey.DealAudits, "read"),
+          modulePermission(ModuleKey.Management, "read"),
+        ],
       },
       {
         // PAC-152, part 2. Its own module, so it shows for anyone granted

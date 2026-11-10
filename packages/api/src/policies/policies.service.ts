@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -39,14 +40,20 @@ import {
 } from '../activities/change-log';
 import { CarriersService } from '../carriers/carriers.service';
 import { clientScopeFilter } from '../clients/client-scope';
+import {
+  AUDIT_LOCKED_MESSAGE,
+  loadDealAuditLock,
+} from '../common/deal-audits/audit-lock';
 import { Contact, ContactDocument } from '../contacts/schemas/contact.schema';
 import { loadPrimaryContacts } from '../households/primary-contact';
+import { DealAudit } from '../deal-audits/schemas/deal-audit.schema';
 import { Deal, DealDocument } from '../deals/schemas/deal.schema';
 import {
   Household,
   HouseholdDocument,
 } from '../households/schemas/household.schema';
 import { derivePersistedDealAggregates } from '../sold-deals/intake/sold.normalize';
+import { StorageService } from '../storage/storage.service';
 import { CheckPolicyDto } from './dto/check-policy.dto';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { normalizePolicyNumber, policyNumberKey } from './policy-number';
@@ -154,8 +161,59 @@ export class PoliciesService {
     private readonly activityModel: Model<ActivityDocument>,
     @InjectModel(Contact.name)
     private readonly contactModel: Model<ContactDocument>,
+    // Only to refuse a Sold-card correction under a locked audit.
+    @InjectModel(DealAudit.name)
+    private readonly dealAuditModel: Model<DealAudit>,
     private readonly carriers: CarriersService,
+    // Global module; only to sign the new business application for viewing.
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * `GET /policies/:id/new-business-application/download` — the signed
+   * application, inline (PAC-106).
+   *
+   * The manager checks the entered sold and effective dates against this
+   * document on the Deal Audit page; until now it was written by the Sold form
+   * and read by nothing. Clamped like every sales-record read
+   * (`loadOwnedPolicy`), so a producer cannot open a colleague's application
+   * by guessing an id, and the storage key never crosses the wire.
+   */
+  async getNewBusinessApplicationDownload(
+    access: AccessContext,
+    branchId: string | null,
+    policyId: string,
+  ): Promise<{
+    downloadUrl: string;
+    filename: string;
+    contentType: string;
+    expiresIn: number;
+  }> {
+    const { policy } = await this.loadOwnedPolicy(access, branchId, policyId);
+    const document = policy.newBusinessApplication;
+    if (!document) {
+      throw new NotFoundException(
+        'This policy has no new business application on file.',
+      );
+    }
+
+    const downloadUrl = await this.storage.createPresignedDownload(
+      document.key,
+      {
+        disposition: 'inline',
+        filename: document.filename,
+        // Overridden explicitly, as for quote documents: a PDF served as
+        // octet-stream downloads instead of rendering in the drawer's frame.
+        contentType: document.contentType,
+      },
+    );
+    return {
+      downloadUrl,
+      filename: document.filename,
+      contentType: document.contentType,
+      expiresIn: this.storage.downloadUrlTtlSeconds,
+    };
+  }
 
   /**
    * Find existing policies with the same number, so the wizard can offer to link
@@ -261,6 +319,16 @@ export class PoliciesService {
    * across lines), and warn-and-link belongs on the create path where the
    * producer is choosing between "link" and "correct". Blocking a typo fix
    * because the corrected number already exists would strand the record.
+   *
+   * ## Refused (409) while the sale's audit is locked
+   *
+   * Approved, or submitted by a person and with the reviewer
+   * (`loadDealAuditLock` — the rule Edit sale follows). The manager checks the
+   * sale's policies against the application; a correction underneath an
+   * approval would leave that pass vouching for what is no longer there
+   * (PAC-106 review). Here only, not in {@link applyUpdate}: once the sale is
+   * approved the policy is the service team's, and their household-side
+   * correction (`PATCH /households/:id/policies/:policyId`) stays open.
    */
   async update(
     access: AccessContext,
@@ -273,6 +341,19 @@ export class PoliciesService {
       branchId,
       policyId,
     );
+
+    if (
+      policy.dealId &&
+      (
+        await loadDealAuditLock(
+          this.dealAuditModel,
+          policy.agencyId,
+          policy.dealId,
+        )
+      ).locked
+    ) {
+      throw new ConflictException(AUDIT_LOCKED_MESSAGE);
+    }
 
     await this.applyUpdate(access, policy, dto, leadId);
     return toLeadDetailPolicy(policy);

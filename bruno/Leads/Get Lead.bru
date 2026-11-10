@@ -129,6 +129,7 @@ tests {
         expect(policy).to.have.property("status");
         expect(householdPolicyIds).to.include(policy.id);
       });
+      expect(body.deal.auditLocked).to.be.a("boolean");
     }
   });
 
@@ -236,6 +237,11 @@ docs {
   legitimately holds policies from earlier deals and from the migration that
   this sale did not write. Empty on a migrated deal whose policies carry only
   `legacyDealId`.
+
+  **`deal.auditLocked`** — the sale's audit is approved, or a person submitted
+  it and it is with the reviewer, so `PATCH /policies/:id` refuses its policies
+  (`409`) and the Sold card hides their edit until it is sent back (PAC-106
+  review). The same rule as `GET /sold-deals/:id`.
 
   **`activities[].userName` / `activities[].changes`** — who wrote the row, and
   its before/after list.

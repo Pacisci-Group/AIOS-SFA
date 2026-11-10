@@ -80,6 +80,24 @@ export class PoliciesController {
   }
 
   /**
+   * The policy's signed new business application, as a short-lived inline URL
+   * (PAC-106) — what the Deal Audit page's "View new business application"
+   * drawer frames. Rides the controller's read gate; 404 when none is on file.
+   */
+  @Get(':id/new-business-application/download')
+  newBusinessApplication(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id') id: string,
+  ) {
+    return this.policiesService.getNewBusinessApplicationDownload(
+      access,
+      branchId,
+      id,
+    );
+  }
+
+  /**
    * Correct a sold policy from the Lead Detail Sold card (PAC-56 #27).
    *
    * A field patch, not a re-submission — the Sold wizard remains the only thing

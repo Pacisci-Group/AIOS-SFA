@@ -1,7 +1,18 @@
-import { Car, Home, Package, Clock, AlertCircle, Paperclip } from "lucide-react";
+import {
+  Car,
+  Home,
+  Package,
+  Clock,
+  AlertCircle,
+  Paperclip,
+  PenLine,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useUrlState } from "@/hooks/useUrlState";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,8 +28,45 @@ import {
 } from "@/lib/deal-audits-api";
 import { ResolvePanel } from "./ResolvePanel";
 import { NOT_AVAILABLE } from "@/lib/not-available";
+import {
+  SENT_BACK_TEXT,
+} from "@/components/audit/review-display";
 
 const PAGE_SIZE = 8;
+
+const OBJECT_ID = /^[a-f0-9]{24}$/i;
+
+/**
+ * `?audit=<dealId>` — the `audit.sent_back` notification's link (PAC-106).
+ * Frozen at module scope so `useUrlState`'s memo dependencies stay stable.
+ */
+const LINK_DEFAULTS = { audit: "" };
+const LINK_ALLOWED = { audit: (value: string) => OBJECT_ID.test(value) };
+
+/**
+ * One requirement settled inside a deal's card.
+ *
+ * Settled, not removed: the drawer keeps listing it below the outstanding
+ * ones, which is what "sorted to the top" is relative to. Since PAC-106 the
+ * card itself **stays** once nothing is open — it reads "Ready to submit"
+ * until the producer submits, rather than vanishing before they can.
+ */
+function settleItem(row: DealAuditDealRow, itemId: string): DealAuditDealRow {
+  const items = row.items.map((item) =>
+    item.id === itemId ? { ...item, open: false } : item,
+  );
+  const openCount = items.filter((item) => item.open).length;
+  const resolved = row.itemCount - openCount;
+  return {
+    ...row,
+    items,
+    openCount,
+    readyToSubmit: openCount === 0,
+    completionPct: row.itemCount
+      ? Math.round((resolved / row.itemCount) * 100)
+      : 100,
+  };
+}
 
 const DUE_FILTERS: { value: DealAuditDueFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -49,6 +97,10 @@ const TypeIcon = ({ type }: { type: DealAuditType }) => {
  *
  * The completion percentage is what David asked for **instead of** per-item
  * checkmarks (items 3 and 4), so there is deliberately no tick anywhere here.
+ *
+ * A **sent-back** audit is red, with **Fix it** beside Review (B10, PAC-106):
+ * a manager looked and said no, and the fix may be the sale itself — a wrong
+ * sold date, a missing policy — which is corrected on Edit Sold Deal.
  */
 function DealCard({
   deal,
@@ -61,6 +113,7 @@ function DealCard({
 }) {
   const urgent = deal.oldestDaysOpen >= 30;
   const warning = deal.oldestDaysOpen >= 14 && deal.oldestDaysOpen < 30;
+  const sentBack = deal.auditStatus === "Fail";
   const withEvidence = deal.items.filter(
     (item) => item.open && item.attachments.length > 0,
   ).length;
@@ -70,6 +123,7 @@ function DealCard({
       className={cn(
         "group flex flex-col gap-3 border-b border-border px-4 py-4 transition-all last:border-b-0 lg:px-5",
         "dark:border-white/[0.04]",
+        sentBack && "border-l-2 border-l-red-500 bg-red-500/5",
         canResolve && "cursor-pointer hover:bg-muted/40",
       )}
       onClick={canResolve ? onOpen : undefined}
@@ -104,6 +158,13 @@ function DealCard({
             </span>
             <span className="block truncate text-xs tracking-wide text-muted-foreground">
               {deal.ref}
+              {sentBack && (
+                <span className={cn("font-semibold", SENT_BACK_TEXT)}>
+                  {" "}
+                  · Sent back
+                  {deal.sentBack?.byName ? ` by ${deal.sentBack.byName}` : ""}
+                </span>
+              )}
             </span>
           </div>
         </div>
@@ -149,8 +210,15 @@ function DealCard({
 
       <div className="flex items-center justify-between gap-3">
         <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
-          <span className="truncate">
-            {deal.openCount} of {deal.itemCount} outstanding
+          <span
+            className={cn(
+              "truncate",
+              deal.readyToSubmit && "font-medium text-success",
+            )}
+          >
+            {deal.readyToSubmit
+              ? "Ready to submit"
+              : `${deal.openCount} of ${deal.itemCount} outstanding`}
           </span>
           {/*
             * A proof uploaded at sale time is already on the item (PAC-56 #21b)
@@ -166,6 +234,26 @@ function DealCard({
         </span>
 
         {canResolve ? (
+          <div className="flex shrink-0 items-center gap-2">
+          {sentBack && (
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className={cn("shrink-0 rounded-lg font-semibold", SENT_BACK_TEXT)}
+            >
+              <Link
+                to={`/sold/${deal.dealId}/edit`}
+                // A link inside a clickable card: without this the card's
+                // own handler would open the drawer on the way out.
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                <PenLine />
+                Fix it
+              </Link>
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -184,6 +272,7 @@ function DealCard({
           >
             Review
           </Button>
+          </div>
         ) : (
           <span className="text-xs text-muted-foreground">{NOT_AVAILABLE}</span>
         )}
@@ -201,6 +290,10 @@ export function DealsAuditBoard() {
   const { canWrite } = usePermissions();
   const canResolve = canWrite("deal_audits");
   const queryClient = useQueryClient();
+  const [{ audit: linkedDealId }, setLink] = useUrlState({
+    defaults: LINK_DEFAULTS,
+    allowed: LINK_ALLOWED,
+  });
 
   /*
    * ⚠ `due` belongs in the key, and in `handleResolved`'s `setQueryData` key
@@ -232,6 +325,28 @@ export function DealsAuditBoard() {
     if (page > data.totalPages) setPage(data.totalPages);
   }, [data, page]);
 
+  /*
+   * The notification's deep link opens that deal's drawer (PAC-106), fetched
+   * on its own: the card may be on any page of the board, or gone from it
+   * because the audit was resubmitted since.
+   */
+  const linked = useQuery({
+    queryKey: ["deal-audits", "linked", linkedDealId],
+    queryFn: () => listDealAudits({ dealId: linkedDealId, pageSize: 1 }),
+    enabled: !!linkedDealId,
+  });
+  useEffect(() => {
+    if (!linkedDealId || !linked.data) return;
+    const row = linked.data.items[0];
+    if (row) {
+      setSelectedDeal(row);
+    } else {
+      toast.info("That audit isn't waiting on you any more.");
+    }
+    // Consumed: a refresh should not reopen the drawer the user closed.
+    setLink({ audit: "" });
+  }, [linkedDealId, linked.data, setLink]);
+
   const changeDue = (next: DealAuditDueFilter) => {
     setDue(next);
     // A narrower set almost never has the page the wider one was on.
@@ -241,60 +356,31 @@ export function DealsAuditBoard() {
   /**
    * One requirement was resolved inside a deal.
    *
-   * ⚠ This used to remove a **row** by item id, which is no longer what
-   * happens: a row is a deal now, so the item has to be marked settled *within*
-   * its card and the card dropped only when its last outstanding requirement
-   * goes. The completion percentage moves with it, because the drawer is still
-   * open and reading from this cache entry.
+   * ⚠ This used to remove a **row** by item id, and later dropped the card
+   * when its last requirement cleared. Neither happens now: a row is a deal,
+   * and since PAC-106 a deal stays on the board until it is **submitted** —
+   * dropping it at zero open items hid the Submit button from the producer
+   * who had just earned it. The completion percentage moves with it, because
+   * the drawer is still open.
+   *
+   * The open drawer is updated from its own snapshot, not looked up in the
+   * page's cache: a deal opened from the notification link may not be on this
+   * page at all.
    */
   const handleResolved = (dealRowId: string, itemId: string) => {
-    let nextSelected: DealAuditDealRow | null = null;
-
-    queryClient.setQueryData<DealAuditListResponse>(listKey, (prev) => {
-      if (!prev) return prev;
-
-      const rows: DealAuditDealRow[] = [];
-      for (const row of prev.items) {
-        if (row.id !== dealRowId) {
-          rows.push(row);
-          continue;
-        }
-
-        // Settled, not removed: the drawer keeps listing it below the
-        // outstanding ones, which is what "sorted to the top" is relative to.
-        const nextItems = row.items.map((item) =>
-          item.id === itemId ? { ...item, open: false } : item,
-        );
-        const openCount = nextItems.filter((item) => item.open).length;
-        if (openCount === 0) continue; // last one cleared — the card leaves
-
-        const resolved = row.itemCount - openCount;
-        const updated: DealAuditDealRow = {
-          ...row,
-          items: nextItems,
-          openCount,
-          completionPct: row.itemCount
-            ? Math.round((resolved / row.itemCount) * 100)
-            : 100,
-        };
-        nextSelected = updated;
-        rows.push(updated);
-      }
-
-      const nextTotal = Math.max(0, rows.length ? prev.total : prev.total - 1);
-      return {
-        ...prev,
-        items: rows,
-        total: rows.length === prev.items.length ? prev.total : nextTotal,
-        // Recomputed with `total`, not left behind: the footer reads this, and
-        // a stale value showed "Page 1 of 2" for a set that now fits on one.
-        totalPages: Math.max(1, Math.ceil(nextTotal / prev.pageSize)),
-      };
-    });
-
-    // Keep the open drawer in step with the cache, or close it when its deal
-    // just cleared entirely.
-    setSelectedDeal(nextSelected);
+    queryClient.setQueryData<DealAuditListResponse>(listKey, (prev) =>
+      prev
+        ? {
+            ...prev,
+            items: prev.items.map((row) =>
+              row.id === dealRowId ? settleItem(row, itemId) : row,
+            ),
+          }
+        : prev,
+    );
+    setSelectedDeal((current) =>
+      current?.id === dealRowId ? settleItem(current, itemId) : current,
+    );
     void queryClient.invalidateQueries({ queryKey: ["deal-audits"] });
   };
 
