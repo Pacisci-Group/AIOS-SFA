@@ -1,0 +1,73 @@
+meta {
+  name: Download New Business Application
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/policies/{{reviewPolicyId}}/new-business-application/download
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+tests {
+  test("returns 200, or 404 when no application was uploaded", function () {
+    // `reviewPolicyId` comes from Deal Audits › Get Deal Audit Review. The
+    // demo seed uploads no files, so its policies have no application and this
+    // is a 404 there; a sale booked through the Sold form has one.
+    expect([200, 404]).to.include(res.getStatus());
+  });
+
+  test("an application comes back as a short-lived inline link", function () {
+    if (res.getStatus() === 200) {
+      const body = res.getBody();
+      expect(body.downloadUrl).to.be.a("string");
+      expect(body.filename).to.be.a("string");
+      expect(body.contentType).to.equal("application/pdf");
+      expect(body.expiresIn).to.be.a("number");
+    }
+  });
+}
+
+docs {
+  # GET /policies/:id/new-business-application/download — the signed application (PAC-106)
+
+  "View new business application" on the Deal Audit page: the drawer frames
+  the PDF beside the sale's sold date and the policy's effective date, which
+  is what the manager checks it against.
+
+  - **Module / permission:** the Policies controller's gate —
+    `deal_audits:read` **or** `crm_service:read`.
+  - **Data scope:** the policy rule (`loadOwnedPolicy`): a producer reaches the
+    policies of their own sales, a branch caller their branch, the owner the
+    agency. Out of reach is `404`, never `403`.
+
+  The application was uploaded on the Sold form (one per policy, required
+  since #23) and has been write-only until now: the policy view carries its
+  metadata, never the key.
+
+  Uses the reviewer's token because it is run after the Deal Audits folder,
+  which captures `reviewPolicyId`; a producer may call it for their own sale.
+
+  ## Response `200`
+  ```json
+  {
+    "downloadUrl": "https://…/agencies/…/nba/…/application.pdf?X-Amz-…",
+    "filename": "application.pdf",
+    "contentType": "application/pdf",
+    "expiresIn": 300
+  }
+  ```
+
+  Presigned **inline**, with the stored `contentType`, so the browser renders
+  it in the drawer's frame instead of downloading it.
+
+  ## Errors
+  - `403 Forbidden` — `deal_audits:read` and `crm_service:read` both missing.
+  - `404 Not Found` — no such policy, out of reach, or no application on file
+    (every migrated policy).
+}

@@ -52,6 +52,18 @@ export interface CoreAuditTemplateSpec {
   required: boolean;
   blocking: boolean;
   alwaysInclude: boolean;
+  /**
+   * `false` = manager-only (PAC-106 §3, confirmed item by item with David on
+   * 24 Aug): the manager checks it against the application and the producer
+   * has nothing to add, so it stays off the producer's hand-off board.
+   */
+  producerVisible: boolean;
+  /**
+   * The producer must attach a document to resolve it. The yes/no items —
+   * inspection, actual cash value, mortgagee — take a note instead ("Home
+   * inspection: yes/no, no upload").
+   */
+  requiresUpload: boolean;
   task: string;
 }
 
@@ -63,6 +75,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: true,
     alwaysInclude: true,
+    producerVisible: false,
+    requiresUpload: false,
     task: 'Verify the sold date on the deal matches the signed application.',
   },
   {
@@ -71,6 +85,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: true,
     alwaysInclude: true,
+    producerVisible: false,
+    requiresUpload: false,
     task: 'Verify each policy effective date matches what was bound.',
   },
   /*
@@ -88,6 +104,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Obtain the declarations page proving continuous prior coverage.',
   },
   /*
@@ -115,6 +133,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Send the ACORD cancellation form to the prior carrier.',
   },
   {
@@ -123,6 +143,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: true,
+    producerVisible: false,
+    requiresUpload: false,
     task: 'Confirm a quote recap exists and matches the sold coverage.',
   },
   {
@@ -131,6 +153,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: false,
     blocking: false,
     alwaysInclude: true,
+    producerVisible: false,
+    requiresUpload: false,
     task: 'Confirm the lead record is closed out and attributed correctly.',
   },
   {
@@ -139,6 +163,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: true,
+    producerVisible: false,
+    requiresUpload: false,
     task: 'Issue evidence of insurance to the client and any interested party.',
   },
 
@@ -149,6 +175,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: false,
+    requiresUpload: false,
     task: 'Verify every listed driver and excluded driver on the auto policy.',
   },
   {
@@ -157,6 +185,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Collect the defensive-driver certificate for the named driver.',
   },
   {
@@ -165,6 +195,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Collect the report card or transcript supporting the discount.',
   },
 
@@ -175,6 +207,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: false,
     task: 'Confirm the home inspection passed or was waived.',
   },
   {
@@ -183,6 +217,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: false,
     task: 'Verify the mortgagee clause, loan number and escrow billing details.',
   },
   {
@@ -191,6 +227,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Collect proof of the fire-subscription service for the discount.',
   },
   {
@@ -199,6 +237,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: false,
     task: 'Obtain the signed actual-cash-value acknowledgement.',
   },
   {
@@ -207,6 +247,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Collect the roof receipt or inspection proving hail resistance.',
   },
 
@@ -217,6 +259,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: false,
     task: 'Confirm the landlord property inspection passed or was waived.',
   },
   {
@@ -225,6 +269,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: false,
     task: 'Verify the mortgagee clause, loan number and escrow billing details.',
   },
   {
@@ -233,6 +279,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Collect proof of the fire-subscription service for the discount.',
   },
   {
@@ -241,6 +289,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: false,
     task: 'Obtain the signed actual-cash-value acknowledgement.',
   },
   {
@@ -249,6 +299,8 @@ export const CORE_AUDIT_TEMPLATES: CoreAuditTemplateSpec[] = [
     required: true,
     blocking: false,
     alwaysInclude: false,
+    producerVisible: true,
+    requiresUpload: true,
     task: 'Collect the roof receipt or inspection proving hail resistance.',
   },
 ];
@@ -279,6 +331,8 @@ export async function seedAuditTemplates(
           required: template.required,
           blocking: template.blocking,
           alwaysInclude: template.alwaysInclude,
+          producerVisible: template.producerVisible,
+          requiresUpload: template.requiresUpload,
           task: template.task,
         },
         $setOnInsert: {

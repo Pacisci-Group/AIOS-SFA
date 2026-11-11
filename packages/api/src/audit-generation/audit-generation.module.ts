@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import {
+  Activity,
+  ActivitySchema,
+} from '../activities/schemas/activity.schema';
 import { AuditTemplatesModule } from '../audit-templates/audit-templates.module';
 import {
   DealAudit,
@@ -25,6 +29,7 @@ import { AuditGenerationService } from './audit-generation.service';
       { name: DealAuditItem.name, schema: DealAuditItemSchema },
       { name: DealAudit.name, schema: DealAuditSchema },
       { name: Deal.name, schema: DealSchema },
+      { name: Activity.name, schema: ActivitySchema },
     ]),
     AuditTemplatesModule,
   ],

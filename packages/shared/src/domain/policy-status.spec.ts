@@ -52,10 +52,13 @@ describe('terminal statuses and the active flag', () => {
 });
 
 describe('flow-only statuses', () => {
-  it('covers both replacement statuses', () => {
-    // Neither can be chosen by hand: each means "replaced by *that* policy",
-    // and the flow that sets it writes the replacement in the same transaction.
+  it('covers both replacement statuses and plain Cancelled', () => {
+    // None can be chosen by hand: the two replacements each mean "replaced by
+    // *that* policy", and the flow that sets one writes the replacement in the
+    // same transaction; a plain cancellation goes through the Cancel button,
+    // which records why.
     expect([...FLOW_ONLY_POLICY_STATUSES]).toEqual([
+      'Cancelled',
       'Cancel Rewrite',
       'Company Transfer',
     ]);
@@ -79,10 +82,18 @@ describe('flow-only statuses', () => {
     }
   });
 
-  it('leaves plain Cancelled selectable', () => {
-    // A client who simply cancels is the common case and must not be forced
-    // through the rewrite wizard to record it.
-    expect(POLICY_STATUS_OPTIONS).toContain('Cancelled');
-    expect(isFlowOnlyPolicyStatus('Cancelled')).toBe(false);
+  it('routes plain Cancelled through the Cancel button, not the select', () => {
+    // A client who simply cancels is still the common case — it is a one-step
+    // dialog rather than the rewrite wizard, but it is no longer a status the
+    // Edit dialog can set without saying why.
+    expect(POLICY_STATUS_OPTIONS).not.toContain('Cancelled');
+    expect(isFlowOnlyPolicyStatus('Cancelled')).toBe(true);
+    // The migrated code normalizes first, like every other check here.
+    expect(isFlowOnlyPolicyStatus('hLpfg')).toBe(true);
+  });
+
+  it('still lets Lapsed be set by hand', () => {
+    expect(POLICY_STATUS_OPTIONS).toContain('Lapsed');
+    expect(isFlowOnlyPolicyStatus('Lapsed')).toBe(false);
   });
 });
