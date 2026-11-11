@@ -1,0 +1,63 @@
+meta {
+  name: Leave Out Chargeback
+  type: http
+  seq: 58
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "kind": "exclude_chargeback",
+    "chargebackId": "{{payoutsLeaveOutChargebackId}}",
+    "note": "Bruno: rewritten the same day"
+  }
+}
+
+script:pre-request {
+  // Only when the statement holds a chargeback that is not Bruno's own.
+  if (!bru.getVar("payoutsLeaveOutChargebackId")) bru.runner.skipRequest();
+}
+
+script:post-response {
+  const adjustments = (res.getBody() && res.getBody().adjustments) || [];
+  const left = adjustments.find(function (a) {
+    return a.kind === "exclude_chargeback" &&
+      a.chargebackId === bru.getVar("payoutsLeaveOutChargebackId");
+  });
+  bru.setVar("payoutsLeftOutAdjustmentId", left ? left.id : "");
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("leaves it out, with the note", function () {
+    const row = res.getBody().chargebacks.find(function (c) {
+      return c.chargebackId === bru.getVar("payoutsLeaveOutChargebackId");
+    });
+    expect(row.excluded).to.equal(true);
+    expect(row.excludedNote).to.equal("Bruno: rewritten the same day");
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/adjustments — leave a chargeback out (PAC-182)
+
+  `{ kind: "exclude_chargeback", chargebackId, note }`: the chargeback stays
+  on the statement, struck through with "Left out: <note>", and no longer
+  counts. **Restore Chargeback** undoes it. See **Add Chargeback Line** for
+  the permission and errors.
+
+  Skipped when the demo statement has no chargeback other than Bruno's own
+  (`payoutsLeaveOutChargebackId`, from **Add Chargeback Line**).
+}

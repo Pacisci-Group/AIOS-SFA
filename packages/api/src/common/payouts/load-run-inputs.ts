@@ -6,7 +6,7 @@ import {
   type PayoutChargeback,
   type PayoutSale,
 } from '@sfa/shared';
-import { Types, type Model } from 'mongoose';
+import { Types, type ClientSession, type Model } from 'mongoose';
 import type { Carrier } from '../../carriers/schemas/carrier.schema';
 import type { Chargeback } from '../../chargebacks/schemas/chargeback.schema';
 import type { Contact } from '../../contacts/schemas/contact.schema';
@@ -210,6 +210,11 @@ export async function loadRunInputs(
     window: InstantWindow;
     timeZone: string;
     memberIds: readonly string[];
+    /**
+     * For the ledger read only: a statement edit that writes a ledger row in
+     * its transaction (PAC-182's manual line) counts it in the same write.
+     */
+    session?: ClientSession | null;
   },
 ): Promise<RunInputs> {
   const { agencyId, month, window, timeZone } = args;
@@ -266,6 +271,7 @@ export async function loadRunInputs(
       customerName: 1,
     })
     .sort({ occurredAt: 1, _id: 1 })
+    .session(args.session ?? null)
     .lean<LeanChargeback[]>();
 
   // What a chargeback needs from elsewhere: its policy's carrier, and its

@@ -189,3 +189,80 @@ describe('renderStatementPdf', () => {
     expect(sha256Hex(a.buffer)).toMatch(/^[a-f0-9]{64}$/);
   });
 });
+
+describe('the signed copy (PAC-182)', () => {
+  const PDF = {
+    key: 'k',
+    sha256: 'b'.repeat(64),
+    size: 9000,
+    renderedAt: new Date('2026-11-06T15:00:00.000Z'),
+  };
+  const acceptance = {
+    acceptedAt: new Date('2026-11-10T17:05:00.000Z'),
+    typedName: 'Pat Producer',
+    accountEmail: 'producer@demoagency.local',
+    // Longer than a line: the audit line cuts it rather than wrapping.
+    userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ${'AppleWebKit/537.36 '.repeat(20)}`,
+  };
+  const disputed = (notes: string): StatementForPdf => ({
+    ...storedStatement(),
+    status: 'sent',
+    version: 2,
+    pdf: PDF,
+    history: [
+      {
+        version: 1,
+        outcome: 'superseded',
+        pdf: PDF,
+        sentAt: null,
+        sentBy: null,
+        sentByName: null,
+        at: new Date(),
+        rejection: { rejectedAt: new Date(), notes },
+      },
+    ],
+  });
+
+  it('keeps a typical month on one page, as its issued copy', async () => {
+    const issued = await render({
+      ...storedStatement(),
+      status: 'sent',
+      pdf: PDF,
+    });
+    const signed = await render({
+      ...storedStatement(),
+      status: 'accepted',
+      pdf: PDF,
+      acceptance,
+    });
+    keep('signed', signed.buffer);
+    expect(issued.pageCount).toBe(1);
+    expect(signed.pageCount).toBe(1);
+  });
+
+  it('breaks onto the same pages as its issued copy, notes and all', async () => {
+    const notes =
+      'The Lee chargeback was rewritten the same day, so it should not count.\n' +
+      'Also the SPIFF for the October contest is missing. '.repeat(30);
+    const issued = await render(disputed(notes));
+    const signed = await render({
+      ...disputed(notes),
+      status: 'accepted',
+      acceptance,
+    });
+    keep('disputed-resend', issued.buffer);
+    keep('disputed-resend-signed', signed.buffer);
+    expect(signed.pageCount).toBe(issued.pageCount);
+  });
+
+  it('caps 2,000 line breaks of notes inside one page', async () => {
+    const pdf = await render(disputed('x\n'.repeat(1000).trim()));
+    expect(pdf.pageCount).toBeLessThanOrEqual(2);
+    expect(pageObjects(pdf.buffer)).toBe(pdf.pageCount);
+  });
+
+  it('fits short notes in the Comments box beside the signature', async () => {
+    const pdf = await render(disputed('Wrong month'));
+    expect(pdf.pageCount).toBe(1);
+  });
+});

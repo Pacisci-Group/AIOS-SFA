@@ -1,4 +1,6 @@
 import type {
+  AcceptPayStatementInput,
+  AddStatementAdjustmentInput,
   ChargebackImportCommitResponse,
   ChargebackImportPresignResponse,
   ChargebackImportsResponse,
@@ -20,6 +22,8 @@ import type {
   PaymentStructuresResponse,
   PayoutPeopleResponse,
   PayoutSettingsView,
+  RejectPayStatementInput,
+  StatementPdfVariant,
   UpdatePaymentStructureInput,
   UpdatePayoutSettingsInput,
   UpdateStatementAdjustmentsInput,
@@ -34,7 +38,8 @@ import { uploadToPresignedUrl } from "@/lib/presigned-upload";
  * structures, both behind `agency:payouts:admin`. PAC-178/179: the monthly
  * runs, the statements and the activity behind them. PAC-180: the carrier
  * chargeback report import (admin). PAC-181: the Commission Statement PDF,
- * sending and reopening.
+ * sending and reopening. PAC-182: the employee's answer (accept with a
+ * signature, or dispute) and the reviewer's chargeback lines.
  */
 
 export const payoutsKey = ["payouts"] as const;
@@ -69,9 +74,15 @@ export const payStatementsListKey = (params: PayStatementsParams) =>
   [...payStatementListsKey, params] as const;
 export const payStatementKey = (id: string) =>
   [...payStatementsKey, "detail", id] as const;
-/** One issued version's link — fetched once per mount, never kept (`gcTime: 0`). */
-export const payStatementPdfKey = (id: string, version: number) =>
-  [...payStatementKey(id), "pdf", version] as const;
+/**
+ * One version's link — the issued file, or the signed copy of an accepted
+ * one (PAC-182) — fetched once per mount, never kept (`gcTime: 0`).
+ */
+export const payStatementPdfKey = (
+  id: string,
+  version: number,
+  variant: StatementPdfVariant = "issued",
+) => [...payStatementKey(id), "pdf", version, variant] as const;
 /** A draft's preview, keyed by its calculation so a recalculation refreshes it. */
 export const payStatementPreviewKey = (id: string, computedAt: string) =>
   [...payStatementKey(id), "preview", computedAt] as const;
@@ -214,7 +225,8 @@ export function updatePayStatementInputs(
 /**
  * The amounts a reviewer enters (10 Nov 2026), whole: Other bonuses /
  * SPIFFs (added), the compliance adjustment and other adjustments
- * (deducted), each positive or `null`. Recalculates the statement. 409
+ * (deducted), each positive or `null`, and a note on each (PAC-182; send all
+ * three, `''` for none — they replace whole). Recalculates the statement. 409
  * `PAYOUT_STATEMENT_NOT_EDITABLE` once sent; 403
  * `PAYOUT_STATEMENT_OWN_STATEMENT` on one's own without the admin permission.
  */
@@ -267,15 +279,88 @@ export function reopenPayStatement(id: string): Promise<PayStatementView> {
 
 /**
  * A short-lived inline link to an issued PDF (the current version, or an
- * earlier one). Fetched when it is needed and never stored.
+ * earlier one). Fetched when it is needed and never stored. `signed`
+ * (PAC-182) is the signed copy of the current version of an accepted
+ * statement; 404 for anything else.
  */
 export function getPayStatementPdfLink(
   id: string,
   version?: number,
+  variant?: StatementPdfVariant,
 ): Promise<PayStatementPdfLinkResponse> {
-  const query = version ? `?version=${version}` : "";
+  const search = new URLSearchParams();
+  if (version) search.set("version", String(version));
+  if (variant) search.set("variant", variant);
+  const query = search.toString();
   return apiFetch<PayStatementPdfLinkResponse>(
-    `/payouts/statements/${encodeURIComponent(id)}/pdf${query}`,
+    `/payouts/statements/${encodeURIComponent(id)}/pdf${query ? `?${query}` : ""}`,
+  );
+}
+
+// ── The employee's answer (PAC-182) ────────────────────────────────────
+
+/**
+ * The employee accepts their sent statement, signing it with their typed
+ * name: final, and a signed copy of the PDF is stored. Only the statement's
+ * own employee (403 `PAYOUT_STATEMENT_NOT_YOURS`), only while it is sent
+ * (409 `PAYOUT_STATEMENT_NOT_SENT`); 409 `PAYOUT_STATEMENT_CHANGED` when a
+ * reviewer changed it meanwhile.
+ */
+export function acceptPayStatement(
+  id: string,
+  input: AcceptPayStatementInput,
+): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/accept`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * The employee disputes their sent statement, saying what is wrong; a
+ * reviewer corrects it and sends it again. Same 403 / 409s as accepting.
+ */
+export function rejectPayStatement(
+  id: string,
+  input: RejectPayStatementInput,
+): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/reject`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * One chargeback line with a note, and the statement recalculated: leave a
+ * chargeback on it out, or add one the ledger does not hold. `payouts:write`,
+ * draft or disputed only (409 `PAYOUT_STATEMENT_NOT_EDITABLE`); 409
+ * `PAYOUT_CHARGEBACK_ALREADY_CHARGED` for a policy already charged back
+ * (naming who and when only for this employee), 409
+ * `PAYOUT_STATEMENT_CHANGED` when the statement changed meanwhile, 400 with
+ * a message for a carrier not on the statement.
+ */
+export function addPayStatementAdjustment(
+  id: string,
+  input: AddStatementAdjustmentInput,
+): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/adjustments`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+/**
+ * Undo a chargeback line: restore a left-out chargeback, or remove an added
+ * one — which deletes its ledger row. 400 for an entered amount (clear it
+ * with {@link updatePayStatementAdjustments}).
+ */
+export function removePayStatementAdjustment(
+  id: string,
+  adjustmentId: string,
+): Promise<PayStatementView> {
+  return apiFetch<PayStatementView>(
+    `/payouts/statements/${encodeURIComponent(id)}/adjustments/${encodeURIComponent(adjustmentId)}`,
+    { method: "DELETE" },
   );
 }
 

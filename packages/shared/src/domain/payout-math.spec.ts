@@ -404,6 +404,43 @@ describe('computeStatement', () => {
     expect(result.totals.netPremium).toBe(6100);
   });
 
+  // PAC-182: an added chargeback is the ledger row it wrote; the adjustment
+  // carries only the note, and never counts a second time.
+  it('notes an added chargeback and charges it once, from its ledger row', () => {
+    const result = computeStatement(
+      input({
+        sales: [sale('2026-10-05', null, [['Allstate', 'Auto', 1000]])],
+        chargebacks: [
+          { ...chargeback('cb-man', 'Allstate', null, 200), reason: 'manual' },
+          chargeback('cb1', 'Allstate', null, 100),
+        ],
+        adjustments: [
+          {
+            id: 'a1',
+            kind: 'add_chargeback',
+            chargebackId: 'cb-man',
+            amount: null,
+            note: 'Carrier called it in',
+          },
+        ],
+      }),
+    );
+    const byId = new Map(
+      result.chargebacks.map((row) => [row.chargebackId, row]),
+    );
+    expect(byId.get('cb-man')).toMatchObject({
+      excluded: false,
+      addedNote: 'Carrier called it in',
+    });
+    expect(byId.get('cb1')?.addedNote).toBeNull();
+    expect(result.totals.chargebackTotal).toBe(300);
+    expect(result.premiumLines[0]).toMatchObject({
+      chargebacks: 300,
+      netPremium: 700,
+      netCommission: 70,
+    });
+  });
+
   // Owner, 10 Nov 2026: the chargeback comes off the sold premium and the
   // rate applies to what remains — its commission is not deducted again.
   it('pays the rate on net premium and deducts nothing a second time', () => {

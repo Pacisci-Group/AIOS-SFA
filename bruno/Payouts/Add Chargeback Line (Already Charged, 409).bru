@@ -1,0 +1,44 @@
+meta {
+  name: Add Chargeback Line (Already Charged, 409)
+  type: http
+  seq: 56
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "kind": "add_chargeback",
+    "policyNumber": "{{payoutsManualPolicy}}",
+    "carrier": "{{payoutsCarrier}}",
+    "amount": 10,
+    "customerName": null,
+    "note": "The same policy again"
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsAddedAdjustmentId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 409 PAYOUT_CHARGEBACK_ALREADY_CHARGED", function () {
+    expect(res.getStatus()).to.equal(409);
+    expect(res.getBody().code).to.equal("PAYOUT_CHARGEBACK_ALREADY_CHARGED");
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/adjustments — a policy is charged back once
+
+  The policy **Add Chargeback Line** just charged back, again: `409`
+  `PAYOUT_CHARGEBACK_ALREADY_CHARGED`. See that request.
+}

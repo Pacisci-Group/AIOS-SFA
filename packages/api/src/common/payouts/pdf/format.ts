@@ -36,6 +36,19 @@ export function day(date: Date, timeZone: string): string {
   }).format(date);
 }
 
+/** "Nov 10, 2026, 3:42 PM CST", on the agency's clock — an audit line's time. */
+export function dayTime(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone,
+    timeZoneName: 'short',
+  }).format(date);
+}
+
 /**
  * The characters the WinAnsi code page holds beyond Latin-1's printable
  * range (0x80–0x9F) — curly quotes, dashes, the ellipsis, the euro.

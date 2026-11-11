@@ -36,6 +36,20 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       version: 1,
       senderName: 'Olive Owner',
     },
+    'payouts.statement_rejected': {
+      statementId: '6ae1bceaa8d09054f813c0bb',
+      month: '2026-10',
+      monthLabel: 'October 2026',
+      version: 1,
+      employeeName: 'Pat Producer',
+    },
+    'payouts.statement_accepted': {
+      statementId: '6ae1bceaa8d09054f813c0bb',
+      month: '2026-10',
+      monthLabel: 'October 2026',
+      version: 2,
+      employeeName: 'Pat Producer',
+    },
   };
 
 describe('renderNotification', () => {
@@ -124,6 +138,34 @@ describe('renderNotification', () => {
     expect(rendered.title).toBe(
       'Your commission statement for October 2026 has been reissued',
     );
+  });
+
+  it('tells the reviewers a statement was disputed, without the notes', () => {
+    expect(
+      renderNotification('payouts.statement_rejected', {
+        ...FIXTURES['payouts.statement_rejected'],
+        notes: 'My October total is $400 short',
+      }),
+    ).toEqual({
+      title: 'Pat Producer disputed their commission statement',
+      body: 'The October 2026 statement needs correcting before it is sent again.',
+      href: '/payouts/statements/6ae1bceaa8d09054f813c0bb',
+    });
+  });
+
+  it('tells them a statement was accepted, and opens the Payouts page without an id', () => {
+    expect(
+      renderNotification('payouts.statement_accepted', FIXTURES['payouts.statement_accepted']),
+    ).toEqual({
+      title: 'Pat Producer accepted their commission statement',
+      body: 'The October 2026 statement is signed.',
+      href: '/payouts/statements/6ae1bceaa8d09054f813c0bb',
+    });
+    expect(renderNotification('payouts.statement_accepted', { statementId: '../x' })).toEqual({
+      title: 'A commission statement was accepted',
+      body: 'It is signed.',
+      href: '/payouts',
+    });
   });
 
   it('never prints an amount, and falls back to My Pay without a statement id', () => {

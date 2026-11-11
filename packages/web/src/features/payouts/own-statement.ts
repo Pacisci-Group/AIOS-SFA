@@ -21,3 +21,16 @@ export function useOwnStatementBlocked(
     !can(AgencyPermission.PayoutsAdmin),
   );
 }
+
+/**
+ * Is the signed-in person this statement's employee, whatever their
+ * permissions? Only they accept or dispute it (PAC-182) — not a reviewer, not
+ * `agency:payouts:admin`: the answer is their signature. The API refuses
+ * anyone else with `PAYOUT_STATEMENT_NOT_YOURS`.
+ */
+export function useIsOwnStatement(
+  statement: { userId: string } | null | undefined,
+): boolean {
+  const { user } = useAuth();
+  return Boolean(statement && user && statement.userId === user.id);
+}

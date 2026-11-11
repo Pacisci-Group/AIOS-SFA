@@ -915,9 +915,15 @@ export function computeStatement(
   // Chargebacks, each on the line of the sale it reverses. One older than
   // the structure's window (months after its cancellation) is left out.
   const exclusions = new Map<string, string>();
+  // A manager's added chargeback is an ordinary ledger row to the math; its
+  // adjustment only says why it was added.
+  const additions = new Map<string, string>();
   for (const adjustment of input.adjustments) {
     if (adjustment.kind === 'exclude_chargeback' && adjustment.chargebackId) {
       exclusions.set(adjustment.chargebackId, adjustment.note);
+    }
+    if (adjustment.kind === 'add_chargeback' && adjustment.chargebackId) {
+      additions.set(adjustment.chargebackId, adjustment.note);
     }
   }
   const windowMonths = structure.chargebackWindowMonths;
@@ -955,6 +961,9 @@ export function computeStatement(
           : outOfWindow
             ? `More than ${windowMonths} months after the cancellation, so it is not charged.`
             : null,
+        addedNote: additions.has(row.chargebackId)
+          ? (additions.get(row.chargebackId) ?? '')
+          : null,
       };
     })
     .sort(

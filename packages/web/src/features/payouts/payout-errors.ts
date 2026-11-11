@@ -3,6 +3,7 @@ import {
   PAYOUT_STATEMENT_CHANGED,
   PAYOUT_STATEMENT_NOT_EDITABLE,
   PAYOUT_STATEMENT_NOT_SENT,
+  PAYOUT_STATEMENT_NOT_YOURS,
   PAYOUT_STATEMENT_OWN_INPUTS,
   PAYOUT_STATEMENT_OWN_STATEMENT,
 } from "@sfa/shared";
@@ -11,19 +12,28 @@ import { ApiError } from "@/lib/api-client";
 /**
  * The page's own words for a refusal whose cause the person may not see from
  * the page. Keyed by `code`, never by the API's message.
+ *
+ * `PAYOUT_CHARGEBACK_ALREADY_CHARGED` (PAC-182) is left to the API on
+ * purpose: when the policy was charged back to the statement's own employee
+ * its message says so, and in which month, which no fixed sentence here can.
  */
 const CODE_MESSAGES: Record<string, string> = {
   [PAYOUT_STATEMENT_OWN_INPUTS]:
     "Someone else enters the figures on your own statement — they decide your pay.",
   [PAYOUT_STATEMENT_OWN_STATEMENT]:
     "Someone else recalculates, sends and reopens your own statement — it is your pay.",
-  // Sending, or (rarely) reopening, raced a change to the statement.
+  // Sending, reopening, answering or a chargeback line raced another change
+  // to the statement.
   [PAYOUT_STATEMENT_CHANGED]:
-    "It changed while it was being sent or reopened. Review it and try again.",
+    "The statement changed meanwhile. Reload it, review it and try again.",
   [PAYOUT_STATEMENT_NOT_EDITABLE]:
     "This statement has been sent, so it can no longer change. Reload to see where it stands.",
+  // Reopening, accepting or disputing one that is no longer sent: answered,
+  // reopened or sent again meanwhile.
   [PAYOUT_STATEMENT_NOT_SENT]:
-    "Only a sent statement can be reopened. Reload to see where it stands.",
+    "This statement is no longer waiting for an answer. Reload to see where it stands.",
+  [PAYOUT_STATEMENT_NOT_YOURS]:
+    "Only the person this statement is for can accept or dispute it.",
   [PAYOUT_RUN_GENERATING]:
     "This month is being calculated right now. Try again in a minute.",
 };

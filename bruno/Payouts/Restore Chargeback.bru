@@ -1,0 +1,62 @@
+meta {
+  name: Restore Chargeback
+  type: http
+  seq: 59
+}
+
+delete {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments/{{payoutsLeftOutAdjustmentId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsLeftOutAdjustmentId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("counts the chargeback again", function () {
+    const s = res.getBody();
+    const row = s.chargebacks.find(function (c) {
+      return c.chargebackId === bru.getVar("payoutsLeaveOutChargebackId");
+    });
+    expect(row.excluded).to.equal(false);
+    expect(s.adjustments.map(function (a) { return a.id; }))
+      .to.not.include(bru.getVar("payoutsLeftOutAdjustmentId"));
+  });
+}
+
+docs {
+  # DELETE /payouts/statements/:id/adjustments/:adjustmentId — undo a chargeback line (PAC-182)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope; not your own statement without `agency:payouts:admin`. Draft and
+  disputed statements only.
+
+  Removes one chargeback line and recalculates the statement:
+
+  - an `exclude_chargeback` adjustment — the chargeback counts again;
+  - an `add_chargeback` adjustment — **its ledger row is deleted too**
+    (**Remove Chargeback Line**). The one deletion the chargeback ledger
+    allows, and only while its statement is a draft or disputed: on a
+    disputed statement that row was printed on the disputed version, whose
+    file stays in `history`.
+
+  The three entered amounts are not removed here: clear them with
+  **Update Pay Statement Adjustments**.
+
+  **Response `200`** — the recalculated statement.
+
+  **Errors** — `400` an entered amount's adjustment (`spiff`, `compliance`,
+  `manual`); `403` as for adding; `404` an adjustment not on the statement,
+  or a statement outside your scope; `409` `PAYOUT_STATEMENT_NOT_EDITABLE`
+  once sent or accepted (nothing is removed), `PAYOUT_STATEMENT_CHANGED` when
+  it changed meanwhile.
+}

@@ -262,8 +262,8 @@ write routes `@RequireWrite(ModuleKey.Payouts)`; the rest `payouts:read`.
 | `POST …/:id/send` | write | from `draft`/`rejected`; render PDF → `putObject` → `pdf`; re-send pushes a `history` entry and bumps `version`; `status:'sent'`; emit `payouts.statement_sent` |
 | `POST /payouts/runs/:id/send-all` | write | every `draft` in scope → `{sent, skipped}` |
 | `POST …/:id/reopen` | write | `sent` → `draft` (history `reopened`) |
-| `POST …/:id/adjustments`, `DELETE …/:id/adjustments/:adjId` | write | editable only. `exclude_chargeback {chargebackId, note}` / `add_chargeback {policyId?, policyNumber, amount, carrier?, note}` (writes a ledger row `reason:'manual'`, `statementId`; deleting the adjustment deletes that row — the only ledger deletion, and only on an unissued statement) / `spiff {amount ≥ 0, note}` (Other Bonuses / SPIFFs) / `compliance {amount ≤ 0, note}` (Compliance Adjustment) / `manual {amount, note}` (Other Adjustments) → `recomputeStatement` |
-| `POST …/:id/accept {typedName, acknowledged: true}` | read, `statement.userId === access.userId` | from `sent`; the PDF's acknowledgment block (typed name = signature, date signed, SHA-256 of the issued file) is filled and the PDF re-rendered → `signedPdf`; `acceptance {acceptedAt, typedName, ip: req.ip, userAgent}`; emit `payouts.statement_accepted` |
+| `POST …/:id/adjustments`, `DELETE …/:id/adjustments/:adjId` | write | editable only. `exclude_chargeback {chargebackId, note}` / `add_chargeback {policyId?, policyNumber, amount, carrier?, note}` (writes a ledger row `reason:'manual'`, `statementId`; deleting the adjustment deletes that row — the only ledger deletion, and only on an unissued statement. *As built: on a draft or disputed one; the three entered amounts stayed a `PATCH` with notes — see "As built — PAC-182"*) / `spiff {amount ≥ 0, note}` (Other Bonuses / SPIFFs) / `compliance {amount ≤ 0, note}` (Compliance Adjustment) / `manual {amount, note}` (Other Adjustments) → `recomputeStatement` |
+| `POST …/:id/accept {typedName, acknowledged: true}` | read, `statement.userId === access.userId` | from `sent`; the PDF's acknowledgment block (typed name = signature, date signed, SHA-256 of the issued file) is filled and the PDF re-rendered → `signedPdf`; `acceptance {acceptedAt, typedName, ip: req.ip, userAgent}`; emit `payouts.statement_accepted`. *As built: no IP (owner, 10 Nov 2026) — see "As built — PAC-182".* |
 | `POST …/:id/reject {notes}` | read, owner of the statement | from `sent`; "Comments / Dispute notes" required (≤ 2000); emit `payouts.statement_rejected` |
 | `GET …/:id/pdf?variant=issued\|signed` | read (scope) | `{url}` presigned inline, minted per read, never stored |
 | `GET …/:id/pdf-preview` | write | streams a fresh render of a draft (not stored) |
@@ -328,8 +328,9 @@ section under `sections/`, `render-statement-pdf.ts` `renderStatementPdf(model, 
 in-app Activity view.
 
 Dependencies: `pdfkit@^0.20.2` (runtime), `@types/pdfkit` (dev). Keys via
-`buildObjectKey({ agencyId, purpose: 'pay-statements', filename: 'commission-statement-<month>-v<n>.pdf', parts: [statementId], unique: false })`
-and `…-v<n>-signed.pdf`; `application/pdf`; `putObject(key, buffer, type)`.
+`buildObjectKey({ agencyId, purpose: 'pay-statements', filename: 'commission-statement-<month>-v<n>.pdf', parts: [statementId] })`
+and `…-v<n>-signed.pdf`; `application/pdf`; `putObject(key, buffer, type)`. *As built: unique keys
+(`<uuid>-commission-statement-…`), not `unique: false` — see "As built — PAC-181", decision 2.*
 
 ## 8. Web
 
@@ -1365,7 +1366,7 @@ when the response names them as its owner; no horizontal scroll at 375px. No dem
 was changed by the checks; each Bruno run added two versions to Pat Producer's November
 draft, as before (now v17).
 
-**Owner changes — 10 Nov 2026** (uncommitted, on the PAC-181 branch).
+**Owner changes — 10 Nov 2026** (in #176, `540f17d`).
 
 1. **Commission is the rate on net premium; no "chargeback commission impact".** The
    statement read as charging a chargeback twice: the carrier table showed premium net of
@@ -1419,3 +1420,247 @@ premium. Headless Chrome, light and dark, 11/11: no impact line and the card on 
 recalculated draft; Alex Rivera's statement sent earlier keeps its impact line and shows the
 card read-only; an Activity row opens `/clients/:id` on Enter; no horizontal scroll at 375px.
 Nothing was saved from the browser.
+
+## As built — PAC-182, PR 6 — the plan's PR 4b (10 Nov 2026)
+
+Branch `awaris/pac-182-accept-dispute-adjust-and-re-send-commission-statements`, cut from
+the PAC-181 branch (#176, `540f17d`); PR base = that branch. The stack is #162 ← #169 ←
+#171 ← #172 ← #174 ← #176. Linear was not authorised in the session, so the branch name is
+ours and PAC-182's "Comp plans follow-up (6 Nov 2026)" was not read; the one item this plan
+records for it, the CRM's yearly profit bonus as a manual adjustment, is a SPIFF with a note.
+
+**Owner decisions (10 Nov 2026)**
+
+1. **Adjustments.** The three-amount `PATCH` stays, with an optional note per amount.
+   Chargeback lines get their own routes. No free-form manual lines.
+2. **Send all stays in the request**: no worker job.
+3. **No IP address** on the acceptance or the signed copy. Behind the load balancer the
+   API sees only the balancer's address, and `X-Forwarded-For` is the client's to say
+   (`TrustedProxyThrottlerGuard`'s docblock). Departs from A7 and the API table.
+
+**What landed**
+
+- **Shared.** `domain/payouts.ts`: `PAYOUT_STATEMENT_NOT_YOURS` (403),
+  `PAYOUT_CHARGEBACK_ALREADY_CHARGED` (409); `STATEMENT_ACKNOWLEDGMENT_TEXT` (moved out of
+  the PDF model so the Accept dialog prints the same sentence), `MAX_STATEMENT_*` limits
+  (typed name 120, dispute notes 2,000, adjustment note 500, user agent 512),
+  `normalizeStatementText`, `STATEMENT_PDF_VARIANTS`, `statementSignedPdfFilename`;
+  `StatementAcceptanceView`, `StatementRejectionView`, `AcceptPayStatementInput`,
+  `RejectPayStatementInput`, `AddStatementAdjustmentInput`; `PayStatementView.acceptance /
+  rejection / signedPdf`, `StatementHistoryEntryView.rejection`,
+  `StatementChargebackView.addedNote`; entered-amount notes
+  (`StatementEnteredAdjustmentNotes`, `enteredAdjustmentNotesOf`, and
+  `statementEnteredAdjustmentsError` refusing a note with no amount or over 500). The engine
+  fills `addedNote` from an `add_chargeback` adjustment; the money stays the ledger row's.
+  Notifications `payouts.statement_rejected` (email + push) and
+  `payouts.statement_accepted` (push), with renderers: who, which month, a link, no notes,
+  no amounts.
+- **Collections.** `payStatements` gains `rejection { rejectedAt, notes }`, `acceptance
+  { acceptedAt, typedName, accountEmail, userAgent }`, `signedPdf { key, sha256, size,
+  renderedAt }` and `history[].rejection`, all nullable. No migration, no new index.
+- **Endpoints** (`PayoutsStatementsController`; `StatementSignoffService`,
+  `PayStatementsService`):
+
+  | Route | Guard | |
+  |---|---|---|
+  | `POST /payouts/statements/:id/accept { typedName, acknowledged: true }` | `payouts:read`, own only | `sent → accepted` (final); signed copy; notify |
+  | `POST /payouts/statements/:id/reject { notes }` | `payouts:read`, own only | `sent → rejected`; notify |
+  | `POST /payouts/statements/:id/adjustments` | `payouts:write`, not own | `exclude_chargeback { chargebackId, note }` or `add_chargeback { policyNumber, carrier, amount, customerName, note }`; draft or disputed |
+  | `DELETE /payouts/statements/:id/adjustments/:adjustmentId` | `payouts:write`, not own | restore a left-out chargeback, or remove an added one and its ledger row; 400 for the three amounts |
+  | `PATCH /payouts/statements/:id/adjustments` | as before | gains `notes` |
+  | `GET /payouts/statements/:id/pdf?variant=issued\|signed` | as before | the signed copy of an accepted statement's current version |
+
+- **Access.** `loadOwnSentStatement`: the caller's own non-draft statement, else 403
+  `PAYOUT_STATEMENT_NOT_YOURS` if they can see it (the admin included: an answer is a
+  signature), 409 `PAYOUT_STATEMENT_NOT_SENT` for their own draft, 404 otherwise; then 409
+  unless `sent`. `loadVisibleStatement` now also admits a reviewer's **own** non-draft
+  statement outside their scope: a statement keeps the branch it was computed in, so a
+  branch manager who moved branch listed theirs in My Pay and got a 404 opening it.
+- **Accept.** Renders the issued statement again (`issue: { kind: 'issued', at: sentAt }`,
+  so the Generated Date matches) with `acceptance`, uploads it under a unique key
+  (`…-v<n>-signed.pdf`), then one conditional write on `{ status: 'sent', version,
+  updatedAt }`; a miss deletes the upload and is 409 `PAYOUT_STATEMENT_CHANGED` (still
+  sent) or `PAYOUT_STATEMENT_NOT_SENT`. The issued `pdf` is kept. Neither `version` nor
+  `history` changes.
+- **Dispute.** One conditional write setting `status` and `rejection`; `pdf`, `sentAt`,
+  `sentBy` stay, because the re-send builds the `superseded` row from them. Sending it
+  again now copies `rejection` onto that row and clears it on the statement.
+- **Notifications.** `statementReviewerIds` (`common/payouts/statement-answered.ts`): the
+  branch managers of the statement's branch (`User.branchId` as an ObjectId), else the
+  agency owners, never the employee. Accepted also tells `sentBy`. Best effort, once per
+  version (`deterministicEventId('<type>', '<id>:v<n>')`, dedupe
+  `pay-statement:<id>:<rejected|accepted>:v<n>`); no event when nobody is left to tell.
+- **PDF.** `statement-pdf-model.ts` stays the only reader. `acknowledgment` gains `checked`
+  and `audit`: on the signed copy the box is ticked (a drawn path; WinAnsi has no check
+  mark), the typed name is set in Helvetica-Oblique, the date signed is a day in the
+  statement's zone, and three audit lines print the account and time, the browser, and the
+  issued file's stored SHA-256. `comments` are the dispute notes this version answers:
+  `rejection` while disputed (the send and the preview render it as the next version),
+  else the `superseded` history row of `version − 1`, so the issued and signed copies of a
+  version agree; none after a reopen. Notes that fit print in the Comments box; longer ones
+  move to a full-width box that wraps (`heightOfString`, capped to fit a fresh page, then
+  an ellipsis). The audit lines' height is reserved on every render, so the two copies of
+  a version break onto the same pages; a typical month stays one page. Chargeback rows
+  print "Added: <note>" beside "Left out: <note>". New `format.ts` `dayTime`.
+- **Chargeback lines.** Leave out: the row must be on the statement, not already left out,
+  not out of the chargeback window, not one added on it. Add: inside `TransactionRunner`,
+  under the import's ledger lock (`lockChargebackLedger`, now in
+  `common/payouts/chargeback-writers.ts` and shared with the commit), `existingChargebacks`
+  must find nothing on the policy (409); then `writeManualChargeback` (`reason: 'manual'`,
+  `source: 'app'`, `statementId`, `statementMonth`, `occurredAt` = the month's first
+  instant in the statement's zone, `soldAdjustment: 0`, `producerName`, the statement's
+  branch, else the person's, else the agency's first), tracked for the no-replica-set
+  fallback, then the conditional `$push`. The policy is found by number through
+  `findPolicyByNumber`, extracted from `matchImportRows` (which now uses it too). A held
+  policy lends its id, type, household and sale, and its carrier is read through it;
+  otherwise the carrier must be one of the statement's `premiumLines` (400 else), since it
+  picks the rate. Remove: in one transaction, the conditional `$pull` first, then the
+  ledger row (`reason: 'manual'` and this `statementId` only).
+- **Recalculation.** After a month recalculation deletes never-issued drafts, it deletes
+  the month's `manual` rows whose `statementId` is no longer one of the run's statements.
+  An orphan would block its policy for good and come back on a later draft with no
+  adjustment to remove it.
+- **Web.** The employee's **Accept** (acknowledgment sentence as a required tick, typed
+  name, "final") and **Dispute** (required notes, 2,000 counter) on their own sent
+  statement; a card above the tabs with the dispute ("Your manager is correcting it…" /
+  "Correct it, then send it again."), the acceptance, or a prompt to answer. Reviewer: a
+  row menu on Chargeback detail (Leave out… / Restore / Remove, Remove confirmed), **Add
+  chargeback** (carrier from the statement's lines), a note beside each entered amount
+  shown under its summary line. PDF tab: the **signed copy** once accepted, the issued
+  copy a click away; for whoever corrects a disputed statement, the preview of the next
+  version first, the disputed copy a click away; Earlier versions shows what was disputed.
+  My Pay: "N statements are waiting for your answer" and **Review** on those rows. The
+  notification stream refreshes the lists, the runs and the open statement (`exact`, so
+  the PDF link is not refetched) on the three statement notifications. `TextareaField`
+  gains `maxLength` with a counter. The accept and add-chargeback forms validate on change:
+  under a form-level schema a blur fills in every field's error, and the name being typed
+  showed a stale one.
+- **Bruno.** 17 new requests (85 in the folder): chargeback lines at seq 55–60 (a new
+  policy number each run, `payoutsManualPolicy`; the carrier from **Get Pay Statement**),
+  accept and dispute checks, **Dispute Pay Statement** and **Send Pay Statement (Again,
+  After Dispute)** at 69–76, before the reopen. **Accept is opt-in** at 83–85
+  (`--env-var payoutsAcceptStatement=true`): accepting ends the month's demo statement, so
+  later runs would fail. Each run now adds two versions to the demo draft. README rows and
+  `.bru` docs for every route and code.
+
+**Decisions taken while building** (state them in the PR)
+
+1. **The typed name is not matched against the user's name.** Any one-line name signs;
+   the account's email is recorded beside it.
+2. **The audit line cites the stored `pdf.sha256`.** The issued file is not read back and
+   re-hashed. pdfkit stamps a creation date and file ID into every render, so a re-render
+   could never reproduce the issued hash anyway.
+3. **A manual chargeback obeys "a policy is charged back once"**, under the same lock as a
+   report commit, and a later report line for that policy is a duplicate.
+4. **A manual chargeback can be removed while the statement is a draft or disputed**,
+   deleting its ledger row. On a disputed statement the disputed version's PDF printed it;
+   that file stays in history. The ledger schema's docblock now says so. Sent and accepted
+   statements remove nothing (409).
+5. **Notes on the three amounts show on the page, not the PDF**: the summary grid is the
+   owner's layout. The chargeback table does print its notes.
+6. **A disputed statement stays visible to its employee while it is corrected**, under a
+   "being corrected" line; it can change until it is sent again.
+7. **A re-sent statement with long dispute notes usually runs to a second page**; both
+   copies of the version break the same way.
+8. **Dispute notes stay out of the notification** (they may quote pay).
+9. **The PATCH replaces notes whole**: leaving `notes` out keeps none, as `null` keeps no
+   amount.
+
+**Verified (10 Nov):**
+- **Tests.** Shared 486 (engine 1, entered-amount notes and text 4, renderers 2 new); API
+  unit 1,679 (PDF model 5, renderer 4 new); e2e 6 suites, 158 tests (`payouts-lifecycle`
+  50, 19 new: dispute access and validation, the invariant, recipients and the owner
+  fallback, the re-send moving the notes, accept and its signed object and hash, terminal
+  for every route, a lost race deleting the upload, an employee outside their branch,
+  `variant`, leave out / restore / add / remove with the ledger row, charged once, carrier
+  rule, notes, scope and own-statement 403s, sent 409s, a recalculation dropping an
+  orphaned manual row); `deliver-notification` and `notifications` 3 suites, 41.
+- **Static checks.** API `tsc` at the 24-error baseline, none in touched files; ESLint
+  clean on `src/payouts`, `src/common/payouts` and the lifecycle e2e; Prettier clean on the
+  touched api and shared files (`--config packages/api/.prettierrc`) and the web files
+  (defaults). `shared/src/notifications/render.ts`, `render.spec.ts` and the web's
+  `use-notification-stream.ts` keep their own style. Web `npm run lint` clean.
+- **Bruno.** Payouts twice against the watch API on `app.sfa.local:4000`: 85 requests, 80
+  passed, 5 skipped (the Send-all guard and the opt-in accept), 146 tests.
+- **PDF.** The signed copy and a re-sent statement with long notes were written with
+  `PDF_OUT_DIR` and rasterised: ticked box, italic typed name, Chicago date, three audit
+  lines with a long user agent cut on one line; the notes wrapped in a full-width box on
+  page 2, identical on both copies.
+- **Headless Chrome.** Demo agency, the watch Vite on `:5173`, dark, light and 375px, 25
+  checks and a re-check of the two forms: Pat Producer's November statement sent, disputed
+  by Pat, the notes seen by the branch manager, a chargeback added and a SPIFF noted by
+  the owner, the preview first on the PDF tab, sent again as v24 with the dispute under
+  Earlier versions; Pat's October statement accepted, its signed copy on the PDF tab; My
+  Pay's prompt; Accepted in the statements table; no horizontal scroll at 375px. Console:
+  the known `forwardRef` warnings and the missing `favicon.ico` only.
+
+**Left in the local demo agency.** Pat Producer's **October 2026 statement is accepted**
+(v2, signed copy in MinIO), with its `payouts.statement_accepted` notifications. His
+November draft is at **v26**: each Bruno run adds two versions, the browser check three,
+and the history now holds `superseded` rows with Bruno's and the browser's dispute notes.
+The browser's chargeback and SPIFF were removed and no manual ledger row is left. The
+`payouts.statement_rejected` / `_accepted` notifications from the runs and the check are in
+the demo users' inboxes; emails were logged only.
+
+**Not in this PR.** The app's own cancellation does not consult the ledger, so cancelling
+a policy with a chargeback after a manual (or imported) line charges it twice. This
+already applies to report rows; it needs a ticket.
+
+### Review fixes (11 Nov 2026)
+
+A `/code-review` of the PR returned 14 findings; eight were real and are fixed here. The
+other six were not problems (the carrier rule, an orphan only on the no-replica-set
+fallback, the amber classes the rest of Payouts uses) or duplication left as it is.
+
+1. **A held policy with no carrier kept none.** `manualChargebackDoc` stored `carrier:
+   null` for every held policy, so one held without a carrier came off the no-carrier
+   rate and then blocked the policy. The row now keeps the carrier `addChargeback`
+   chose; it is `null` only when the policy has its own.
+2. **One write per edit.** Every statement edit — the inputs, the three amounts, a
+   chargeback line, Recalculate — used to save and then recalculate in a second write. A
+   send or a month's run between the two left figures that did not match the
+   adjustments, and for a manual line a ledger row the sent totals left out that still
+   blocked its policy. Now `recomputeStatement` (`common/payouts/generate-run.ts`) writes
+   only onto the statement as it read it (`updatedAt`) and takes the reviewer's `edit`
+   (`StatementEdit`: whole `inputs`, or the whole `adjustments` array, with the
+   `updatedAt` the reviewer read) into that same write; with a `session` it reads the
+   ledger (`loadRunInputs`) and writes inside the caller's transaction. A miss is 409
+   `PAYOUT_STATEMENT_CHANGED`. Add and remove run the ledger write and the statement write
+   in one transaction (remove deletes the row first, so the recalculation no longer reads
+   it). The month's run writes an existing statement only if unchanged since it read it;
+   one edited meanwhile is counted as raced and recalculated in the sweep after the run is
+   stored, which now takes every editable statement whose `computedAt` is not this run's
+   (retried up to three times). `PayStatementsService` lost `writeAdjustments` and
+   `recomputed`; `saveEdit` and `moved` replace them, and `updateAdjustments` no longer
+   inlines its own conditional write.
+3. **The signed copy printed today's branding.** `PayStatementPdf` gains `agencyName` and
+   `logoKey` (what the header band printed; history rows and `signedPdf` carry them too).
+   The send stores them; the accept renders with them (`renderContext(…, printed)`),
+   falling back to today's branding for a file issued before. A replaced logo keeps its
+   file: every upload has a key of its own.
+4. **The "already charged" 409** named whoever the policy was charged to, in any branch,
+   and the month of an app row in UTC. It now names the person and month only when it is
+   the statement's own employee (`ExistingChargeback.producerId`), on the agency's
+   calendar (`businessDay` in the statement's zone, `monthLabel`); otherwise it says only
+   that the policy has been charged back.
+5. **Upper-case ids** passed the shared check and then matched nothing. The Payouts DTOs
+   lower-case every id (`hexId.toLowerCase()`).
+6. **A deactivated sender** was told of the acceptance. `activeAccountIds`
+   (`statement-answered.ts`) keeps only active accounts, by `activeRoleHolders`' rule. A
+   sender who is active but lost `payouts:write` is still told; the link gives them a 404.
+7. **Every manual add read every policy-less ledger row.** `chargebacks.policyNumberKey`
+   (the lookup's key, on rows that name no policy; `null` on rows that do) and the index
+   `{ agencyId, policyId, policyNumberKey }`; both Payouts writers set it, and
+   `existingChargebacks` takes `numberKeys` and reads only those numbers' rows plus any
+   keyless one (`$in: [...keys, null]`), so a row written before the key costs a read,
+   never a second charge. Migration `20261111120000-chargeback_number_keys` fills the key
+   in on older rows.
+
+**Verified (11 Nov):** API unit 1,679; e2e 6 suites, 164 (`payouts-lifecycle` 56, 6 new:
+the carrier kept for a held policy without one, the 409's wording for the employee, for
+someone else and on the agency's calendar, a number-keyed and a keyless lookup, ids in
+upper case, an edit, Recalculate and an add each raced by another write — 409, nothing
+saved and no ledger row — and an edit landing during a month's run recalculated into the
+totals; plus the stored branding on the send and the signed copy printed with it after a
+new logo and name, and a deactivated sender left out). `tsc` at the 24-error baseline;
+ESLint and Prettier clean on the touched files.

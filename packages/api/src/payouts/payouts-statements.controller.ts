@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   Patch,
@@ -31,6 +33,13 @@ import {
 import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
+  acceptPayStatementSchema,
+  addStatementAdjustmentSchema,
+  rejectPayStatementSchema,
+  statementAdjustmentIdSchema,
+  type AcceptPayStatementDto,
+  type AddStatementAdjustmentDto,
+  type RejectPayStatementDto,
   generatePayoutRunSchema,
   getPayoutRunQuerySchema,
   listPayStatementsQuerySchema,
@@ -54,6 +63,7 @@ import { PayStatementsService } from './pay-statements.service';
 import { PayoutActivityService } from './payout-activity.service';
 import { PayoutRunsService } from './payout-runs.service';
 import { StatementIssueService } from './statement-issue.service';
+import { StatementSignoffService } from './statement-signoff.service';
 
 /**
  * Pay statements (PAC-178) and the activity behind them (PAC-179).
@@ -72,6 +82,12 @@ import { StatementIssueService } from './statement-issue.service';
  * a month, reopen a sent one, preview a draft's PDF. Opening an issued PDF
  * is anyone's who may see the statement — the employee included.
  *
+ * Answering (PAC-182) is the employee's alone, on `payouts:read`: accept a
+ * sent statement (a signed copy is stored) or dispute it with notes. The
+ * reviewer corrects a disputed one — chargeback lines with notes
+ * (`POST`/`DELETE …/adjustments`) beside the entered amounts — and sends it
+ * again.
+ *
  * The branch header is honoured (no `@SkipBranch`): a branch manager's scope
  * is their branch.
  */
@@ -84,6 +100,7 @@ export class PayoutsStatementsController {
     private readonly statements: PayStatementsService,
     private readonly activityService: PayoutActivityService,
     private readonly issuing: StatementIssueService,
+    private readonly signoff: StatementSignoffService,
   ) {}
 
   // --- Runs --------------------------------------------------------------
@@ -206,6 +223,44 @@ export class PayoutsStatementsController {
     return this.statements.updateAdjustments(access, branchId, id, body);
   }
 
+  /**
+   * One chargeback line with a note (PAC-182): leave a chargeback on the
+   * statement out (`exclude_chargeback`), or add one the ledger does not hold
+   * (`add_chargeback` — a `manual` ledger row in the statement's month). Then
+   * the statement is recalculated. Draft and disputed statements only;
+   * 409 `PAYOUT_CHARGEBACK_ALREADY_CHARGED` for a policy that already has a
+   * chargeback.
+   */
+  @Post('statements/:id/adjustments')
+  @HttpCode(200)
+  @RequireWrite(ModuleKey.Payouts)
+  addStatementAdjustment(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Body(new ZodValidationPipe(addStatementAdjustmentSchema))
+    body: AddStatementAdjustmentDto,
+  ): Promise<PayStatementView> {
+    return this.statements.addAdjustment(access, branchId, id, body);
+  }
+
+  /**
+   * Undo a chargeback line (PAC-182): restore a left-out chargeback, or
+   * remove an added one and delete its ledger row. The entered amounts are
+   * `PATCH`ed, not deleted here (400).
+   */
+  @Delete('statements/:id/adjustments/:adjustmentId')
+  @RequireWrite(ModuleKey.Payouts)
+  removeStatementAdjustment(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Param('adjustmentId', new ZodValidationPipe(statementAdjustmentIdSchema))
+    adjustmentId: string,
+  ): Promise<PayStatementView> {
+    return this.statements.removeAdjustment(access, branchId, id, adjustmentId);
+  }
+
   // --- Issuing (PAC-181) -------------------------------------------------
 
   /**
@@ -240,9 +295,47 @@ export class PayoutsStatementsController {
     return this.issuing.reopen(access, branchId, id);
   }
 
+  // --- Answering (PAC-182) -----------------------------------------------
+
   /**
-   * A presigned inline link to the issued PDF, minted per read. 404 when the
-   * statement is not visible or the version has no file.
+   * The employee accepts their sent statement: a signed copy of the PDF is
+   * stored beside the issued one, and the statement is final. 403
+   * `PAYOUT_STATEMENT_NOT_YOURS` for anyone else; 409
+   * `PAYOUT_STATEMENT_NOT_SENT` unless it is sent.
+   */
+  @Post('statements/:id/accept')
+  @HttpCode(200)
+  acceptStatement(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Body(new ZodValidationPipe(acceptPayStatementSchema))
+    body: AcceptPayStatementDto,
+    @Headers('user-agent') userAgent: string | undefined,
+  ): Promise<PayStatementView> {
+    return this.signoff.accept(access, branchId, id, body, userAgent);
+  }
+
+  /**
+   * The employee disputes their sent statement, with notes: it becomes
+   * editable for a reviewer to correct and send again. Same 403 / 409.
+   */
+  @Post('statements/:id/reject')
+  @HttpCode(200)
+  rejectStatement(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('id', new ZodValidationPipe(payStatementIdSchema)) id: string,
+    @Body(new ZodValidationPipe(rejectPayStatementSchema))
+    body: RejectPayStatementDto,
+  ): Promise<PayStatementView> {
+    return this.signoff.reject(access, branchId, id, body);
+  }
+
+  /**
+   * A presigned inline link to the issued PDF — or, with `variant=signed`,
+   * the signed copy of an accepted one — minted per read. 404 when the
+   * statement is not visible or the version has no such file.
    */
   @Get('statements/:id/pdf')
   statementPdf(
@@ -252,7 +345,13 @@ export class PayoutsStatementsController {
     @Query(new ZodValidationPipe(payStatementPdfQuerySchema))
     query: PayStatementPdfQueryDto,
   ): Promise<PayStatementPdfLinkResponse> {
-    return this.issuing.pdfLink(access, branchId, id, query.version);
+    return this.issuing.pdfLink(
+      access,
+      branchId,
+      id,
+      query.version,
+      query.variant,
+    );
   }
 
   /** A draft's PDF, rendered now and streamed (`application/pdf`), not stored. */

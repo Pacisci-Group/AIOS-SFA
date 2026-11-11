@@ -1,0 +1,136 @@
+meta {
+  name: Add Chargeback Line
+  type: http
+  seq: 55
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+body:json {
+  {
+    "kind": "add_chargeback",
+    "policyNumber": "{{payoutsManualPolicy}}",
+    "carrier": "{{payoutsCarrier}}",
+    "amount": 125.5,
+    "customerName": "Bruno Customer",
+    "note": "Bruno: a chargeback the carrier phoned in"
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId") || !bru.getVar("payoutsCarrier")) {
+    bru.runner.skipRequest();
+    return;
+  }
+  // A new policy number every run: a policy is charged back once, so a run
+  // that failed before removing its line must not make the next one 409.
+  bru.setVar("payoutsManualPolicy", "BRUNO-" + Date.now());
+}
+
+script:post-response {
+  const s = res.getBody() || {};
+  const adjustments = s.adjustments || [];
+  const added = adjustments.find(function (a) { return a.kind === "add_chargeback"; });
+  bru.setVar("payoutsAddedAdjustmentId", added ? added.id : "");
+  // A chargeback already on the statement, for Leave Out Chargeback.
+  const own = {};
+  adjustments.forEach(function (a) { if (a.chargebackId) own[a.chargebackId] = true; });
+  const other = (s.chargebacks || []).find(function (c) {
+    return !c.excluded && !own[c.chargebackId];
+  });
+  bru.setVar("payoutsLeaveOutChargebackId", other ? other.chargebackId : "");
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("charges it on the statement, with its note", function () {
+    const s = res.getBody();
+    const row = s.chargebacks.find(function (c) {
+      return c.policyNumber === bru.getVar("payoutsManualPolicy");
+    });
+    expect(row).to.be.an("object");
+    expect(row.reason).to.equal("manual");
+    expect(row.amount).to.equal(125.5);
+    expect(row.excluded).to.equal(false);
+    expect(row.addedNote).to.equal("Bruno: a chargeback the carrier phoned in");
+    expect(row.carrier.toLowerCase()).to.equal(bru.getVar("payoutsCarrier").toLowerCase());
+  });
+
+  test("is an add_chargeback adjustment naming the ledger row", function () {
+    const s = res.getBody();
+    const row = s.chargebacks.find(function (c) {
+      return c.policyNumber === bru.getVar("payoutsManualPolicy");
+    });
+    const adjustment = s.adjustments.find(function (a) {
+      return a.kind === "add_chargeback" && a.chargebackId === row.chargebackId;
+    });
+    expect(adjustment).to.be.an("object");
+    expect(adjustment.amount).to.equal(null);
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/adjustments — a chargeback line (PAC-182)
+
+  **Module** — `payouts`. **Permission** — `payouts:write`, within your data
+  scope (outside it, a `404`). Not on your **own** statement unless you also
+  hold `agency:payouts:admin`. Draft and **disputed** statements only.
+
+  One chargeback line with a note, then the statement is recalculated. The
+  body is one of:
+
+  | `kind` | Fields | Effect |
+  |---|---|---|
+  | `add_chargeback` | `policyNumber`, `carrier`, `amount` (> 0, two decimals), `customerName` (or `null`), `note` | charges the employee a chargeback the ledger does not hold |
+  | `exclude_chargeback` | `chargebackId` (a row of `chargebacks[]`), `note` | leaves that chargeback out — **Leave Out Chargeback** |
+
+  `note` is required, at most 500 characters, trimmed.
+
+  **Adding** writes a `chargebacks` ledger row with `reason: "manual"`,
+  `source: "app"`, the statement's id and month (`statementMonth`), dated the
+  month's first day, charged to the statement's employee. A policy the app
+  holds is found by its number and lends its id, type, client and **its own
+  carrier** (the body's is then ignored); otherwise — or when the held policy
+  has no carrier — `carrier` must be one of the statement's lines
+  (`premiumLines[].carrier`), since it picks the rate the chargeback comes
+  off, and the row keeps it. **A policy is charged back once**: any
+  chargeback on it already — any month, any source — is a `409`, checked
+  under the same lock as a chargeback-report commit. Its message names who
+  it was charged to, and the month (on the agency's calendar), only when that
+  is the statement's own employee; otherwise it says only that the policy
+  has been charged back. The statement's row shows the note as `addedNote`;
+  the PDF prints "Added: <note>". **Remove Chargeback Line** undoes it and
+  deletes the ledger row.
+
+  **One write.** The ledger row, the line and the recalculated figures are
+  written together in one transaction, onto the statement as it was read: a
+  statement written meanwhile (a send, another edit, a month's calculation)
+  is a `409` `PAYOUT_STATEMENT_CHANGED` and nothing is written. Ids are
+  accepted in either case.
+
+  **Response `200`** — the recalculated statement, as **Get Pay Statement**.
+
+  **Errors** — `400` a missing note, a policy number with no letters or
+  digits, a zero amount, a carrier not on the statement, or (leave out) a
+  chargeback not on it, already left out, outside the chargeback window, or
+  one added on it (remove that instead); `403` without `payouts:write`, or
+  `PAYOUT_STATEMENT_OWN_STATEMENT` on your own; `404` outside your scope;
+  `409` `PAYOUT_CHARGEBACK_ALREADY_CHARGED` for a policy already charged
+  back, `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted,
+  `PAYOUT_STATEMENT_CHANGED` when it changed meanwhile.
+
+  In the collection the policy number is new on each run
+  (`payoutsManualPolicy`), and the carrier is the statement's first line's
+  (`payoutsCarrier`, from **Get Pay Statement**).
+}

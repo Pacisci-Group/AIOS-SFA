@@ -1070,17 +1070,63 @@ export const ENTERED_ADJUSTMENT_KEYS = Object.keys(
   ENTERED_ADJUSTMENTS,
 ) as (keyof StatementEnteredAdjustments)[];
 
+/**
+ * Why each entered amount was given (PAC-182): an optional note per amount,
+ * stored on its adjustment row and shown on the statement page. `''` = none.
+ */
+export type StatementEnteredAdjustmentNotes = Record<
+  keyof StatementEnteredAdjustments,
+  string
+>;
+
+export const EMPTY_STATEMENT_ENTERED_ADJUSTMENT_NOTES: StatementEnteredAdjustmentNotes =
+  { spiffs: '', complianceAdjustment: '', otherAdjustments: '' };
+
 /** Why the entered amounts cannot be stored, or `null` when they can. */
 export function statementEnteredAdjustmentsError(
-  value: StatementEnteredAdjustments,
+  value: StatementEnteredAdjustments & {
+    notes?: Partial<StatementEnteredAdjustmentNotes>;
+  },
 ): string | null {
   for (const key of ENTERED_ADJUSTMENT_KEYS) {
     const amount = value[key];
-    if (amount === null) continue;
-    const error = amountError(amount, ENTERED_ADJUSTMENTS[key].label);
+    const note = normalizeStatementText(value.notes?.[key] ?? '');
+    const { label } = ENTERED_ADJUSTMENTS[key];
+    if (note.length > MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH) {
+      return `The note on ${lowerFirst(label)} is longer than ${MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH} characters.`;
+    }
+    if (amount === null || amount === 0) {
+      // A note explains an amount; on its own it would be stored nowhere.
+      if (note) return `${label}: enter an amount for the note to explain.`;
+      continue;
+    }
+    const error = amountError(amount, label);
     if (error) return error;
   }
   return null;
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/** The entered amounts' notes as a statement stores them, `''` where none. */
+export function enteredAdjustmentNotesOf(
+  adjustments: readonly {
+    kind: StatementAdjustmentKind;
+    amount: number | null;
+    note?: string | null;
+  }[],
+): StatementEnteredAdjustmentNotes {
+  const result = { ...EMPTY_STATEMENT_ENTERED_ADJUSTMENT_NOTES };
+  for (const key of ENTERED_ADJUSTMENT_KEYS) {
+    const { kind } = ENTERED_ADJUSTMENTS[key];
+    result[key] = adjustments
+      .filter((row) => row.kind === kind && row.amount !== null && row.note)
+      .map((row) => row.note as string)
+      .join('\n');
+  }
+  return result;
 }
 
 /**
@@ -1460,7 +1506,7 @@ export const PAYOUT_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
  * `draft` → `sent` → `accepted` (final), or `sent` → `rejected` (disputed)
  * → `sent` again as the next version. A sent statement may be reopened
  * (`sent` → `draft`) until the employee answers. PAC-181 writes `sent` and
- * the reopen; sign-off (`accepted` / `rejected`) arrives with PAC-182.
+ * the reopen; the employee's answer (`accepted` / `rejected`) is PAC-182's.
  */
 export const PAY_STATEMENT_STATUSES = [
   'draft',
@@ -1511,8 +1557,25 @@ export const PAYOUT_STATEMENT_NOT_EDITABLE = 'PAYOUT_STATEMENT_NOT_EDITABLE';
  */
 export const PAYOUT_STATEMENT_OWN_INPUTS = 'PAYOUT_STATEMENT_OWN_INPUTS';
 
-/** 409: only a sent statement can be reopened (PAC-181). */
+/**
+ * 409: only a sent statement can be reopened (PAC-181), accepted or disputed
+ * (PAC-182) — an accepted one is final, a disputed one waits to be sent again.
+ */
 export const PAYOUT_STATEMENT_NOT_SENT = 'PAYOUT_STATEMENT_NOT_SENT';
+
+/**
+ * 403: only the statement's own employee accepts or disputes it (PAC-182) —
+ * not a reviewer, and not `agency:payouts:admin`: the answer is a signature.
+ */
+export const PAYOUT_STATEMENT_NOT_YOURS = 'PAYOUT_STATEMENT_NOT_YOURS';
+
+/**
+ * 409: a manual chargeback for a policy that already has one, in any month
+ * from any source (PAC-182) — a policy is charged back once, as the import
+ * rule says (PAC-180).
+ */
+export const PAYOUT_CHARGEBACK_ALREADY_CHARGED =
+  'PAYOUT_CHARGEBACK_ALREADY_CHARGED';
 
 /**
  * 403: a reviewer may not send, reopen or recalculate their own statement
@@ -1550,6 +1613,52 @@ export function statementPdfFilename(month: string, version: number): string {
   return `commission-statement-${month}-v${version}.pdf`;
 }
 
+/** The file name of the signed copy of an accepted version (PAC-182). */
+export function statementSignedPdfFilename(
+  month: string,
+  version: number,
+): string {
+  return `commission-statement-${month}-v${version}-signed.pdf`;
+}
+
+/**
+ * Which file of a version `GET /payouts/statements/:id/pdf` links to (PAC-182):
+ * the one the reviewer `issued`, or the `signed` copy stored when the
+ * employee accepted it — the same statement with the acknowledgment filled.
+ */
+export const STATEMENT_PDF_VARIANTS = ['issued', 'signed'] as const;
+export type StatementPdfVariant = (typeof STATEMENT_PDF_VARIANTS)[number];
+
+// ── Sign-off (PAC-182) ──────────────────────────────────────────────────
+
+/**
+ * The sentence the employee ticks to accept a statement — printed in the
+ * PDF's Producer acknowledgment and shown in the Accept dialog, from here so
+ * the two cannot disagree.
+ */
+export const STATEMENT_ACKNOWLEDGMENT_TEXT =
+  'I acknowledge receipt and review of this commission statement.';
+
+/** The longest typed name a statement is signed with. */
+export const MAX_STATEMENT_TYPED_NAME_LENGTH = 120;
+
+/** The longest dispute notes ("Comments / Dispute notes" on the PDF). */
+export const MAX_STATEMENT_DISPUTE_NOTES_LENGTH = 2000;
+
+/** The longest note on a statement adjustment. */
+export const MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH = 500;
+
+/** The longest user agent kept on an acceptance; the rest is cut. */
+export const MAX_STATEMENT_USER_AGENT_LENGTH = 512;
+
+/**
+ * Free text as a statement stores it: Windows and old-Mac line breaks made
+ * `\n`, and the ends trimmed. The length limits count what is stored.
+ */
+export function normalizeStatementText(text: string): string {
+  return text.replace(/\r\n?/g, '\n').trim();
+}
+
 /**
  * Which half of the team pool a person shares in. CSRs are licensed and sell
  * (owner, 4 Nov 2026), so both earn the same way; only the pool split is by
@@ -1564,9 +1673,13 @@ export function payoutPoolFor(roleSlugs: readonly string[]): PayoutPool {
 }
 
 /**
- * The manager's corrections to a statement (PAC-182 adds the endpoints; the
- * math applies them already): leave a chargeback out, add one, a SPIFF
- * (≥ 0), a compliance adjustment (≤ 0), or any other line (±).
+ * The manager's corrections to a statement: leave a chargeback out
+ * (`exclude_chargeback`), add one (`add_chargeback` — the money is the
+ * `manual` ledger row it wrote, which the statement reads like any other;
+ * the adjustment carries its note), and the three entered amounts — SPIFFs
+ * (`spiff`, ≥ 0), the compliance adjustment (`compliance`, ≤ 0) and other
+ * adjustments (`manual`, ≤ 0). PAC-182 writes the chargeback lines; the
+ * entered amounts are `PATCH …/adjustments` (10 Nov 2026).
  */
 export const STATEMENT_ADJUSTMENT_KINDS = [
   'exclude_chargeback',
@@ -1706,6 +1819,12 @@ export interface StatementChargebackView extends PayoutActivityChargebackView {
   /** Left out by the manager (an `exclude_chargeback` adjustment). */
   excluded: boolean;
   excludedNote: string | null;
+  /**
+   * Added by the manager (PAC-182): the note of the `add_chargeback`
+   * adjustment that wrote this ledger row; `null` for any other row. Absent
+   * on statements calculated before.
+   */
+  addedNote?: string | null;
 }
 
 export interface StatementBonusesView {
@@ -1920,7 +2039,76 @@ export interface PayStatementView extends PayStatementSummary {
   sentBy: { id: string; name: string } | null;
   /** The earlier issued versions, oldest first (see {@link STATEMENT_HISTORY_OUTCOMES}). */
   history: StatementHistoryEntryView[];
+  /** The employee's acceptance of the current version (PAC-182); `null` until then. */
+  acceptance: StatementAcceptanceView | null;
+  /**
+   * The employee's dispute of the current version (PAC-182), while it is
+   * disputed; it moves into `history` when the statement is sent again.
+   */
+  rejection: StatementRejectionView | null;
+  /** The signed copy of an accepted statement (PAC-182); `null` otherwise. */
+  signedPdf: PayStatementPdfView | null;
 }
+
+/**
+ * How the employee accepted a statement (PAC-182): the name they typed as
+ * their signature and the account and browser they did it from — what the
+ * signed copy's audit line prints. No IP address is kept (owner, 10 Nov 2026).
+ */
+export interface StatementAcceptanceView {
+  /** ISO-8601. */
+  acceptedAt: string;
+  typedName: string;
+  /** The signed-in account's email when they accepted. */
+  accountEmail: string;
+  /** The browser's `User-Agent`, cut to {@link MAX_STATEMENT_USER_AGENT_LENGTH}. */
+  userAgent: string;
+}
+
+/** The employee's dispute of a version (PAC-182). */
+export interface StatementRejectionView {
+  /** ISO-8601. */
+  rejectedAt: string;
+  notes: string;
+}
+
+/** `POST /payouts/statements/:id/accept`. */
+export interface AcceptPayStatementInput {
+  /** The employee's name, typed as their signature. */
+  typedName: string;
+  /** The acknowledgment's box, ticked. */
+  acknowledged: true;
+}
+
+/** `POST /payouts/statements/:id/reject`. */
+export interface RejectPayStatementInput {
+  /** What is wrong, required (≤ {@link MAX_STATEMENT_DISPUTE_NOTES_LENGTH}). */
+  notes: string;
+}
+
+/**
+ * `POST /payouts/statements/:id/adjustments` (PAC-182): one chargeback line.
+ *
+ * - `exclude_chargeback` leaves a chargeback on the statement out of it, with
+ *   why. Removing the adjustment restores it.
+ * - `add_chargeback` charges the employee a chargeback the ledger does not
+ *   hold — a `manual` ledger row counted in the statement's month. Removing
+ *   the adjustment deletes the row, while the statement is a draft or
+ *   disputed. A policy the app holds is found by its number and lends its
+ *   carrier; otherwise `carrier` must be one the agency is appointed with,
+ *   since it picks the rate the chargeback comes off.
+ */
+export type AddStatementAdjustmentInput =
+  | { kind: 'exclude_chargeback'; chargebackId: string; note: string }
+  | {
+      kind: 'add_chargeback';
+      policyNumber: string;
+      carrier: string;
+      /** Premium dollars, positive. */
+      amount: number;
+      customerName: string | null;
+      note: string;
+    };
 
 /**
  * An issued Commission Statement PDF (PAC-181). The storage key never leaves
@@ -1945,6 +2133,8 @@ export interface StatementHistoryEntryView {
   sentBy: { id: string; name: string } | null;
   /** When it stopped being current (ISO-8601). */
   at: string;
+  /** The dispute that led to a `superseded` version being sent again (PAC-182). */
+  rejection: StatementRejectionView | null;
 }
 
 /**
@@ -1975,7 +2165,13 @@ export interface SendAllDraftsResponse {
  * Salesperson of the Month (as Recalculate does).
  */
 export type UpdateStatementInputsInput = StatementInputs;
-export type UpdateStatementAdjustmentsInput = StatementEnteredAdjustments;
+/**
+ * `PATCH /payouts/statements/:id/adjustments`: the three amounts, whole, and
+ * optionally a note on each (PAC-182). Omitted `notes` keep none.
+ */
+export type UpdateStatementAdjustmentsInput = StatementEnteredAdjustments & {
+  notes?: Partial<StatementEnteredAdjustmentNotes>;
+};
 
 export interface PayStatementsResponse {
   statements: PayStatementSummary[];

@@ -145,11 +145,15 @@ export function fieldBox(
   x: number,
   y: number,
   width: number,
+  valueStyle: TextStyle = {},
 ): void {
   fieldLabel(doc, label, x, y, width);
   const boxY = y + LAYOUT.fieldLabelHeight;
   box(doc, x, boxY, width, LAYOUT.fieldBoxHeight);
-  drawLine(doc, value, x + 6, boxY + 5, width - 12, { size: SIZES.value });
+  drawLine(doc, value, x + 6, boxY + 5, width - 12, {
+    size: SIZES.value,
+    ...valueStyle,
+  });
 }
 
 /** A row of labelled boxes across the content width, `gap` apart. */

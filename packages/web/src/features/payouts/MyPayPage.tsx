@@ -1,12 +1,14 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { Wallet } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Info, Wallet } from "lucide-react";
 import { PAY_STATEMENTS_PAGE_SIZE, statementNetPay } from "@sfa/shared";
 import { DataPanel } from "@/components/common/DataPanel";
 import { MonthPicker } from "@/components/common/MonthPicker";
 import { TablePagination } from "@/components/common/TablePagination";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -37,6 +39,11 @@ const URL_ALLOWED = {
  * **A draft is never shown here** — the API's `mine` view leaves drafts out
  * for everyone, a branch manager included. A statement appears once it has
  * been sent.
+ *
+ * A sent statement waits for the employee's answer (PAC-182): the page says
+ * how many do, and those rows carry a Review button. The count is its own
+ * one-row query on `status=sent`, so it holds whichever page of the table is
+ * showing.
  */
 export default function MyPayPage() {
   const { user } = useAuth();
@@ -56,6 +63,13 @@ export default function MyPayPage() {
     placeholderData: keepPreviousData,
   });
   const data = statements.data;
+  // How many wait for an answer, across every page of the table.
+  const waitingParams = { mine: true, status: "sent" as const, pageSize: 1 };
+  const waiting = useQuery({
+    queryKey: payStatementsListKey(waitingParams),
+    queryFn: () => listPayStatements(waitingParams),
+  });
+  const waitingCount = waiting.data?.total ?? 0;
 
   return (
     <AppShell>
@@ -78,6 +92,21 @@ export default function MyPayPage() {
 
       <main className="w-full px-4 py-6 md:px-6">
         <div className="space-y-8">
+          {waitingCount > 0 && (
+            <Alert>
+              <Info aria-hidden className="text-primary!" />
+              <AlertTitle className="line-clamp-none">
+                {waitingCount === 1
+                  ? "1 statement is waiting for your answer"
+                  : `${waitingCount} statements are waiting for your answer`}
+              </AlertTitle>
+              <AlertDescription>
+                {waitingCount === 1
+                  ? "Review it, then accept or dispute it. Accepting signs it and is final."
+                  : "Review each, then accept or dispute it. Accepting signs it and is final."}
+              </AlertDescription>
+            </Alert>
+          )}
           <DataPanel
             title="Statements"
             isPending={statements.isPending}
@@ -122,10 +151,23 @@ export default function MyPayPage() {
                       {formatMoney(statementNetPay(row.totals))}
                     </TableCell>
                     <TableCell className="pr-5">
-                      <StatementStatusBadge
-                        status={row.status}
-                        version={row.version}
-                      />
+                      <div className="flex items-center gap-2">
+                        <StatementStatusBadge
+                          status={row.status}
+                          version={row.version}
+                        />
+                        {row.status === "sent" && (
+                          <Button size="xs" variant="outline" asChild>
+                            <Link
+                              to={`/payouts/statements/${row.id}`}
+                              // The row navigates too; once is enough.
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              Review
+                            </Link>
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
