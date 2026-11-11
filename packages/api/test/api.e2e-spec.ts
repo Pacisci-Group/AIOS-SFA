@@ -1369,10 +1369,17 @@ describe('SFA API (e2e)', () => {
        * fact about the *agency's* setup state, not about the person, and it is
        * here so the wizard can size its step counter before a session exists.
        * Anything added later has to survive the same question.
+       *
+       * `allstateBindId` and `allstateSubProducerCode` (PAC-173) are, like the
+       * names, what the inviter typed for this person: Allstate login codes,
+       * not personal details, returned so the accept step can show them to be
+       * confirmed or corrected rather than typed again.
        */
       expect(Object.keys(body).sort()).toEqual([
         'agencyName',
         'agencySetupPending',
+        'allstateBindId',
+        'allstateSubProducerCode',
         'email',
         'expiresAt',
         'firstName',
@@ -8847,40 +8854,45 @@ describe('SFA API (e2e)', () => {
         },
       ]);
 
-      await activityModel.create([
-        {
-          ...base,
-          type: 'lead_created',
-          subjectType: 'lead',
-          leadId: lead._id,
-          userId: producer!._id,
-          occurredAt: onDay('2026-07-01'),
-          summary: 'Lead created',
-          source: 'internal',
-        },
-        {
-          ...base,
-          type: 'quoted',
-          subjectType: 'quoteRecap',
-          leadId: lead._id,
-          quoteRecapId: newer._id,
-          userId: producer!._id,
-          occurredAt: onDay('2026-07-24'),
-          summary: 'Quote recap created',
-          source: 'internal',
-        },
-        {
-          ...base,
-          type: 'sold',
-          subjectType: 'deal',
-          leadId: lead._id,
-          dealId: deal._id,
-          userId: producer!._id,
-          occurredAt: onDay('2026-07-30'),
-          summary: 'Deal marked as sold',
-          source: 'internal',
-        },
-      ]);
+      await activityModel.create(
+        [
+          {
+            ...base,
+            type: 'lead_created',
+            subjectType: 'lead',
+            leadId: lead._id,
+            userId: producer!._id,
+            occurredAt: onDay('2026-07-01'),
+            summary: 'Lead created',
+            source: 'internal',
+          },
+          {
+            ...base,
+            type: 'quoted',
+            subjectType: 'quoteRecap',
+            leadId: lead._id,
+            quoteRecapId: newer._id,
+            userId: producer!._id,
+            occurredAt: onDay('2026-07-24'),
+            summary: 'Quote recap created',
+            source: 'internal',
+          },
+          {
+            ...base,
+            type: 'sold',
+            subjectType: 'deal',
+            leadId: lead._id,
+            dealId: deal._id,
+            userId: producer!._id,
+            occurredAt: onDay('2026-07-30'),
+            summary: 'Deal marked as sold',
+            source: 'internal',
+          },
+          // Sequential, not the parallel default: the timeline is ordered by
+          // when each row was recorded, so `createdAt` must follow this order.
+        ],
+        { ordered: true },
+      );
     });
 
     it('returns the lead with normalized labels, never raw select codes', async () => {
@@ -9069,6 +9081,47 @@ describe('SFA API (e2e)', () => {
         'lead_created',
       ]);
       expect(body.activities[0].userName).toBeTruthy();
+    });
+
+    it('stamps each row with when it was recorded, not its business date', async () => {
+      const body = await getAs(producerToken, leadId);
+      const sold = body.activities.find((a) => a.type === 'sold')!;
+
+      // `occurredAt` stays the sold date from the form; `recordedAt` is when
+      // the row was entered, which is what the timeline shows.
+      expect(sold.occurredAt).toBe(onDay('2026-07-30').toISOString());
+      expect(new Date(sold.recordedAt!).getTime()).toBeGreaterThan(
+        new Date(sold.occurredAt!).getTime(),
+      );
+    });
+
+    it('keeps the business date on a migrated row, whose createdAt is the import run', async () => {
+      const activityModel = app.get<Model<Activity>>(
+        getModelToken(Activity.name),
+      );
+      const migrated = await activityModel.create({
+        agencyId: seed.agencyId,
+        branchId: seed.branchId,
+        type: 'note',
+        subjectType: 'lead',
+        leadId: new Types.ObjectId(leadId),
+        occurredAt: onDay('2026-06-15'),
+        summary: 'Imported from SmartSuite',
+        source: 'migration',
+      });
+
+      try {
+        const body = await getAs(producerToken, leadId);
+        const row = body.activities.find(
+          (a) => a.id === migrated._id.toString(),
+        )!;
+
+        expect(row.recordedAt).toBe(onDay('2026-06-15').toISOString());
+        // Created last, but ordered by its business date: oldest on the lead.
+        expect(body.activities.at(-1)!.id).toBe(row.id);
+      } finally {
+        await activityModel.deleteOne({ _id: migrated._id });
+      }
     });
 
     it('finds a migrated recap linked only by legacyLeadId, then self-heals the ref', async () => {
@@ -12809,9 +12862,12 @@ describe('SFA API (e2e)', () => {
       const dealId = new Types.ObjectId(deal.id);
 
       // The producer submitted the audit; the deal mirrors that status.
+      // `submittedById` matters since PAC-106: a Pending audit with none is a
+      // *system* submission, which a re-run hands back when it brings
+      // producer work — this test is about a person's submission.
       await genAuditModel.updateOne(
         { agencyId: seed.agencyId, dealId },
-        { $set: { auditStatus: 'Pending' } },
+        { $set: { auditStatus: 'Pending', submittedById: genProducerId } },
       );
       await genDealModel.updateOne(
         { _id: dealId },
@@ -12923,6 +12979,30 @@ describe('SFA API (e2e)', () => {
         return sell(lead._id.toString(), [autoPolicy(lead._id.toString())]);
       };
 
+      /*
+       * The manager's item-by-item ruling (PAC-106). Approve needs every item
+       * passed, and a send-back needs at least one failed, so the workflow
+       * tests rule on items the way the Deal Audit page does.
+       */
+      const rule = async (
+        dealId: string,
+        verdict: 'pass' | 'fail',
+        which: 'all' | 'first' = 'all',
+      ) => {
+        const items = await genItemModel
+          .find({ dealId: new Types.ObjectId(dealId) })
+          .sort({ _id: 1 });
+        for (const item of which === 'all' ? items : items.slice(0, 1)) {
+          await request(app.getHttpServer())
+            .patch(`${BOARD}/${item._id.toString()}/verdict`)
+            .set(authHeader(ownerToken))
+            .send({ verdict })
+            .expect(200);
+        }
+      };
+      const passAll = (dealId: string) => rule(dealId, 'pass');
+      const failFirst = (dealId: string) => rule(dealId, 'fail', 'first');
+
       it('starts Not Submitted and assigned to the selling producer', async () => {
         const deal = await soldDeal();
 
@@ -12946,6 +13026,9 @@ describe('SFA API (e2e)', () => {
         expect((submitted.body as { auditStatus: string }).auditStatus).toBe(
           'Pending',
         );
+
+        // Approve needs every item passed (PAC-106).
+        await passAll(deal.id);
 
         // The owner is agency-scoped, so they reach the audit without being
         // named on it — and they are not the submitter, which is the rule.
@@ -13015,10 +13098,16 @@ describe('SFA API (e2e)', () => {
           .set(authHeader(producerToken))
           .expect(201);
 
+        // A send-back needs a failed item and a note (PAC-106).
+        await failFirst(deal.id);
         const failed = await request(app.getHttpServer())
           .post(`${workflow(deal.id)}/review`)
           .set(authHeader(ownerToken))
-          .send({ decision: 'request_changes', reasonCodes: ['Missing Docs'] })
+          .send({
+            decision: 'request_changes',
+            reasonCodes: ['Missing Docs'],
+            notes: 'The declarations page is missing.',
+          })
           .expect(201);
         expect((failed.body as { auditStatus: string }).auditStatus).toBe(
           'Fail',
@@ -13033,9 +13122,11 @@ describe('SFA API (e2e)', () => {
         );
       });
 
-      it('requires a reason code when requesting changes', async () => {
+      it('requires a note when sending an audit back', async () => {
         // "It failed" with no stated reason gives the assignee nothing to act
-        // on, and the correction loop just bounces.
+        // on, and the correction loop just bounces. Since PAC-106 the note is
+        // the requirement (it is what the red card and the notification say);
+        // reason codes are optional.
         const deal = await soldDeal();
 
         await request(app.getHttpServer())
@@ -13057,15 +13148,21 @@ describe('SFA API (e2e)', () => {
           .post(`${workflow(deal.id)}/submit`)
           .set(authHeader(producerToken))
           .expect(201);
+        await failFirst(deal.id);
         await request(app.getHttpServer())
           .post(`${workflow(deal.id)}/review`)
           .set(authHeader(ownerToken))
-          .send({ decision: 'request_changes', reasonCodes: ['Missing Docs'] })
+          .send({
+            decision: 'request_changes',
+            reasonCodes: ['Missing Docs'],
+            notes: 'The declarations page is missing.',
+          })
           .expect(201);
         await request(app.getHttpServer())
           .post(`${workflow(deal.id)}/submit`)
           .set(authHeader(producerToken))
           .expect(201);
+        await passAll(deal.id);
 
         const passed = await request(app.getHttpServer())
           .post(`${workflow(deal.id)}/review`)
@@ -13337,15 +13434,21 @@ describe('SFA API (e2e)', () => {
 
     /**
      * Resolving one requirement moves the percentage; resolving the last one
-     * takes the card off the board.
+     * leaves the card **ready to submit**, and submitting takes it off.
+     *
+     * Was "resolving the last one takes the card off the board" — which
+     * removed the deal before the producer could click Submit (PAC-106). The
+     * board now holds what the producer still has to act on: `Not Submitted`
+     * or sent back, with at least one item of theirs.
      *
      * The counters are denormalized, so this is what proves the resolve path
-     * maintains them — a stale `openFailedCount` would strand a finished deal
-     * on the board forever, and the board reads the counter, not the items.
+     * maintains them — the board reads the counters, not the items.
      */
-    it('tracks completion as items resolve, and drops the card at zero', async () => {
+    it('tracks completion as items resolve, and drops the card once submitted', async () => {
       const { lead, clientName } = await seedLead();
-      await sell(lead._id.toString(), [autoPolicy(lead._id.toString())]);
+      const deal = await sell(lead._id.toString(), [
+        autoPolicy(lead._id.toString()),
+      ]);
 
       const card = async () => {
         const res = await request(app.getHttpServer())
@@ -13357,6 +13460,7 @@ describe('SFA API (e2e)', () => {
             client: string;
             completionPct: number;
             openCount: number;
+            readyToSubmit: boolean;
             items: Array<{ id: string; open: boolean }>;
           }>;
         };
@@ -13384,7 +13488,7 @@ describe('SFA API (e2e)', () => {
       expect(midway!.items).toHaveLength(total);
       expect(midway!.items.filter((i) => i.open)).toHaveLength(total - 1);
 
-      // Resolve the rest — the card leaves the board entirely.
+      // Resolve the rest — the card stays, ready to be submitted.
       for (const item of midway!.items.filter((i) => i.open)) {
         await request(app.getHttpServer())
           .patch(`${BOARD}/${item.id}/resolve`)
@@ -13393,6 +13497,17 @@ describe('SFA API (e2e)', () => {
           .expect(200);
       }
 
+      const done = await card();
+      expect(done).toBeDefined();
+      expect(done!.openCount).toBe(0);
+      expect(done!.completionPct).toBe(100);
+      expect(done!.readyToSubmit).toBe(true);
+
+      // Submitted, it is with the manager — off the producer's board.
+      await request(app.getHttpServer())
+        .post(`${BOARD}/deals/${deal.id}/submit`)
+        .set(authHeader(producerToken))
+        .expect(201);
       expect(await card()).toBeUndefined();
     });
 
@@ -15122,6 +15237,98 @@ describe('SFA API (e2e)', () => {
           await patchSoldDate(producerToken, created.id, '02/15/2026', 400);
           await patchSoldDate(readOnlyToken, created.id, '2026-02-10', 403);
         });
+
+        /*
+         * PAC-106 review: the manager passes "Correct Sold Date" against the
+         * application, so neither the date nor a policy may move under an
+         * approved audit, or one a person handed to the reviewer — the rule
+         * Add policy already followed. A send-back opens all three again.
+         */
+        it('409s the sold date and a policy correction while the audit is locked, and opens both on a send-back', async () => {
+          const { leadId, created } = await bookAuto();
+          const sale = await soldDealModel.findById(created.id);
+          const policyId = (await getDeal(producerToken, created.id))
+            .policies[0].id;
+          const setAudit = (set: Record<string, unknown>) =>
+            app
+              .get<Model<DealAudit>>(getModelToken(DealAudit.name))
+              .updateOne(
+                { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+                {
+                  $set: set,
+                  $setOnInsert: {
+                    branchId: seed.branchId,
+                    title: 'Locked audit',
+                    auditDate: new Date(),
+                    isTestRecord: false,
+                  },
+                },
+                { upsert: true },
+              );
+          const patchPolicy = (expected: number) =>
+            request(app.getHttpServer())
+              .patch(`/api/v1/policies/${policyId}`)
+              .set(authHeader(producerToken))
+              .send({ premium: 1100 })
+              .expect(expected);
+          const leadDeal = async () =>
+            (
+              (
+                await request(app.getHttpServer())
+                  .get(`/api/v1/leads/${leadId}`)
+                  .set(authHeader(producerToken))
+                  .expect(200)
+              ).body as LeadDetail
+            ).deal;
+
+          expect((await getDeal(producerToken, created.id)).auditLocked).toBe(
+            false,
+          );
+          expect((await leadDeal())?.auditLocked).toBe(false);
+
+          for (const locked of [
+            { auditStatus: 'Pass', submittedById: sale!.producerId },
+            { auditStatus: 'Pending', submittedById: sale!.producerId },
+          ]) {
+            await setAudit(locked);
+            expect(
+              (await getDeal(producerToken, created.id)).auditLocked,
+            ).toBe(true);
+            expect((await leadDeal())?.auditLocked).toBe(true);
+
+            const refused = await patchSoldDate(
+              producerToken,
+              created.id,
+              '2026-02-10',
+              409,
+            );
+            expect((refused.body as { message: string }).message).toMatch(
+              /sent back/,
+            );
+            await patchPolicy(409);
+          }
+          // Nothing moved under the lock.
+          expect(
+            (await soldDealModel.findById(created.id))!.soldDate?.toISOString(),
+          ).toBe(sale!.soldDate?.toISOString());
+          expect((await soldPolicyModel.findById(policyId))!.premium).toBe(
+            1000.1,
+          );
+          // A save with the date unchanged is still a no-op, not a 409.
+          await patchSoldDate(producerToken, created.id, '2026-02-15');
+
+          // A system submission (nothing for the producer) is not handed over
+          // by anyone, and stays open — as for Add policy.
+          await setAudit({ auditStatus: 'Pending', submittedById: null });
+          expect((await getDeal(producerToken, created.id)).auditLocked).toBe(
+            false,
+          );
+
+          // "Fix it" on the red card leads here: sent back opens everything.
+          await setAudit({ auditStatus: 'Fail' });
+          await patchSoldDate(producerToken, created.id, '2026-02-10');
+          await patchPolicy(200);
+        });
       });
 
       describe('POST /sold-deals/:id/policies', () => {
@@ -15257,12 +15464,20 @@ describe('SFA API (e2e)', () => {
 
         it('409s once the audit has been submitted', async () => {
           const { leadId, created } = await bookAuto();
+          // Submitted by a person — the producer. A `Pending` audit with no
+          // `submittedById` is a system submission, which stays open (PAC-106).
+          const sale = await app
+            .get<Model<Deal>>(getModelToken(Deal.name))
+            .findById(created.id);
           await app
             .get<Model<DealAudit>>(getModelToken(DealAudit.name))
             .updateOne(
               { agencyId: seed.agencyId, dealId: dealRef(created.id) },
               {
-                $set: { auditStatus: 'Pending' },
+                $set: {
+                  auditStatus: 'Pending',
+                  submittedById: sale!.producerId,
+                },
                 $setOnInsert: {
                   branchId: seed.branchId,
                   title: 'Submitted audit',
@@ -15285,6 +15500,27 @@ describe('SFA API (e2e)', () => {
             [soldPolicy({ policyType: 'Home' })],
             { expected: 409 },
           );
+        });
+
+        it('opens again once the manager sends the audit back (PAC-106)', async () => {
+          // "Fix it" on the producer's red card leads here: a sent-back
+          // (`Fail`) audit is the producer's to correct, sale included.
+          const { leadId, created } = await bookAuto();
+          await app
+            .get<Model<DealAudit>>(getModelToken(DealAudit.name))
+            .updateOne(
+              { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+              { $set: { auditStatus: 'Fail' } },
+            );
+
+          const view = await getDeal(producerToken, created.id);
+          expect(view.auditStatus).toBe('Fail');
+          expect(view.canAddPolicies).toBe(true);
+          expect(view.addPoliciesBlockedBy).toBeNull();
+
+          await addPolicies(producerToken, created.id, leadId, [
+            soldPolicy({ policyType: 'Home' }),
+          ]);
         });
 
         it('merges into the prior-insurance summary rather than writing a second one', async () => {

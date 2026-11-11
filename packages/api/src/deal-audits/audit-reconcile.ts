@@ -4,6 +4,7 @@ import {
 } from '@sfa/shared';
 import type { DealAuditStatus } from '@sfa/shared';
 import { Model, Types } from 'mongoose';
+import { AuditTemplate } from '../audit-templates/schemas/audit-template.schema';
 import { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { Deal } from '../deals/schemas/deal.schema';
 import { syncAuditCounters } from './audit-counters';
@@ -20,6 +21,17 @@ export interface ReconcileAuditsResult {
   countersSynced: number;
   /** Roll-ups migrated off the retired `result` field. */
   statusesHealed: number;
+  /**
+   * Items on an audit not yet approved whose `producerVisible` /
+   * `requiresUpload` were re-copied from their template (PAC-106 review).
+   */
+  flagsRestamped: number;
+  /**
+   * `Not Submitted` audits with nothing for the producer to provide, handed to
+   * the reviewer (PAC-106) — the rule `AuditGenerationService` applies to a
+   * new sale.
+   */
+  autoSubmitted: number;
 }
 
 /**
@@ -33,10 +45,13 @@ export interface AuditReconcileModels<
   TItem extends DealAuditItem = DealAuditItem,
   TAudit extends DealAudit = DealAudit,
   TDeal extends Deal = Deal,
+  TTemplate extends AuditTemplate = AuditTemplate,
 > {
   itemModel: Model<TItem>;
   dealAuditModel: Model<TAudit>;
   dealModel: Model<TDeal>;
+  /** When given, open items are re-stamped from it — see {@link restampTemplateFlags}. */
+  templateModel?: Model<TTemplate>;
 }
 
 /**
@@ -59,7 +74,8 @@ export interface AuditReconcileModels<
  *    the assignee, so an unassigned audit reaches nobody.
  *
  * Then recomputes each roll-up's counters, which is what the board sorts,
- * paginates and renders the completion percentage from.
+ * paginates and renders the completion percentage from — after re-stamping
+ * open items' flags from their templates, when given the template model.
  *
  * Idempotent and derived entirely from Mongo: it needs no SmartSuite
  * credentials and is safe to re-run. It is also the recompute for counter
@@ -70,23 +86,36 @@ export async function reconcileDealAudits<
   TItem extends DealAuditItem,
   TAudit extends DealAudit,
   TDeal extends Deal,
+  TTemplate extends AuditTemplate,
 >(
-  models: AuditReconcileModels<TItem, TAudit, TDeal>,
+  models: AuditReconcileModels<TItem, TAudit, TDeal, TTemplate>,
   agencyId: string,
 ): Promise<ReconcileAuditsResult> {
-  const { itemModel, dealAuditModel, dealModel } = models;
+  const { itemModel, dealAuditModel, dealModel, templateModel } = models;
   const result: ReconcileAuditsResult = {
     auditsCreated: 0,
     itemsLinked: 0,
     assigneesSet: 0,
     countersSynced: 0,
     statusesHealed: 0,
+    flagsRestamped: 0,
+    autoSubmitted: 0,
   };
 
   result.statusesHealed = await healRetiredResultField(
     dealAuditModel,
     agencyId,
   );
+
+  // Before the counters below, which then count the re-stamped flags.
+  if (templateModel) {
+    result.flagsRestamped = await restampTemplateFlags(
+      itemModel,
+      dealAuditModel,
+      templateModel,
+      agencyId,
+    );
+  }
 
   const dealIds = (await itemModel.distinct('dealId', {
     agencyId,
@@ -132,11 +161,113 @@ export async function reconcileDealAudits<
       }
     }
 
-    await syncAuditCounters(itemModel, dealAuditModel, agencyId, audit._id);
+    const counters = await syncAuditCounters(
+      itemModel,
+      dealAuditModel,
+      agencyId,
+      audit._id,
+    );
     result.countersSynced++;
+
+    /*
+     * Nothing for the producer to provide → with the reviewer (PAC-106). A
+     * migrated audit of only manager-only items would otherwise sit at
+     * `Not Submitted`, off the producer's board and waiting on a submit nobody
+     * will click. Guarded on the status, so a re-run is a no-op.
+     */
+    if (counters.producerItemCount === 0) {
+      const flipped = await dealAuditModel.updateOne(
+        { _id: audit._id, auditStatus: DEFAULT_DEAL_AUDIT_STATUS },
+        {
+          $set: {
+            auditStatus: 'Pending',
+            submittedAt: new Date(),
+            submittedById: null,
+          },
+        },
+      );
+      if (flipped.modifiedCount > 0) {
+        await dealModel.updateOne(
+          { _id: dealId },
+          { $set: { dealAuditStatus: 'Pending' } },
+        );
+        result.autoSubmitted++;
+      }
+    }
   }
 
   return result;
+}
+
+/**
+ * Re-copy `producerVisible` / `requiresUpload` from each template onto the
+ * items generated from it, on every audit not yet approved (PAC-106 review).
+ *
+ * The flags are **copied** onto an item at generation (so the board filters
+ * without joining the catalog), and nothing re-syncs them afterwards. That is a
+ * deliberate trade, but it means a template change — David has revised that
+ * table twice — leaves every item already raised on the old flag. This is the
+ * lever: change the template, re-run the reconcile, and the in-flight items
+ * follow; the counters and the auto-submit below then act on the new flags.
+ *
+ * - **By `templateId`**, so only app-generated items. A migrated item has none
+ *   and takes its flags from its name (`auditItemFlagsForName`), which the
+ *   PAC-106 migration applied.
+ * - **Approved audits are left alone.** Their items are history, and moving
+ *   one onto or off the producer's board would rewrite a closed audit.
+ * - Only items whose flags actually differ are written, so a re-run is free.
+ */
+async function restampTemplateFlags<
+  TItem extends DealAuditItem,
+  TAudit extends DealAudit,
+  TTemplate extends AuditTemplate,
+>(
+  itemModel: Model<TItem>,
+  dealAuditModel: Model<TAudit>,
+  templateModel: Model<TTemplate>,
+  agencyId: string,
+): Promise<number> {
+  const templates = await templateModel
+    .find({ agencyId })
+    .select('producerVisible requiresUpload')
+    .lean<
+      Array<{
+        _id: Types.ObjectId;
+        producerVisible?: boolean;
+        requiresUpload?: boolean;
+      }>
+    >();
+  if (!templates.length) return 0;
+
+  const openAuditIds = (await dealAuditModel.distinct('_id', {
+    agencyId,
+    auditStatus: { $ne: 'Pass' },
+  })) as Types.ObjectId[];
+  if (!openAuditIds.length) return 0;
+
+  let restamped = 0;
+  for (const template of templates) {
+    // A template missing a flag predates PAC-106 — visible, no file, the
+    // generator's own fallback.
+    const flags = {
+      producerVisible: template.producerVisible ?? true,
+      requiresUpload: template.requiresUpload ?? false,
+    };
+    const updated = await itemModel.updateMany(
+      {
+        agencyId,
+        templateId: template._id,
+        dealAuditId: { $in: openAuditIds },
+        $or: [
+          { producerVisible: { $ne: flags.producerVisible } },
+          { requiresUpload: { $ne: flags.requiresUpload } },
+        ],
+      },
+      { $set: flags },
+    );
+    restamped += updated.modifiedCount ?? 0;
+  }
+  return restamped;
 }
 
 /**

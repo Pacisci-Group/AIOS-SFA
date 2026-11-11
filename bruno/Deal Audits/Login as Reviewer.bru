@@ -16,7 +16,7 @@ headers {
 
 body:json {
   {
-    "email": "{{ownerEmail}}",
+    "email": "{{managerEmail}}",
     "password": "{{password}}"
   }
 }
@@ -38,18 +38,31 @@ tests {
   test("the reviewer can write deal audits", function () {
     expect(res.getBody().user.permissions).to.include("deal_audits:write");
   });
+
+  test("the reviewer is a manager", function () {
+    // Reviewing is the manager's job since PAC-106: every review route needs
+    // `management:read` beside `deal_audits:*`. The Branch Manager template
+    // holds it (PAC-139).
+    expect(res.getBody().user.permissions).to.include("management:read");
+  });
 }
 
 docs {
-  # Login as Reviewer — a second identity for the review step
+  # Login as Reviewer — the branch manager, for the review step
 
-  Not an endpoint of its own; a fixture. **An audit cannot be reviewed by the
-  person who submitted it** (`403`), and the collection's default bearer is the
-  producer who submits — so **Review Audit** needs a different token.
+  Not an endpoint of its own; a fixture. **An audit is reviewed by a manager**
+  (PAC-106): the queue, the Deal Audit page, item verdicts and Approve / Send
+  back all require `management:read` beside `deal_audits:*` — the AND-gate
+  `@RequirePermissions(deal_audits:…, management:read)`. The collection's
+  default bearer is the producer, who holds neither that nor the right to
+  review what they submitted (`403`), so the review requests need this token.
 
-  The owner is used because they are agency-scoped and hold `deal_audits:write`,
-  so they can reach any audit in the tenant without being named on it.
+  Signs in as `{{managerEmail}}` (`manager@demoagency.local`, Branch Manager,
+  `branch` scope) — the persona the Deal Audits page is for. It was the owner
+  until PAC-106; the owner can still review (agency scope, holds
+  `management:read`), but the branch manager is the person who actually does.
 
   Same idiom, and same warning, as **Users › Login as Owner**: the token is
-  captured under its own variable name so the collection bearer is untouched.
+  captured under its own variable name (`auditReviewerToken`) so the collection
+  bearer is untouched.
 }

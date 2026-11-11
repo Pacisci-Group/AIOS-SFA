@@ -1,0 +1,67 @@
+meta {
+  name: List Review Queue (Aging Only)
+  type: http
+  seq: 23
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/queue?status=all&aging=true&sort=producer&pageSize=100
+  body: none
+  auth: bearer
+}
+
+params:query {
+  status: all
+  aging: true
+  sort: producer
+  pageSize: 100
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("every row is past the SLA and not approved", function () {
+    for (const row of res.getBody().items) {
+      expect(row.aging).to.equal(true);
+      expect(row.businessDaysOpen).to.be.above(5);
+      expect(row.auditStatus).to.not.equal("Pass");
+    }
+  });
+
+  test("rows are grouped by the seller's name, unknown sellers last", function () {
+    const names = res.getBody().items.map((row) => row.producerName);
+    const firstUnknown = names.indexOf(null);
+    const known = firstUnknown === -1 ? names : names.slice(0, firstUnknown);
+    if (firstUnknown !== -1) {
+      expect(names.slice(firstUnknown).every((name) => name === null)).to.equal(true);
+    }
+    for (let i = 1; i < known.length; i += 1) {
+      expect(
+        known[i - 1].localeCompare(known[i], undefined, { sensitivity: "base" }),
+      ).to.be.at.most(0);
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits/queue — aging only, by producer (20 Oct 2026)
+
+  Every audit past the five-business-day SLA, whatever its status, ordered by
+  the seller's name — "who has deals going stale".
+
+  `aging=true` is the Aging Audits card's rule: sold before the business-day
+  cutoff **and not approved** — so `status=all` still shows no `Pass` row, and
+  `status=pass&aging=true` is an empty page. A seller with no name on file
+  sorts by their email's local part; a deal whose seller no longer exists
+  sorts last.
+}

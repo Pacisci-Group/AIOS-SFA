@@ -11,6 +11,10 @@ import {
   ChargebackSchema,
 } from '../chargebacks/schemas/chargeback.schema';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
+import {
+  DealAudit,
+  DealAuditSchema,
+} from '../deal-audits/schemas/deal-audit.schema';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
 import {
   Household,
@@ -63,6 +67,9 @@ import { Policy, PolicySchema } from './schemas/policy.schema';
        * house pattern — see the note in `crm.module.ts`.
        */
       { name: Lead.name, schema: LeadSchema },
+      // The Sold card's correction is closed while the sale's audit is
+      // approved or with a reviewer (`loadDealAuditLock`, PAC-106 review).
+      { name: DealAudit.name, schema: DealAuditSchema },
     ]),
     // Supplies the carrier's policy-number rule when a correction changes the
     // number (PAC-56 #20).

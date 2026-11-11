@@ -1,7 +1,7 @@
 meta {
   name: Get Audit Workflow
   type: http
-  seq: 12
+  seq: 20
 }
 
 get {
@@ -72,16 +72,23 @@ docs {
     "openCount": 2,
     "completionPct": 71,
     "canSubmit": false,
-    "canReview": true
+    "canReview": true,
+    "sentBack": null
   }
   ```
+
+  `sentBack` (PAC-106) is `{ at, byName, note, failedItemCount }` while the
+  audit is sent back (`Fail` after a manager's **Review Audit** with
+  `request_changes`), else `null`.
 
   ## `canSubmit` / `canReview`
   Decided by the **server**, and the UI gates its buttons on them rather than
   re-deriving the rules.
 
   `canReview` depends on who submitted — the submitter may not review their own
-  audit — and `submittedById` is deliberately **not** in the response. Returning
+  audit — and, since PAC-106, on the caller holding `management:read`: a
+  producer is never offered review, whoever submitted. `submittedById` is
+  deliberately **not** in the response. Returning
   it purely so a client could make the comparison would leak an identity for no
   other reason, and would let two implementations of the rule drift apart.
 
