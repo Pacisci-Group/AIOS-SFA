@@ -3,6 +3,7 @@ import {
   POLICY_STATUS_OPTIONS,
   POLICY_TYPE_OPTIONS,
   isCanonicalPolicyType,
+  isFlowOnlyPolicyStatus,
   itemCountLabel,
   policyTypeHasItemCount,
   premiumTermLabel,
@@ -54,6 +55,12 @@ interface PolicyEditDialogProps<T> {
   isPending: boolean;
   /** Rejects on failure; the dialog stays open and the hook has already toasted. */
   onSave: (input: UpdatePolicyInput) => Promise<unknown>;
+  /**
+   * Under the status select: where to go to cancel the policy, which this
+   * dialog no longer does. The household card has the Cancel button beside it;
+   * the Lead Detail Sold card does not, so the two say different things.
+   */
+  cancelHint?: string;
 }
 
 /**
@@ -86,6 +93,7 @@ export function PolicyEditDialog<T>({
   canEdit,
   isPending,
   onSave,
+  cancelHint = "To cancel the policy, open the client's household and use Cancel policy.",
 }: PolicyEditDialogProps<T>) {
   const [open, setOpen] = useState(false);
 
@@ -130,6 +138,21 @@ export function PolicyEditDialog<T>({
    */
   const asksItemCount =
     policyTypeHasItemCount(policyType) || !isCanonicalPolicyType(policyType);
+
+  /*
+   * The stored status, when it is one only a flow may write.
+   *
+   * Offered back at the top of the list so the select can show it — otherwise a
+   * cancelled policy would open on the "not recognised" placeholder, which is
+   * false. It is never sent (see `toUpdatePolicyInput`); picking Active instead
+   * is how a cancellation is reversed.
+   */
+  const storedStatus = toValues(record).status;
+  const flowOnlyStored =
+    storedStatus && isFlowOnlyPolicyStatus(storedStatus) ? storedStatus : null;
+  const statusOptions = flowOnlyStored
+    ? [flowOnlyStored, ...POLICY_STATUS_OPTIONS]
+    : POLICY_STATUS_OPTIONS;
 
   if (!canEdit) return null;
 
@@ -251,7 +274,12 @@ export function PolicyEditDialog<T>({
               {(f) => (
                 <f.SelectField
                   label="Status"
-                  options={POLICY_STATUS_OPTIONS}
+                  // Cancelling is its own button now, because it records why —
+                  // say so where people used to do it.
+                  description={
+                    flowOnlyStored ? "Pick Active to reinstate it." : cancelHint
+                  }
+                  options={statusOptions}
                   placeholder="Not recognised — pick one"
                   triggerClassName="w-full bg-card border-border"
                 />

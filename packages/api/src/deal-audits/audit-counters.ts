@@ -1,4 +1,4 @@
-import { Model, Types } from 'mongoose';
+import { ClientSession, Model, Types } from 'mongoose';
 import { DealAuditItem } from '../deal-audit-items/schemas/deal-audit-item.schema';
 import { DealAudit } from './schemas/deal-audit.schema';
 
@@ -17,6 +17,10 @@ export interface AuditCounters {
   itemCount: number;
   resolvedCount: number;
   openFailedCount: number;
+  /** The same three over producer-actionable items only (PAC-106). */
+  producerItemCount: number;
+  producerResolvedCount: number;
+  producerOpenCount: number;
   oldestOpenAt: Date | null;
   dueAt: Date | null;
 }
@@ -25,6 +29,9 @@ const EMPTY: AuditCounters = {
   itemCount: 0,
   resolvedCount: 0,
   openFailedCount: 0,
+  producerItemCount: 0,
+  producerResolvedCount: 0,
+  producerOpenCount: 0,
   oldestOpenAt: null,
   dueAt: null,
 };
@@ -40,6 +47,41 @@ const IS_OPEN = {
 };
 
 /**
+ * Whether an item belongs on the producer's hand-off board (PAC-106) — the
+ * aggregation twin of `isProducerActionable` in `@sfa/shared`.
+ *
+ * Producer-visible, **or** failed by the manager: a failed manager-only item
+ * carries the note the producer has to act on. `$ne: false` rather than
+ * `$eq: true` because a pre-PAC-106 item may lack the flag, and absent reads
+ * as visible.
+ *
+ * ⚠ `audit-counters.unit-spec.ts` evaluates this expression — and its query
+ * twin `PRODUCER_ACTIONABLE_FILTER` below — against the shared helper on every
+ * combination. Change all three or none. (The PAC-106 migration carries its
+ * own copy by design: migrations import nothing.)
+ */
+export const IS_PRODUCER_ACTIONABLE = {
+  $or: [
+    { $ne: ['$producerVisible', false] },
+    { $eq: ['$reviewVerdict', 'fail'] },
+  ],
+};
+
+/**
+ * The same rule as a **query filter** — for a `find` over items, where an
+ * aggregation expression cannot go (the producer drawer's checklist,
+ * `DealAuditsService.loadChecklists`).
+ *
+ * A third spelling of one rule, which is why it lives here and not inline at
+ * its caller: `audit-counters.unit-spec.ts` pins it to the shared helper on the
+ * same truth table as the expression above. `$ne: false` matches a missing
+ * field in a query exactly as it does in the expression.
+ */
+export const PRODUCER_ACTIONABLE_FILTER = {
+  $or: [{ producerVisible: { $ne: false } }, { reviewVerdict: 'fail' }],
+};
+
+/**
  * Recompute one audit's denormalized counters from its items (PAC-72).
  *
  * These exist so the hand-off board can **sort and paginate deals server-side**
@@ -48,12 +90,17 @@ const IS_OPEN = {
  * percentage needs a stored denominator at all. `Deal.auditItemCount` held a
  * total nothing read, and a resolved count was stored nowhere.
  *
- * Called after generation and after every resolve. Also the recompute for
- * drift: it derives everything from the items, so running it again is always
- * safe and always converges.
+ * Called after generation, after every resolve, and after every review write
+ * (verdict, send-back, resubmission — PAC-106). Also the recompute for drift:
+ * it derives everything from the items, so running it again is always safe and
+ * always converges.
  *
  * A single aggregation rather than four `countDocuments` calls — this runs on
  * the resolve path, which a user is waiting on.
+ *
+ * `session` puts both the read and the write inside a caller's transaction
+ * (`DealAuditsService.submit` / `review`), where the counters decide whether
+ * the card is on the producer's board at all and must commit with the status.
  */
 export async function syncAuditCounters<
   TItem extends DealAuditItem,
@@ -63,49 +110,81 @@ export async function syncAuditCounters<
   dealAuditModel: Model<TAudit>,
   agencyId: string,
   dealAuditId: Types.ObjectId,
+  session: ClientSession | null = null,
 ): Promise<AuditCounters> {
-  const rows = await itemModel.aggregate<AuditCounters & { _id: null }>([
-    { $match: { agencyId, dealAuditId } },
-    {
-      $group: {
-        _id: null,
-        itemCount: { $sum: 1 },
-        resolvedCount: {
-          $sum: { $cond: [{ $eq: ['$isResolved', true] }, 1, 0] },
-        },
-        openFailedCount: { $sum: { $cond: [IS_OPEN, 1, 0] } },
-        /*
-         * `$min` skips nulls, so the `$cond`'s null branch removes resolved
-         * items from consideration rather than dragging the minimum to
-         * epoch. `firstCreatedAt` falls back to `createdAt` for the same
-         * reason `DealAuditsService` does on read: migrated items carry one
-         * and app-created items the other.
-         */
-        oldestOpenAt: {
-          $min: {
-            $cond: [
-              IS_OPEN,
-              { $ifNull: ['$firstCreatedAt', '$createdAt'] },
-              null,
-            ],
+  const rows = await itemModel
+    .aggregate<AuditCounters & { _id: null }>([
+      { $match: { agencyId, dealAuditId } },
+      {
+        $group: {
+          _id: null,
+          itemCount: { $sum: 1 },
+          resolvedCount: {
+            $sum: { $cond: [{ $eq: ['$isResolved', true] }, 1, 0] },
           },
+          openFailedCount: { $sum: { $cond: [IS_OPEN, 1, 0] } },
+          producerItemCount: {
+            $sum: { $cond: [IS_PRODUCER_ACTIONABLE, 1, 0] },
+          },
+          producerResolvedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    IS_PRODUCER_ACTIONABLE,
+                    { $eq: ['$isResolved', true] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          producerOpenCount: {
+            $sum: {
+              $cond: [{ $and: [IS_PRODUCER_ACTIONABLE, IS_OPEN] }, 1, 0],
+            },
+          },
+          /*
+           * `$min` skips nulls, so the `$cond`'s null branch removes resolved
+           * items from consideration rather than dragging the minimum to
+           * epoch. `firstCreatedAt` falls back to `createdAt` for the same
+           * reason `DealAuditsService` does on read: migrated items carry one
+           * and app-created items the other.
+           */
+          oldestOpenAt: {
+            $min: {
+              $cond: [
+                IS_OPEN,
+                { $ifNull: ['$firstCreatedAt', '$createdAt'] },
+                null,
+              ],
+            },
+          },
+          dueAt: { $min: { $cond: [IS_OPEN, '$dueAt', null] } },
         },
-        dueAt: { $min: { $cond: [IS_OPEN, '$dueAt', null] } },
       },
-    },
-  ]);
+    ])
+    .session(session);
 
   const counters: AuditCounters = rows[0]
     ? {
         itemCount: rows[0].itemCount,
         resolvedCount: rows[0].resolvedCount,
         openFailedCount: rows[0].openFailedCount,
+        producerItemCount: rows[0].producerItemCount,
+        producerResolvedCount: rows[0].producerResolvedCount,
+        producerOpenCount: rows[0].producerOpenCount,
         oldestOpenAt: rows[0].oldestOpenAt ?? null,
         dueAt: rows[0].dueAt ?? null,
       }
     : EMPTY;
 
-  await dealAuditModel.updateOne({ _id: dealAuditId }, { $set: counters });
+  await dealAuditModel.updateOne(
+    { _id: dealAuditId },
+    { $set: counters },
+    { session: session ?? undefined },
+  );
   return counters;
 }
 

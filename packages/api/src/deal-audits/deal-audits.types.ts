@@ -1,9 +1,16 @@
 import type {
   ActivityType,
-  AuditOwnerView,
+  AuditItemReviewView,
+  DealAuditSentBackView,
   DealAuditStatus,
 } from '@sfa/shared';
 import { DealType } from '../deals/schemas/deal.schema';
+
+/*
+ * In `@sfa/shared` since PAC-106 — the Deal Audit page's view extends it.
+ * Re-exported so the many existing imports from here keep working.
+ */
+export type { AuditWorkflowView } from '@sfa/shared';
 
 /**
  * A document already attached to a hand-off item (PAC-56 #21b, surfaced by
@@ -56,6 +63,15 @@ export interface DealAuditItemRow {
    * the row read "call the client and obtain it" (PAC-65 #16).
    */
   attachments: DealAuditRowAttachment[];
+  /** The producer cannot resolve it without a document (PAC-106). */
+  requiresUpload: boolean;
+  /**
+   * A manager-only item that is on the board only because the manager failed
+   * it — the producer fixes it through the sale, not by uploading here.
+   */
+  managerOnly: boolean;
+  /** The manager's ruling; a `fail` carries the note the producer acts on. */
+  review: AuditItemReviewView;
 }
 
 /**
@@ -86,12 +102,22 @@ export interface DealAuditDealRow {
   /**
    * Whole percent resolved — the figure at the top of the drawer, and what
    * replaced the checkmarks. An empty checklist reads 100%.
+   *
+   * Over the **producer's** items only since PAC-106: manager-only items are
+   * not on the board and must not hold the bar back.
    */
   completionPct: number;
-  /** Checklist size — the completion denominator. */
+  /** Producer-actionable items — the completion denominator. */
   itemCount: number;
-  /** Still outstanding. Zero means the card leaves the board. */
+  /** Producer-actionable items still outstanding. */
   openCount: number;
+  /**
+   * Nothing left for the producer: the card stays on the board so they can
+   * submit it (PAC-106), rather than vanishing before Submit can be clicked.
+   */
+  readyToSubmit: boolean;
+  /** The manager's send-back, until the producer resubmits — the red card. */
+  sentBack: DealAuditSentBackView | null;
   /** Age of the **oldest** open item; the board's sort key. */
   oldestDaysOpen: number;
   /** Earliest soft deadline across the open items, ISO, or `null`. */
@@ -132,44 +158,6 @@ export interface ResolveDealAuditResponse {
   id: string;
   resolved: boolean;
   resolvedAt: string;
-}
-
-/**
- * A deal's audit as the workflow endpoints return it (PAC-72 section E).
- *
- * Owners are returned resolved — `{ type, id, name }` — because the stored
- * value is an ObjectId with no indication of *what* it points at. Resolving on
- * read rather than denormalizing the name means renaming a role or a user does
- * not strand every audit they own.
- */
-export interface AuditWorkflowView {
-  /** The audit record's id. */
-  id: string;
-  dealId: string;
-  auditStatus: DealAuditStatus;
-  assignee: AuditOwnerView | null;
-  reviewer: AuditOwnerView | null;
-  submittedAt: string | null;
-  reviewedAt: string | null;
-  reasonCodes: string[];
-  auditScore: number;
-  auditNotes: string | null;
-  /** Checklist roll-up — the completion percentage and its inputs. */
-  itemCount: number;
-  resolvedCount: number;
-  openCount: number;
-  completionPct: number;
-  /*
-   * What the caller may do next, decided by the server.
-   *
-   * The client could almost derive these — `canSubmitAudit` is exported from
-   * `@sfa/shared` — but not `canReview`, which depends on **who submitted**,
-   * and exposing `submittedById` purely so the UI could compare it would leak
-   * an identity for no other reason. Deciding both here also keeps one
-   * definition of the rules instead of two that can drift.
-   */
-  canSubmit: boolean;
-  canReview: boolean;
 }
 
 /**

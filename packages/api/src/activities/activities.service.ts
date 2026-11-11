@@ -7,6 +7,7 @@ import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver
 import { LeadAccessService } from '../leads/lead-access.service';
 import { Lead, LeadDocument } from '../leads/schemas/lead.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { activityRecordedAt } from './activity-recorded-at';
 import { CreateActivityDto } from './dto/create-activity.dto';
 import { Activity, ActivityDocument } from './schemas/activity.schema';
 
@@ -75,6 +76,7 @@ export class ActivitiesService {
         type: activity.type,
         summary: activity.summary ?? null,
         occurredAt: occurredAt.toISOString(),
+        recordedAt: activityRecordedAt(activity)?.toISOString() ?? null,
         userName: await this.userName(userId),
         // Constant, not derived: this endpoint only ever writes a row hung off
         // the lead itself. The quote-recap and sold pipelines write their own

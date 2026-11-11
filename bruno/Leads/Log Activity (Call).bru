@@ -26,6 +26,7 @@ tests {
     const body = res.getBody();
     expect(body.activity.type).to.equal("call");
     expect(body.activity).to.have.property("occurredAt");
+    expect(body.activity).to.have.property("recordedAt");
     expect(body.activity).to.have.property("userName");
   });
 
@@ -84,11 +85,16 @@ docs {
       "type": "call",
       "summary": "Call logged",
       "occurredAt": "2026-08-06T09:56:53.463Z",
+      "recordedAt": "2026-08-06T09:56:53.470Z",
       "userName": "Pat Producer"
     },
     "leadLastActivityAt": "2026-08-06T09:56:53.463Z"
   }
   ```
+  `recordedAt` is when the row was written — what the Lead Detail timeline shows
+  and orders by (see `Get Lead`). A touch back-dated with `occurredAt` keeps that
+  date in `occurredAt` but still appears on the timeline at the time it was
+  logged.
   `userName` is whoever wrote the row, not the lead's producer — this endpoint
   needs only `leads:write`, which a Branch Manager and a CSR both hold. The
   field was `producerName` (over `Activity.producerId`) until PAC-65 renamed it.

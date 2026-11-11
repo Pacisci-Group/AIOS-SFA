@@ -15,6 +15,14 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       reporterName: 'Pat Producer',
       agencyId: null,
     },
+    'audit.sent_back': {
+      dealId: '68f3c0ffee0000000000d31',
+      dealAuditId: '68f3c0ffee0000000000d32',
+      clientName: 'Daniel Lopez',
+      reviewerName: 'Morgan Manager',
+      note: 'The declarations page is for the wrong vehicle.',
+      failedItemCount: 1,
+    },
   };
 
 describe('renderNotification', () => {
@@ -39,6 +47,29 @@ describe('renderNotification', () => {
     const rendered = renderNotification('bug_report.filed', {});
     expect(rendered.body).toBe('Someone filed a bug report.');
     expect(rendered.body).not.toContain('undefined');
+  });
+
+  it('says who sent an audit back and why, and links to that deal', () => {
+    const rendered = renderNotification(
+      'audit.sent_back',
+      FIXTURES['audit.sent_back'],
+    );
+    expect(rendered.body).toBe(
+      "Morgan Manager sent back Daniel Lopez's audit: The declarations page is for the wrong vehicle.",
+    );
+    expect(rendered.href).toBe(
+      '/dashboard/producer?audit=68f3c0ffee0000000000d31',
+    );
+  });
+
+  it('falls back to the failed-item count when a send-back has no note', () => {
+    const rendered = renderNotification('audit.sent_back', {
+      failedItemCount: 2,
+    });
+    expect(rendered.body).toBe(
+      'Your manager sent back an audit: 2 items need your attention.',
+    );
+    expect(rendered.href).toBe('/dashboard/producer');
   });
 
   it('names the reporter and the summary when both are present', () => {
