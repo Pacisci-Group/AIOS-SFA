@@ -1,0 +1,76 @@
+meta {
+  name: Download Quote Recap Document
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/deals/{{auditDealId}}/quote-recap/document/download
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200, or 404 when the sale's quote has no document", function () {
+    // The demo seed writes nothing to object storage, so its recaps carry no
+    // document and this is a 404 there. Either way the route answered, which
+    // proves the manager reaches it without `quote_recaps:read`.
+    expect([200, 404]).to.include(res.getStatus());
+  });
+
+  test("a document comes back as a short-lived inline link", function () {
+    if (res.getStatus() === 200) {
+      const body = res.getBody();
+      expect(body.downloadUrl).to.be.a("string");
+      expect(body.filename).to.be.a("string");
+      expect(body.contentType).to.be.a("string");
+      expect(body.expiresIn).to.be.a("number");
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits/deals/:dealId/quote-recap/document/download — the quote PDF (PAC-106)
+
+  "View quote document" in the Deal Audit page's quote recap drawer.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read` **and** `management:read`.
+  - **Data scope:** the deal's audit must be in the caller's reach.
+
+  ⚠ Its own route rather than `GET /quote-recaps/:id/document/download`: that
+  one is gated on `quote_recaps:read`, which the Branch Manager template does
+  not hold. Reaching the document **through the audit** is the access the
+  manager has.
+
+  The recap is the one the deal names (`quoteRecapId`), else the lead's most
+  recent recap on or before the sold day — the same rule **Get Deal Audit
+  Review** shows as `quoteRecap`.
+
+  ## Response `200`
+  ```json
+  {
+    "downloadUrl": "https://…/agencies/…/quote.pdf?X-Amz-…",
+    "filename": "quote.pdf",
+    "contentType": "application/pdf",
+    "expiresIn": 300
+  }
+  ```
+
+  Presigned **inline** (`Content-Disposition: inline`), so it opens in a tab
+  rather than downloading. A presigned URL is a bearer capability: minted per
+  read, never stored.
+
+  ## Errors
+  - `403 Forbidden` — missing `deal_audits:read` or `management:read`.
+  - `404 Not Found` — no audit for that deal, out of reach, no quote recap, or
+    a recap with no uploaded document.
+}

@@ -82,6 +82,19 @@ docs {
   `attachment.key` **must** be a key returned by the presign endpoint and the
   object must already exist in storage (the upload completed), else `404`.
 
+  ### A document requirement needs its document (PAC-106)
+
+  An item whose template says `requiresUpload` (Good Student, Prior Insurance,
+  Accord Cancellation, Defensive Driver, Fire Subscription, Hail Resistant
+  Roof — the board row's `requiresUpload: true`) cannot be resolved without a
+  file: `400` unless the body carries an `attachment` or the item already has
+  one on file. A yes/no requirement (Inspection, Actual Cash Value,
+  Mortgagee) still resolves with a note alone.
+
+  Resolving is the producer's *claim*; the manager's verdict on the Deal Audit
+  page (**Set Item Verdict**) is the *verification*, and the only thing the
+  Approve gate reads.
+
   ```json
   {
     "note": "Uploaded the signed defensive-driver certificate.",
@@ -100,7 +113,8 @@ docs {
   ```
 
   ## Errors
-  - `400 Bad Request` — invalid body (note too long, bad attachment metadata).
+  - `400 Bad Request` — invalid body (note too long, bad attachment metadata),
+    or a `requiresUpload` item with no document.
   - `401 Unauthorized` — missing/expired token.
   - `403 Forbidden` — module disabled, missing `deal_audits:write`, or the item
     is not the caller's (own scope) / not in their branch.

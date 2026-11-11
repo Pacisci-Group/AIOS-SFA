@@ -1,0 +1,37 @@
+meta {
+  name: Set Item Verdict (Forbidden for Producer)
+  type: http
+  seq: 14
+}
+
+patch {
+  url: {{baseUrl}}/deal-audits/{{reviewItemId}}/verdict
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "verdict": "pass"
+  }
+}
+
+tests {
+  test("returns 403 Forbidden for a producer", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  # PATCH /deal-audits/:itemId/verdict — refused to a producer (PAC-106)
+
+  Runs as the collection's default bearer, the demo **producer** — who holds
+  `deal_audits:write` (they resolve their own items) but not
+  `management:read`. A producer passing their own evidence is exactly what the
+  manager's review exists to prevent, so the route's gate is the AND of both
+  permissions, not the module alone.
+}

@@ -178,6 +178,13 @@ export interface LeadDetailDeal {
    * Empty on a migrated deal whose policies were never linked back to it.
    */
   policies: LeadDetailPolicy[];
+  /**
+   * The sale's audit has passed, or a person submitted it and it is with the
+   * reviewer, so its policies cannot be corrected from the Sold card until it
+   * is sent back (PAC-106 review — `SoldDealEditView.auditLocked`, the same
+   * rule).
+   */
+  auditLocked: boolean;
 }
 
 export interface LeadDetailPriorPolicy {
@@ -242,7 +249,19 @@ export interface LeadDetailActivity {
   id: string;
   type: ActivityType;
   summary: string | null;
+  /**
+   * When the event happened. On `sold`, `quoted` and `lead_created` rows this is
+   * the **business date** from the form (agency-local midnight), not a clock
+   * time — the timeline shows {@link recordedAt} instead.
+   */
   occurredAt: string | null;
+  /**
+   * When the row was entered into the app: the activity's own `createdAt`. What
+   * the timeline displays and is ordered by, so a back-dated sale reads as the
+   * moment it was marked sold. Equals `occurredAt` on migrated and demo rows,
+   * whose `createdAt` is only the import run.
+   */
+  recordedAt: string | null;
   /**
    * Who wrote the row. Resolved from `Activity.userId`; `null` for system and
    * migrated rows.

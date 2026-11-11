@@ -9,6 +9,10 @@ import { CarrierReconciliationModule } from '../carrier-reconciliation/carrier-r
 import { ContactsModule } from '../contacts/contacts.module';
 import { CrmModule } from '../crm/crm.module';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import {
+  DealAudit,
+  DealAuditSchema,
+} from '../deal-audits/schemas/deal-audit.schema';
 import { HouseholdMembersModule } from '../households/household-members.module';
 import { LeadSourcesModule } from '../lead-sources/lead-sources.module';
 import { PoliciesModule } from '../policies/policies.module';
@@ -68,6 +72,8 @@ import { Lead, LeadSchema } from './schemas/lead.schema';
       // would be a cycle needing `forwardRef`. Registering another module's
       // schema is the house pattern — see the note in `crm.module.ts`.
       { name: Mailer.name, schema: MailerSchema },
+      // Whether the Sold card's policy edit is open (`loadDealAuditLock`).
+      { name: DealAudit.name, schema: DealAuditSchema },
     ]),
     // `LeadTicketsService` — opens a lead's quote ticket from Start Quote, and
     // resolves it when the lead reaches a terminal status. The dependency runs
