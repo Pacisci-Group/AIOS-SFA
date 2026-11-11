@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
+  ChevronDown,
   ExternalLink,
   Heart,
   Plus,
@@ -13,9 +14,15 @@ import type { PolicySummary } from "@sfa/shared";
 import { SectionLabel } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { HouseholdPolicyActions } from "./HouseholdPolicyActions";
 import {
+  isInactiveCardStatus,
   statusColors,
   toDisplayPolicy,
   type DisplayPolicy as Policy,
@@ -210,6 +217,9 @@ export function PolicyCard({
           {policy.deductible && (
             <DetailLine label="Deductible" value={policy.deductible} />
           )}
+          {policy.cancellation && (
+            <DetailLine label="Cancelled" value={policy.cancellation} />
+          )}
           {action && <div className="mt-1 flex justify-end">{action}</div>}
           {showOpenLink && (
             <Button asChild size="sm" className="mt-2 w-full">
@@ -281,19 +291,25 @@ interface PolicyPortfolioProps {
   householdId?: string | null;
   /** Enables the cross-sell block, which nothing derives yet. */
   isDemo?: boolean;
+  /** Passed to each card's Cancel button — the page prompts for the address. */
+  onPolicyCancelled?: (policy: PolicySummary) => void;
 }
 
 export function PolicyPortfolio({
   policies,
   householdId = null,
   isDemo = false,
+  onPolicyCancelled,
 }: PolicyPortfolioProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
-  // Every policy renders — a lapsed one is exactly what a CSR needs to see, and
-  // the card already carries a Lapsed badge. Only the headline count and the
-  // premium total narrow to active, because both claim to describe active
-  // coverage and a cancelled policy was inflating them.
+  // Every policy is still here — a lapsed one is exactly what a CSR needs to be
+  // able to find — but the ones off the books (Cancelled, Lapsed) fold into a
+  // collapsed section below the live ones. A long-standing client accumulates
+  // them, and a grid where they sat beside the current lines buried what the
+  // household actually holds. Only the headline count and the premium total
+  // narrow to active, because both claim to describe active coverage.
   //
   // The source row rides along beside the view model: the card renders the
   // display shape, but the edit dialog seeds from the raw `PolicySummary` — it
@@ -302,8 +318,34 @@ export function PolicyPortfolio({
     source: policy,
     display: toDisplayPolicy(policy),
   }));
+  const currentRows = rows.filter(
+    (row) => !isInactiveCardStatus(row.display.status),
+  );
+  const inactiveRows = rows.filter((row) =>
+    isInactiveCardStatus(row.display.status),
+  );
   const displayPolicies = rows.map((row) => row.display);
   const activePolicies = displayPolicies.filter((p) => p.status === "Active");
+
+  const renderCard = ({ source, display }: (typeof rows)[number]) => (
+    <PolicyCard
+      key={display.id}
+      policy={display}
+      isSelected={selectedId === display.id}
+      onClick={() =>
+        setSelectedId(selectedId === display.id ? null : display.id)
+      }
+      action={
+        householdId ? (
+          <HouseholdPolicyActions
+            householdId={householdId}
+            policy={source}
+            onCancelled={onPolicyCancelled}
+          />
+        ) : undefined
+      }
+    />
+  );
 
   // Summed across policy types, so it mixes a 6-month auto premium with an
   // annual property one. It is labelled "Total Premium" rather than "Total
@@ -343,29 +385,47 @@ export function PolicyPortfolio({
           <SectionLabel className="mb-3">Policies</SectionLabel>
           {displayPolicies.length === 0 ? (
             <p className="text-sm text-muted-foreground">No policies on file.</p>
+          ) : currentRows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No active policies. Earlier ones are below.
+            </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
-              {rows.map(({ source, display }) => (
-                <PolicyCard
-                  key={display.id}
-                  policy={display}
-                  isSelected={selectedId === display.id}
-                  onClick={() =>
-                    setSelectedId(selectedId === display.id ? null : display.id)
-                  }
-                  action={
-                    householdId ? (
-                      <HouseholdPolicyActions
-                        householdId={householdId}
-                        policy={source}
-                      />
-                    ) : undefined
-                  }
-                />
-              ))}
+              {currentRows.map(renderCard)}
             </div>
           )}
         </section>
+
+        {/* Off the books — still one click away, never in the way. Collapsed
+            on every visit: the reason to open a household is almost always
+            what it holds now. */}
+        {inactiveRows.length > 0 && (
+          <Collapsible open={showInactive} onOpenChange={setShowInactive}>
+            <section>
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronDown
+                    aria-hidden
+                    className={cn(
+                      "size-4 transition-transform",
+                      !showInactive && "-rotate-90",
+                    )}
+                  />
+                  Cancelled &amp; lapsed ({inactiveRows.length})
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {inactiveRows.map(renderCard)}
+                </div>
+              </CollapsibleContent>
+            </section>
+          </Collapsible>
+        )}
 
         {/* Cross-sell section — demo only until real opportunities are derived. */}
         {isDemo && (

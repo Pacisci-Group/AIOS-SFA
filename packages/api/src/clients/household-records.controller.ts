@@ -18,11 +18,15 @@ import {
 } from '../common/decorators/access.decorators';
 import { Access } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { cancelPolicySchema } from '../policies/dto/cancel-policy.dto';
+import type { CancelPolicyDto } from '../policies/dto/cancel-policy.dto';
 import { updatePolicySchema } from '../policies/dto/update-policy.dto';
 import type { UpdatePolicyDto } from '../policies/dto/update-policy.dto';
 import { ClientsService } from './clients.service';
 import { addHouseholdMemberSchema } from './dto/add-household-member.dto';
 import type { AddHouseholdMemberDto } from './dto/add-household-member.dto';
+import { addHouseholdAddressSchema } from './dto/household-address.dto';
+import type { AddHouseholdAddressDto } from './dto/household-address.dto';
 import { listHouseholdsSchema } from './dto/list-households.dto';
 import { setPrimaryContactSchema } from './dto/set-primary-contact.dto';
 import type { SetPrimaryContactDto } from './dto/set-primary-contact.dto';
@@ -220,5 +224,105 @@ export class HouseholdRecordsController {
       policyId,
       body,
     );
+  }
+
+  /**
+   * Cancel one of the household's policies, saying why — the policy card's
+   * Cancel button.
+   *
+   * Its own route rather than `status: 'Cancelled'` on the `PATCH` above,
+   * because a cancellation carries a fact a field patch has nowhere to put: the
+   * reason (`sold`, `changed_carrier`, or `other` with free text). `'Cancelled'`
+   * is accordingly a flow-only status now, refused by `PATCH` like the two
+   * replacement statuses.
+   *
+   * Same OR gate as the edit, for the same reason — the service team holds
+   * `crm_service:write` and nothing on the Sold side — and the same
+   * household-in-the-path authorisation. 409 when the policy is already off the
+   * books.
+   *
+   * `POST` to a verb sub-resource, like `primary-contact`: one decision with its
+   * own rules and its own 409, not a field on the policy.
+   */
+  @Post(':id/policies/:policyId/cancel')
+  @RequireAnyPermission(
+    modulePermission(ModuleKey.Clients, 'write'),
+    modulePermission(ModuleKey.CrmService, 'write'),
+  )
+  cancelPolicy(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Param('policyId') policyId: string,
+    @Body(new ZodValidationPipe(cancelPolicySchema)) body: CancelPolicyDto,
+  ) {
+    return this.clientsService.cancelHouseholdPolicy(
+      access,
+      id,
+      policyId,
+      body,
+    );
+  }
+
+  /*
+   * ── The address book ───────────────────────────────────────────────────────
+   *
+   * Add, promote and remove the household's addresses. The primary stays
+   * `propertyAddress`; the book is everything else (`household-address-book.ts`
+   * in `@sfa/shared`).
+   *
+   * Gated like the policy edit and cancel above — `clients:write` **or**
+   * `crm_service:write` — rather than `@RequireWrite(ModuleKey.Clients)` like
+   * the member writes, deliberately: updating the address is what the Cancel
+   * button prompts for next, and a CSR offered that prompt must be able to act
+   * on it. Each returns the whole `HouseholdView`, because promoting an address
+   * moves the profile's address, the book, and the Clients list's location
+   * together.
+   */
+
+  /** Add an address, optionally as the new primary. 409 on a duplicate or a full book. */
+  @Post(':id/addresses')
+  @RequireAnyPermission(
+    modulePermission(ModuleKey.Clients, 'write'),
+    modulePermission(ModuleKey.CrmService, 'write'),
+  )
+  addAddress(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(addHouseholdAddressSchema))
+    body: AddHouseholdAddressDto,
+  ) {
+    return this.clientsService.addHouseholdAddress(access, id, body);
+  }
+
+  /** Swap an address from the book with the current primary. */
+  @Post(':id/addresses/:addressId/primary')
+  @RequireAnyPermission(
+    modulePermission(ModuleKey.Clients, 'write'),
+    modulePermission(ModuleKey.CrmService, 'write'),
+  )
+  setPrimaryAddress(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Param('addressId') addressId: string,
+  ) {
+    return this.clientsService.setPrimaryHouseholdAddress(
+      access,
+      id,
+      addressId,
+    );
+  }
+
+  /** Remove an address from the book. The primary is not in it, so cannot be removed. */
+  @Delete(':id/addresses/:addressId')
+  @RequireAnyPermission(
+    modulePermission(ModuleKey.Clients, 'write'),
+    modulePermission(ModuleKey.CrmService, 'write'),
+  )
+  removeAddress(
+    @Access() access: AccessContext,
+    @Param('id') id: string,
+    @Param('addressId') addressId: string,
+  ) {
+    return this.clientsService.removeHouseholdAddress(access, id, addressId);
   }
 }

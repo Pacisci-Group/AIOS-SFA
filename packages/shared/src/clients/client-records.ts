@@ -11,6 +11,8 @@
  */
 
 import type { StoredAddress, StructuredAddress } from '../domain/address';
+import type { HouseholdAddressEntry } from '../domain/household-address-book';
+import type { PolicyCancellationView } from '../domain/policy-cancellation';
 
 /** A household member, from the `contacts` collection. */
 export interface ContactSummary {
@@ -72,6 +74,14 @@ export interface PolicySummary {
   effectiveDate: string | null;
   expirationDate: string | null;
   renewalDate: string | null;
+  /**
+   * Why it was cancelled, when it was cancelled through the Cancel button.
+   *
+   * Null on every other policy — including the migrated ones that read
+   * `'Cancelled'`, which never recorded a reason. That absence is the honest
+   * answer for them, not a gap to fill.
+   */
+  cancellation: PolicyCancellationView | null;
 }
 
 /** The household fields shown when a household is referenced from elsewhere. */
@@ -130,6 +140,13 @@ export interface HouseholdView extends HouseholdSummary {
    */
   propertyAddress: StoredAddress | null;
   mailingAddress: StoredAddress | null;
+  /**
+   * The household's address book: every address it holds **besides** the
+   * primary, which is `propertyAddress` above and nowhere else (see
+   * `household-address-book.ts`). Newest first. Empty for a household that has
+   * only ever had the one.
+   */
+  otherAddresses: HouseholdAddressEntry[];
   /**
    * The primary contact's email and phone, **resolved from that contact** —
    * the household no longer stores a copy of either (PAC-91 §1/§4). Null when

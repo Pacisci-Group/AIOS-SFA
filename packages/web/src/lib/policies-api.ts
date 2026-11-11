@@ -1,4 +1,6 @@
 import type {
+  CancelPolicyInput,
+  DocumentDownloadResponse,
   PolicyReplacementChain,
   PolicySearchResult,
   PolicySummary,
@@ -87,6 +89,26 @@ export function updateHouseholdPolicy(
 }
 
 /**
+ * `POST /households/:id/policies/:policyId/cancel` — the Cancel button.
+ *
+ * `clients:write` **or** `crm_service:write`, like the edit above. The reason is
+ * required, and `note` only counts with `'other'` — the server drops it for the
+ * named reasons. 409 when the policy is already off the books.
+ *
+ * Returns the saved `PolicySummary`, `cancellation` included.
+ */
+export function cancelHouseholdPolicy(
+  householdId: string,
+  policyId: string,
+  input: CancelPolicyInput,
+) {
+  return apiFetch<PolicySummary>(
+    `/households/${encodeURIComponent(householdId)}/policies/${encodeURIComponent(policyId)}/cancel`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+/**
  * Every policy in this one's replacement chain, oldest first.
  *
  * Returns a single-entry chain for a policy that has never been replaced, so
@@ -94,4 +116,15 @@ export function updateHouseholdPolicy(
  */
 export function getPolicyHistory(policyId: string) {
   return apiFetch<PolicyReplacementChain>(`${BASE}/${policyId}/history`);
+}
+
+/**
+ * `GET /policies/:id/new-business-application/download` — the signed
+ * application the Sold form uploaded, inline-signed for the Deal Audit page's
+ * drawer (PAC-106). Fetched when the drawer opens: the URL expires.
+ */
+export function getNbaDocumentUrl(policyId: string) {
+  return apiFetch<DocumentDownloadResponse>(
+    `${BASE}/${encodeURIComponent(policyId)}/new-business-application/download`,
+  );
 }

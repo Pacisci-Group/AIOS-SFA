@@ -38,6 +38,7 @@ tests {
       "policies",
       "contacts",
       "auditStatus",
+      "auditLocked",
       "isMigrated",
       "canAddPolicies",
       "addPoliciesBlockedBy",
@@ -61,6 +62,7 @@ tests {
   test("an app-booked sale whose audit is not submitted can take another policy", function () {
     const body = res.getBody();
     expect(body.isMigrated).to.equal(false);
+    expect(body.auditLocked).to.equal(false);
     expect(body.canAddPolicies).to.equal(true);
     expect(body.addPoliciesBlockedBy).to.equal(null);
   });
@@ -104,6 +106,7 @@ docs {
   | policies             | `LeadDetailPolicy[]`     | same shape as `GET /leads/:id` → `deal.policies`, so the Sold card's edit dialog works unchanged |
   | contacts             | `SoldHouseholdContact[]` | the defensive-driver picker, for adding a policy |
   | auditStatus          | `Not Submitted` \| `Pending` \| `Pass` \| `Fail` \| null | the furthest any of the deal's audits has got; `null` when none was generated |
+  | auditLocked          | boolean                  | approved, or submitted by a person and with the reviewer — the sold date, the policy edits and Add policy are all refused (`409`) until it is sent back (PAC-106 review). A system submission and a sent-back audit are open |
   | isMigrated           | boolean                  | imported from SmartSuite |
   | canAddPolicies       | boolean                  | |
   | addPoliciesBlockedBy | `audit_submitted` \| `no_lead` \| `no_household` \| null | why not |
