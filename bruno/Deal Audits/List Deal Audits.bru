@@ -31,11 +31,18 @@ script:post-response {
     const items = res.getBody().items || [];
 
     // The workflow requests submit then review, so they need a deal that is not
-    // ALREADY awaiting review — submitting one of those is a 409, and reviewing
-    // it can 403 if whoever submitted it happens to be our reviewer. Prefer a
-    // submittable row; fall back to the first so the folder still has a target.
-    const workable = items.find((row) => row.auditStatus !== "Pending");
-    const target = workable || items[0];
+    // already awaiting review. Since PAC-106 every row on this board is one —
+    // the board lists only `Not Submitted` and `Fail` (a `Pending` audit is
+    // with the manager) — so the filter is belt and braces.
+    //
+    // Prefer a row with something still open: the presign / resolve /
+    // download requests need an outstanding item, and since PAC-106 a card
+    // stays on the board once all its items are resolved ("Ready to submit").
+    const workable = items.filter((row) => row.auditStatus !== "Pending");
+    const target =
+      workable.find((row) => (row.items || []).some((entry) => entry.open)) ||
+      workable[0] ||
+      items[0];
 
     if (target) {
       bru.setVar("auditDealId", target.dealId);
@@ -82,7 +89,40 @@ tests {
       expect(row).to.have.property("auditStatus");
       expect(row.items).to.be.an("array");
       expect(row.itemCount).to.be.at.least(row.openCount);
-      expect(row.openCount).to.be.above(0);
+      expect(row.itemCount).to.be.above(0);
+    }
+  });
+
+  test("only audits waiting on the producer are on the board (PAC-106)", function () {
+    // Not Submitted, or sent back (Fail). Pending is with the manager and
+    // Pass is finished; neither has anything for the producer to do.
+    for (const row of res.getBody().items) {
+      expect(["Not Submitted", "Fail"]).to.include(row.auditStatus);
+      expect(row.readyToSubmit).to.equal(row.openCount === 0);
+    }
+  });
+
+  test("a sent-back row carries the manager's marker", function () {
+    for (const row of res.getBody().items) {
+      if (row.auditStatus === "Fail" && row.sentBack) {
+        expect(row.sentBack).to.have.property("note");
+        expect(row.sentBack).to.have.property("byName");
+        expect(row.sentBack.failedItemCount).to.be.at.least(1);
+      }
+    }
+  });
+
+  test("checklist entries say who must act and what the manager ruled", function () {
+    for (const row of res.getBody().items) {
+      for (const entry of row.items) {
+        expect(entry.requiresUpload).to.be.a("boolean");
+        expect(entry.managerOnly).to.be.a("boolean");
+        expect(entry).to.have.property("review");
+        // A manager-only item is here only because the manager failed it.
+        if (entry.managerOnly) {
+          expect(entry.review.verdict).to.equal("fail");
+        }
+      }
     }
   });
 
@@ -170,9 +210,35 @@ docs {
 
   **`total` and `totalPages` count deals**, not requirements.
 
-  A deal appears when it has **at least one outstanding requirement**
-  (`openFailedCount > 0`), regardless of where its audit sits in the review
-  workflow. Sorted by the age of its oldest outstanding requirement.
+  ## 🔴 What is on the board (PAC-106)
+
+  A deal appears when its audit is **waiting on the producer** — `auditStatus`
+  is `Not Submitted` or `Fail` (sent back) — **and** it has at least one item
+  for the producer (`producerItemCount > 0`). Sorted by the age of its oldest
+  outstanding requirement.
+
+  This replaced `openFailedCount > 0`, which had two faults: a `Pending` audit
+  (with the manager) stayed on the producer's board with nothing for them to
+  do, and a sent-back card **vanished the moment its last item was resolved**,
+  before the producer could click Submit. A card now stays until it is
+  submitted, and reads `readyToSubmit: true` once nothing is open.
+
+  ### Only the producer's items
+
+  Each template is either **producer-visible** (Good Student, Prior Insurance,
+  Home Inspection, …) or **manager-only** (Correct Sold Date, Quote Recap,
+  Drivers Verified, …) — `AuditTemplate.producerVisible`, copied onto every
+  item. The board lists, counts and completes over the producer's items only;
+  the manager sees the whole checklist on the Deal Audit page
+  (**Get Deal Audit Review**).
+
+  The exception: a **manager-only item the manager failed** joins the board
+  with `managerOnly: true` and the manager's note — the producer fixes it
+  through the sale (*Fix it* → Edit Sold Deal), not by uploading here.
+
+  An audit with **no** producer items never reaches this board: it is
+  submitted to the manager automatically when generated
+  (`submittedById: null`).
 
   - **Module:** `deal_audits` (must be enabled for the agency)
   - **Permission:** `deal_audits:read`
@@ -194,6 +260,15 @@ docs {
   | page     | int  | 1       | min 1 (1-based)                    |
   | pageSize | int  | 8       | min 1, max 50                      |
   | due      | enum | `all`   | `all` \| `overdue` \| `due_soon`    |
+  | dealId   | id   | —       | optional — one deal's card only (PAC-106) |
+
+  ### `dealId` — one card (PAC-106)
+
+  What the `audit.sent_back` notification's link
+  (`/dashboard/producer?audit=<dealId>`) uses to open the producer's drawer,
+  wherever the card sits in the board's paging. The board's rules still apply:
+  a deal out of the caller's scope, or no longer waiting on them (`Pending`,
+  `Pass`), is an **empty page**, never a 404.
 
   ### `due` — the soft 7-day deadline (PAC-65)
 
@@ -247,10 +322,17 @@ docs {
         "ref": "AUD-2026-0042",
         "client": "Jane Homeowner",
         "type": "Home",
-        "auditStatus": "Not Submitted",
-        "completionPct": 71,
-        "itemCount": 7,
-        "openCount": 2,
+        "auditStatus": "Fail",
+        "completionPct": 50,
+        "itemCount": 2,
+        "openCount": 1,
+        "readyToSubmit": false,
+        "sentBack": {
+          "at": "2026-10-19T15:02:00.000Z",
+          "byName": "Morgan Manager",
+          "note": "The transcript is from 2019.",
+          "failedItemCount": 1
+        },
         "oldestDaysOpen": 9,
         "dueAt": "2026-08-24T10:15:00.000Z",
         "items": [
@@ -267,7 +349,15 @@ docs {
                 "contentType": "application/pdf",
                 "size": 20480
               }
-            ]
+            ],
+            "requiresUpload": true,
+            "managerOnly": false,
+            "review": {
+              "verdict": "fail",
+              "note": "The transcript is from 2019.",
+              "reviewedAt": "2026-10-19T15:01:00.000Z",
+              "reviewedByName": "Morgan Manager"
+            }
           }
         ]
       }
@@ -292,6 +382,14 @@ docs {
   | daysOpen | number | days the item has been open (oldest first)              |
   | dueAt    | string \| null | soft deadline, ISO. `null` for items generated before the field existed |
   | attachments | array | proofs uploaded at sale time (PAC-56 #21b), surfaced by PAC-65 #16 |
+  | requiresUpload | boolean | the producer cannot resolve it without a document (PAC-106) |
+  | managerOnly | boolean | a manager-only item on the board because the manager failed it |
+  | review | object | the manager's ruling: `{ verdict: "pass" \| "fail" \| null, note, reviewedAt, reviewedByName }` |
+
+  Deal-level since PAC-106: `itemCount`, `openCount` and `completionPct` count
+  the **producer's** items only; `readyToSubmit` is `openCount === 0`;
+  `sentBack` is `{ at, byName, note, failedItemCount }` while the audit is
+  sent back, else `null`.
 
   ### `attachments` — evidence, or the instruction to go get it
 

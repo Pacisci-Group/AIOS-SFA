@@ -1,0 +1,49 @@
+meta {
+  name: Reinstate Cancelled Policy
+  type: http
+  seq: 16
+}
+
+patch {
+  url: {{baseUrl}}/households/{{policyCancelHouseholdId}}/policies/{{policyCancelPolicyId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "status": "Active"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the policy is back on the books", function () {
+    const body = res.getBody();
+    expect(body.policyStatus).to.equal("Active");
+    expect(body.active).to.equal(true);
+  });
+
+  test("the reason it left is cleared with it", function () {
+    expect(res.getBody().cancellation).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH /households/:id/policies/:policyId — reinstate
+
+  Puts back the policy **Cancel Household Policy** cancelled, so a run leaves the
+  data as it found it. Reinstating is an ordinary **Update Household Policy**
+  with `status: "Active"`: it sets `active` back to `true`, recounts the
+  household, and **clears the stored cancellation reason**, because it no longer
+  describes the policy.
+
+  See **Update Household Policy** for the endpoint itself.
+}

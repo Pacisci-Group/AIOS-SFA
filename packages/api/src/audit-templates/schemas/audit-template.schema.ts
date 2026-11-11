@@ -33,6 +33,24 @@ export class AuditTemplate extends TenantRecord {
 
   @Prop()
   task?: string;
+
+  /*
+   * Who sees the item, and whether it needs a file (PAC-106 §3). Copied onto
+   * every item at generation, so the hand-off board never joins this catalog.
+   */
+
+  /**
+   * `false` = manager-only: checked by the manager against the application,
+   * hidden from the producer's hand-off board. Defaults to visible, so a
+   * template an agency adds reaches the producer unless someone decides to
+   * hide it.
+   */
+  @Prop({ default: true })
+  producerVisible: boolean;
+
+  /** The producer cannot mark the item resolved without a document. */
+  @Prop({ default: false })
+  requiresUpload: boolean;
 }
 
 export const AuditTemplateSchema = SchemaFactory.createForClass(AuditTemplate);

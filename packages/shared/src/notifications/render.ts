@@ -48,6 +48,28 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
       href: '/admin/bugs',
     };
   },
+  'audit.sent_back': (data) => {
+    const reviewer = text(data.reviewerName) ?? 'Your manager';
+    const client = text(data.clientName);
+    const note = text(data.note);
+    const failed =
+      typeof data.failedItemCount === 'number' && data.failedItemCount > 0
+        ? data.failedItemCount
+        : null;
+    const what = client ? `${client}'s audit` : 'an audit';
+    const fallback = failed
+      ? `${failed} item${failed === 1 ? '' : 's'} need${failed === 1 ? 's' : ''} your attention.`
+      : 'It needs your attention.';
+    const dealId = text(data.dealId);
+    return {
+      title: 'Audit sent back',
+      body: `${reviewer} sent back ${what}: ${note ?? fallback}`,
+      // The producer board opens that deal's drawer from `?audit=`.
+      href: dealId
+        ? `/dashboard/producer?audit=${encodeURIComponent(dealId)}`
+        : '/dashboard/producer',
+    };
+  },
 };
 
 /**

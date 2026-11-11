@@ -79,7 +79,11 @@ export function SoldCard({ deal, leadId }: SoldCardProps) {
                 <div className="min-w-0 flex-1">
                   <PolicyRow policy={policy} />
                 </div>
-                <EditPolicyDialog leadId={leadId} policy={policy} />
+                <EditPolicyDialog
+                  leadId={leadId}
+                  policy={policy}
+                  locked={deal.auditLocked}
+                />
               </li>
             ))}
           </ul>

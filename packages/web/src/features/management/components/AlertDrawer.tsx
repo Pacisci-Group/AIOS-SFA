@@ -1,4 +1,4 @@
-import { ModuleKey } from "@sfa/shared";
+import { ModuleKey, modulePermission } from "@sfa/shared";
 import type { ManagementDrawerKey } from "@sfa/shared";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -48,9 +48,9 @@ import { ALERT_CARDS } from "./AlertCards";
  * ("I don't want to go update this page until we get … the manager page and
  * the owner page with everything flowing properly"). The rows link where a
  * record already has a page: a lead to `/leads/:id`, a ticket to the ticket
- * workspace, and an audit to its **household** until the Deal Audit page
- * ships (PAC-106) — a deal with no household is plain text with a tooltip
- * saying so, rather than a link to nowhere.
+ * workspace, and an audit to its Deal Audit page (PAC-106). Someone who
+ * cannot open that page gets the household instead, and a deal with neither
+ * is plain text with a tooltip saying so, rather than a link to nowhere.
  *
  * The page number is local: a fresh drawer starts on page 1, and the usual
  * drawer is one page (the API's default page size is 50).
@@ -238,9 +238,14 @@ function StalledLeadItem({ row }: { row: StalledLeadRow }) {
 }
 
 function AgingAuditItem({ row }: { row: AgingAuditRow }) {
-  const { canRead } = usePermissions();
-  const to =
-    row.householdId && canRead(ModuleKey.Clients)
+  const { canRead, canAll } = usePermissions();
+  // The page's own gate (PAC-106), so the link never leads to a redirect.
+  const to = canAll([
+    modulePermission(ModuleKey.DealAudits, "read"),
+    modulePermission(ModuleKey.Management, "read"),
+  ])
+    ? `/deal-audits/${row.dealId}`
+    : row.householdId && canRead(ModuleKey.Clients)
       ? `/clients/${row.householdId}`
       : null;
   return (
@@ -249,9 +254,7 @@ function AgingAuditItem({ row }: { row: AgingAuditRow }) {
         <RecordName
           to={to}
           reason={
-            row.householdId
-              ? undefined
-              : "This deal has no household on record; the Deal Audit page is coming with PAC-106."
+            row.householdId ? undefined : "This deal has no household on record."
           }
         >
           {row.clientName}

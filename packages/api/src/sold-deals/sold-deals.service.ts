@@ -7,9 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
-  DEFAULT_DEAL_AUDIT_STATUS,
   DataScope,
-  normalizeDealAuditStatus,
   normalizeLeadStatus,
   normalizePolicyType,
 } from '@sfa/shared';
@@ -17,7 +15,6 @@ import type {
   AccessContext,
   AddSoldDealPoliciesResponse,
   CreateSoldDealResponse,
-  DealAuditStatus,
   SoldDealAddPoliciesBlock,
   SoldDealEditView,
   SoldDealLeadContext,
@@ -47,6 +44,11 @@ import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import { CrmAssignmentService } from '../crm-rotations/crm-assignment.service';
 import { LeadTicketsService } from '../crm/lead-tickets.service';
 import { TenantContextResolver } from '../common/tenancy/tenant-context.resolver';
+import {
+  AUDIT_LOCKED_MESSAGE,
+  DealAuditLock,
+  loadDealAuditLock,
+} from '../common/deal-audits/audit-lock';
 import { LeadAccessService } from '../leads/lead-access.service';
 import {
   QuoteRecap,
@@ -105,7 +107,7 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 /** What the Edit sale page — and the 409 — say about a blocked addition. */
 const ADD_POLICIES_BLOCK_MESSAGES: Record<SoldDealAddPoliciesBlock, string> = {
   audit_submitted:
-    "This sale's audit has already been submitted. It has to be sent back before a policy can be added.",
+    "This sale's audit has been approved, or is with a reviewer. It has to be sent back before a policy can be added.",
   no_lead:
     'This sale is not linked to a lead, so policies cannot be added to it here.',
   no_household:
@@ -554,12 +556,21 @@ export class SoldDealsService {
    * timeline and the Sold card disagree about when the sale happened. The
    * correction itself is timestamped *now*, by the change-log row.
    *
+   * ## Refused (409) when the audit is locked
+   *
+   * Approved, or submitted by a person and with the reviewer — the rule Add
+   * policy follows ({@link DealAuditLock}). Until the PAC-106 review this was
+   * open in every state, so a date the manager had passed could move after
+   * approval with nothing reopening. A sent-back audit is open: "Fix it" leads
+   * here.
+   *
    * ## What deliberately does not
    *
    *   - **Audit items.** `dueAt` counts from when an item was raised
    *     (`audit-due.ts`), not from the sale, and the "Correct Sold Date" item is
    *     left as it is — decided with the product owner; the edit log is the
-   *     record.
+   *     record. The lock above is what keeps that safe: the date can only move
+   *     while the manager has not yet ruled, or has sent it back.
    *   - **Policies and renewal anchors.** `renewalDate` derives from each
    *     policy's own effective date, never from the sale.
    *
@@ -579,6 +590,13 @@ export class SoldDealsService {
     // comparison is on the agency's calendar, the same one the form shows.
     if (businessDay(deal.soldDate, access.timeZone) === dto.soldDate) {
       return this.buildEditView(deal, access.timeZone, policies);
+    }
+
+    // The manager passes "Correct Sold Date" against the application; a date
+    // moved under an approved or submitted audit would leave that pass
+    // vouching for a value no longer on the deal (PAC-106 review).
+    if ((await this.loadAuditGate(deal)).locked) {
+      throw new ConflictException(AUDIT_LOCKED_MESSAGE);
     }
 
     // Only a date that is actually moving is bounded (PAC-159 §1b): a migrated
@@ -637,9 +655,12 @@ export class SoldDealsService {
    *
    * ## Refused (409) when
    *
-   *   - **the audit has been submitted** (`Pending` / `Pass` / `Fail`). The new
-   *     policy's items would land on a checklist a reviewer has already ruled
-   *     on — decided with the product owner: block, rather than reopen;
+   *   - **the audit is locked** — approved, or submitted by a person and with
+   *     the reviewer (`loadAuditGate`). The new policy's items would land on a
+   *     checklist a reviewer is ruling on — decided with the product owner:
+   *     block, rather than reopen. Since PAC-106 a **sent-back** audit is open
+   *     again (that is what "Fix it" is for), and so is one the system
+   *     submitted because it had nothing for the producer;
    *   - the deal has **no lead** (uploads are keyed on it) or **no household**
    *     (every policy row is written against it).
    *
@@ -669,7 +690,7 @@ export class SoldDealsService {
       return this.additionResponse(deal, access.timeZone, true);
     }
 
-    const block = this.addPoliciesBlock(deal, await this.loadAuditStatus(deal));
+    const block = this.addPoliciesBlock(deal, await this.loadAuditGate(deal));
     if (block) throw new ConflictException(ADD_POLICIES_BLOCK_MESSAGES[block]);
     // Both present: `addPoliciesBlock` returns a reason otherwise.
     const leadId = deal.leadId as Types.ObjectId;
@@ -814,36 +835,18 @@ export class SoldDealsService {
   }
 
   /**
-   * The furthest the deal's audit has got, or `null` when it has none.
-   *
-   * Every parent row is read, not just one: `dealAudits` is non-unique on
-   * `{agencyId, dealId}` because migrated data can hold several, and a deal any
-   * one of which has been submitted counts as submitted.
+   * Where the deal's audit stands, for the Edit sale page and its three
+   * corrections — see {@link DealAuditLock}.
    */
-  private async loadAuditStatus(
-    deal: DealDocument,
-  ): Promise<DealAuditStatus | null> {
-    const audits = await this.dealAuditModel
-      .find({ agencyId: deal.agencyId, dealId: deal._id })
-      .select('auditStatus')
-      .lean<Array<{ auditStatus?: string }>>();
-    if (!audits.length) return null;
-
-    return (
-      audits
-        .map((audit) => normalizeDealAuditStatus(audit.auditStatus))
-        .find((status) => status !== DEFAULT_DEAL_AUDIT_STATUS) ??
-      DEFAULT_DEAL_AUDIT_STATUS
-    );
+  private loadAuditGate(deal: DealDocument): Promise<DealAuditLock> {
+    return loadDealAuditLock(this.dealAuditModel, deal.agencyId, deal._id);
   }
 
   private addPoliciesBlock(
     deal: DealDocument,
-    auditStatus: DealAuditStatus | null,
+    gate: { locked: boolean },
   ): SoldDealAddPoliciesBlock | null {
-    if (auditStatus && auditStatus !== DEFAULT_DEAL_AUDIT_STATUS) {
-      return 'audit_submitted';
-    }
+    if (gate.locked) return 'audit_submitted';
     if (!deal.leadId) return 'no_lead';
     if (!deal.householdId) return 'no_household';
     return null;
@@ -854,7 +857,7 @@ export class SoldDealsService {
     timeZone: string,
     policies?: PolicyDocument[],
   ): Promise<SoldDealEditView> {
-    const [rows, household, auditStatus, producerName] = await Promise.all([
+    const [rows, household, auditGate, producerName] = await Promise.all([
       policies ?? this.loadDealPolicies(deal),
       deal.householdId
         ? this.householdModel.findOne({
@@ -862,12 +865,12 @@ export class SoldDealsService {
             agencyId: deal.agencyId,
           })
         : Promise.resolve(null),
-      this.loadAuditStatus(deal),
+      this.loadAuditGate(deal),
       deal.producerId
         ? this.producerName(deal.producerId)
         : Promise.resolve(undefined),
     ]);
-    const block = this.addPoliciesBlock(deal, auditStatus);
+    const block = this.addPoliciesBlock(deal, auditGate);
 
     return {
       id: deal._id.toString(),
@@ -889,7 +892,8 @@ export class SoldDealsService {
       isBundle: deal.isBundle ?? false,
       policies: rows.map((policy) => toLeadDetailPolicy(policy)),
       contacts: household ? await this.householdContacts(household) : [],
-      auditStatus,
+      auditStatus: auditGate.status,
+      auditLocked: auditGate.locked,
       isMigrated: Boolean(deal.legacySmartSuiteId),
       canAddPolicies: block === null,
       addPoliciesBlockedBy: block,

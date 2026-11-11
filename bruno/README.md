@@ -42,7 +42,21 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | CRM Service | Renewal Outreach Desk | `GET /crm/service-tickets/renewals/desk` | Proactive renewal calls, with `daysUntilAvailable` null exactly when the call is actionable. `crm_service:read`. |
 | Deal Audits | List Deal Audits | `GET /deal-audits` | **PAC-12** — Deals Pending Service Hand-off (read). `deal_audits:read`. |
 | Deal Audits | Presign Audit Attachment | `POST /deal-audits/:itemId/attachments/presign` | **PAC-14** — resolution document upload. `deal_audits:write`. |
-| Deal Audits | Resolve Deal Audit Item | `PATCH /deal-audits/:itemId/resolve` | **PAC-14** — resolve + optional note/document. `deal_audits:write`. |
+| Deal Audits | Resolve Deal Audit Item | `PATCH /deal-audits/:itemId/resolve` | **PAC-14** — resolve + optional note/document. `deal_audits:write`. A `requiresUpload` item without a document is a 400 (PAC-106). |
+| Deal Audits | Login as Reviewer | `POST /auth/login` | **PAC-106** — the branch manager (`{{managerEmail}}`); asserts `management:read`. Captures `auditReviewerToken` under its own name. |
+| Deal Audits | Submit Audit For Review | `POST /deal-audits/deals/:dealId/submit` | **PAC-72** — the producer hands the audit to the manager. Since PAC-106 it clears a send-back's failed verdicts and its `sentBack` marker. |
+| Deal Audits | List Review Queue | `GET /deal-audits/queue` | **PAC-106** — the manager's Deal Audits queue: one row per deal, days sitting in business days, oldest first; search, producer / line / aging / sold-date filters and four sorts. `deal_audits:read` **+** `management:read`. Captures `queueProducerId`, `queueClientName`. |
+| Deal Audits | Review Queue (Forbidden for Producer) | `GET /deal-audits/queue` | **PAC-106** — 403 for the producer bearer: the gate is the AND of both permissions. |
+| Deal Audits | Review Queue Options | `GET /deal-audits/queue/options` | The queue's producer filter: the sellers of the deals in the manager's reach, departed ones marked. Same gate as the queue. |
+| Deal Audits | List Review Queue (Filtered) | `GET /deal-audits/queue` | Search (`q` — client, producer or policy number) + `producerIds` + `sort=client`, on the deal **List Review Queue** captured. |
+| Deal Audits | List Review Queue (Aging Only) | `GET /deal-audits/queue` | `aging=true&sort=producer` — past the five-business-day SLA, never approved, grouped by seller. |
+| Deal Audits | Get Deal Audit Review | `GET /deal-audits/deals/:dealId/review` | **PAC-106** — the Deal Audit page: sale, policies + NBA metadata, quote recap, lead, every item. Captures `reviewItemId`, `reviewPolicyId`. |
+| Deal Audits | Approve Blocked | `POST /deal-audits/deals/:dealId/review` | **PAC-106** — approve before every item passes: 409 `audit_items_not_passed` with `unmet`. |
+| Deal Audits | Set Item Verdict | `PATCH /deal-audits/:itemId/verdict` | **PAC-106** — the manager's Pass / Fail + note on one item; a pass resolves it. `deal_audits:write` **+** `management:read`. |
+| Deal Audits | Set Item Verdict (Forbidden for Producer) | `PATCH /deal-audits/:itemId/verdict` | **PAC-106** — 403 for the producer bearer. |
+| Deal Audits | Set Item Verdict (Fail) | `PATCH /deal-audits/:itemId/verdict` | **PAC-106** — overturns the pass; what Send back needs. |
+| Deal Audits | Review Audit | `POST /deal-audits/deals/:dealId/review` | **PAC-72 / PAC-106** — Send back (`request_changes` + note) → `Fail`, failed items reopen on the producer's board, `audit.sent_back` notification. Runs as the reviewer. |
+| Deal Audits | Download Quote Recap Document | `GET /deal-audits/deals/:dealId/quote-recap/document/download` | **PAC-106** — the quote PDF, inline, reached through the audit (the manager holds no `quote_recaps:read`). 404 on the demo seed, which uploads no files. |
 | Leads | List Leads | `GET /leads` | **PAC-36** — Leads list: search, filters, pagination (read). `leads:read`. |
 | Leads | Create Lead | `POST /leads` | **PAC-37** — New Lead intake pipeline. `leads:write`. |
 | Leads | Create Lead (Replay) | `POST /leads` | **PAC-37** — submission-token idempotency check. |
@@ -119,6 +133,7 @@ Every implemented endpoint, plus the auth endpoints you need to call them.
 | Performance | Get Performance (Custom Range) | `GET /performance` | **PAC-9** — the 📅 Custom Date chip's arbitrary window. |
 | Performance | Get Performance (Invalid Custom) | `GET /performance` | **PAC-9** — `range=custom` with no bounds must 400. |
 | Policies | Check Policy Number | `GET /policies/check` | **PAC-40** — Sold wizard Card 3 dedupe. `deal_audits:read`. |
+| Policies | Download New Business Application | `GET /policies/:id/new-business-application/download` | **PAC-106** — the policy's NBA PDF, inline, for the Deal Audit page's drawer. Uses `reviewPolicyId` + `auditReviewerToken` from Deal Audits; 404 on the demo seed (no files). |
 | Platform Agencies | Login as Super Admin | `POST /auth/login` | **PAC-69** — the platform operator. Each folder is self-contained, so this is duplicated rather than shared with **Platform Mailers**. |
 | Platform Agencies | Check Availability | `GET /platform/agencies/availability` | **PAC-69** — live slug/email/ticker checks for the onboarding wizard. `platform:agencies:read`. Mints the timestamped identity the rest of the folder uses. |
 | Platform Agencies | Onboard Agency | `POST /platform/agencies` | **PAC-69** — agency + roles + first branch + audit templates + invited owner, in one call. `platform:agencies:write`. A failed invite email is still a **201** with `emailStatus: "failed"` — see its docs. |

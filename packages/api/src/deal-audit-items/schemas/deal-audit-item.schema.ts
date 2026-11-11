@@ -1,4 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { AUDIT_ITEM_VERDICTS } from '@sfa/shared';
+import type { AuditItemVerdict } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
 import { ObjectIdType } from '../../common/mongo/object-id';
 import {
@@ -131,6 +133,20 @@ export class DealAuditItem extends TenantRecord {
   @Prop({ default: true })
   applicable: boolean;
 
+  /**
+   * `false` = manager-only (PAC-106): hidden from the producer's board unless
+   * the manager fails it — see `isProducerActionable`. Copied from the
+   * template at generation; absent on a pre-PAC-106 item until the
+   * `audit_item_review_flags_and_producer_counters` migration has run, and
+   * absent reads as visible.
+   */
+  @Prop({ default: true })
+  producerVisible: boolean;
+
+  /** The producer cannot resolve it without a document (PAC-106). */
+  @Prop({ default: false })
+  requiresUpload: boolean;
+
   @Prop({ trim: true })
   clientName?: string;
 
@@ -183,6 +199,32 @@ export class DealAuditItem extends TenantRecord {
   /** The user (producer) who resolved the item. */
   @Prop({ type: ObjectIdType, ref: 'User' })
   resolvedById?: Types.ObjectId;
+
+  /*
+   * The manager's ruling (PAC-106) — the *verified* truth, beside the
+   * producer's *claimed* one above (`isResolved` / `notes` / `resolvedAt`).
+   * 🔴 Never collapse the two: "the producer says it is done" and "the manager
+   * checked it" are different facts, and the Approve gate reads only this one.
+   *
+   * A `pass` also sets `isResolved` (the stronger fact, and the only way a
+   * manager-only item ever closes). A `fail` leaves the claim alone until the
+   * audit is sent back, which reopens every failed item. A resubmission clears
+   * the failed verdicts and keeps the passed ones.
+   */
+
+  /** `null` = not yet reviewed. */
+  @Prop({ type: String, enum: [...AUDIT_ITEM_VERDICTS, null], default: null })
+  reviewVerdict: AuditItemVerdict | null;
+
+  /** The manager's note — the "why" the producer reads on a failed item. */
+  @Prop({ trim: true })
+  reviewNote?: string;
+
+  @Prop({ type: Date })
+  reviewedAt?: Date;
+
+  @Prop({ type: ObjectIdType, ref: 'User' })
+  reviewedById?: Types.ObjectId;
 
   /** Supporting documents uploaded on resolution. */
   @Prop({ type: [DealAuditAttachmentSchema], default: [] })

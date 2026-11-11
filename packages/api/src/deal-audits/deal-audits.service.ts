@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -10,22 +11,30 @@ import {
   AUDIT_REVIEW_OUTCOMES,
   AccessContext,
   DataScope,
+  ModuleKey,
+  approveBlockers,
   canReviewAudit,
   canSubmitAudit,
+  modulePermission,
   normalizeDealAuditStatus,
 } from '@sfa/shared';
 import type {
   ActivityType,
   AuditOwnerView,
   AuditReviewDecision,
+  DealAuditSentBackView,
 } from '@sfa/shared';
-import { FilterQuery, Model, Types } from 'mongoose';
+import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import {
   Activity,
   ActivityDocument,
 } from '../activities/schemas/activity.schema';
 import { buildScopeFilter } from '../common/access/scope-filter';
 import { daysSince } from '../common/domain/deal-derive';
+import { TransactionRunner } from '../common/mongo/transaction.runner';
+import { notificationRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
+import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { Deal, DealDocument, DealType } from '../deals/schemas/deal.schema';
 import {
   DealAuditItem,
@@ -37,7 +46,11 @@ import {
 } from '../roles/schemas/agency-role.schema';
 import { StorageService } from '../storage/storage.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { completionPercent, syncAuditCounters } from './audit-counters';
+import {
+  PRODUCER_ACTIONABLE_FILTER,
+  completionPercent,
+  syncAuditCounters,
+} from './audit-counters';
 import { AddAuditNoteDto } from './dto/add-audit-note.dto';
 import { AssignAuditDto, AuditOwnerInput } from './dto/assign-audit.dto';
 import { DUE_SOON_DAYS, ListDealAuditsDto } from './dto/list-deal-audits.dto';
@@ -45,7 +58,15 @@ import { PresignAttachmentDto } from './dto/presign-attachment.dto';
 import { ResolveDealAuditDto } from './dto/resolve-deal-audit.dto';
 import { ReviewAuditDto } from './dto/review-audit.dto';
 import {
+  REVIEW_ITEM_PROJECTION,
+  ReviewItemLean,
+  reviewerIds,
+  toReviewItem,
+  toReviewView,
+} from './review-items';
+import {
   AuditOwnerRef,
+  AuditSentBack,
   DealAudit,
   DealAuditDocument,
 } from './schemas/deal-audit.schema';
@@ -100,11 +121,17 @@ type DealAuditItemLean = Pick<
   | 'attachments'
   | 'isFailed'
   | 'isResolved'
+  | 'reviewNote'
+  | 'reviewedAt'
 > & {
   _id: Types.ObjectId;
   dealId?: Types.ObjectId;
   dealAuditId?: Types.ObjectId;
   createdAt?: Date;
+  producerVisible?: boolean;
+  requiresUpload?: boolean;
+  reviewVerdict?: 'pass' | 'fail' | null;
+  reviewedById?: Types.ObjectId | null;
 };
 
 /** Lean projection of the audit fields a board card renders from. */
@@ -116,13 +143,20 @@ type DealAuditLean = Pick<
   | 'itemCount'
   | 'resolvedCount'
   | 'openFailedCount'
+  | 'producerItemCount'
+  | 'producerResolvedCount'
+  | 'producerOpenCount'
   | 'oldestOpenAt'
   | 'dueAt'
+  | 'sentBack'
 > & {
   _id: Types.ObjectId;
   dealId?: Types.ObjectId;
   createdAt?: Date;
 };
+
+/** The two statuses the producer still has work in (PAC-106). */
+const PRODUCER_BOARD_STATUSES = ['Not Submitted', 'Fail'] as const;
 
 @Injectable()
 export class DealAuditsService {
@@ -149,6 +183,11 @@ export class DealAuditsService {
     @InjectModel(AgencyRole.name)
     private roleModel: Model<AgencyRoleDocument>,
     private readonly storage: StorageService,
+    // A send-back notifies the assignee; a role assignee means its members.
+    private readonly roleAssignments: RoleAssignmentsService,
+    private readonly inngest: InngestService,
+    // Submit and review move several documents at once (`transitionAudit`).
+    private readonly transactions: TransactionRunner,
   ) {}
 
   /**
@@ -176,7 +215,7 @@ export class DealAuditsService {
     branchId: string | null,
     query: ListDealAuditsDto,
   ): Promise<DealAuditListResponse> {
-    const { page, pageSize, due } = query;
+    const { page, pageSize, due, dealId } = query;
 
     const filter: FilterQuery<DealAudit> = {
       ...buildScopeFilter<DealAudit>(access, branchId, {
@@ -185,13 +224,23 @@ export class DealAuditsService {
         // is scoped to whoever is working the audit.
         ownerField: { path: 'auditAssignee', polymorphic: true },
       }),
-      // "Pending hand-off" is exactly "has at least one outstanding item". A
-      // deal whose checklist is clear leaves the board regardless of where its
-      // audit sits in the review workflow.
-      openFailedCount: { $gt: 0 },
+      /*
+       * The producer's board is where the producer still has work (PAC-106):
+       * the audit is theirs to submit (`Not Submitted`) or was sent back
+       * (`Fail`), and it has at least one item they can act on.
+       *
+       * Was `openFailedCount > 0`, which had two faults once a manager reviews:
+       * a card left the board the moment its last item was resolved — before
+       * the producer could click Submit — and a `Pending` audit stayed on it
+       * although it was with the manager. An audit made only of manager-only
+       * items never appears; it is submitted automatically at generation.
+       */
+      auditStatus: { $in: [...PRODUCER_BOARD_STATUSES] },
+      producerItemCount: { $gt: 0 },
       // The soft deadline is a *filter*, never a state change — see `dueAt` on
       // the schema. `all` adds nothing, so the default query is unchanged.
       ...this.dueFilter(due),
+      ...(dealId ? { dealId: new Types.ObjectId(dealId) } : {}),
     };
 
     const total = await this.dealAuditModel.countDocuments(filter);
@@ -204,9 +253,14 @@ export class DealAuditsService {
       .limit(pageSize)
       .lean<DealAuditLean[]>();
 
-    const [deals, itemsByAudit] = await Promise.all([
+    const [deals, itemsByAudit, senders] = await Promise.all([
       this.loadDeals(audits),
       this.loadChecklists(access.agencyId, audits),
+      this.resolveUserNames(
+        audits
+          .map((audit) => audit.sentBack?.byId)
+          .filter((id): id is Types.ObjectId => !!id),
+      ),
     ]);
 
     const items: DealAuditDealRow[] = audits.map((audit) => {
@@ -224,12 +278,16 @@ export class DealAuditsService {
         client: deal?.clientName ?? audit.title ?? 'Unknown Client',
         type: deal?.dealType ?? 'Other',
         auditStatus: normalizeDealAuditStatus(audit.auditStatus),
+        // The producer's share of the checklist (PAC-106) — manager-only items
+        // are not on this board and must not hold the bar back.
         completionPct: completionPercent({
-          itemCount: audit.itemCount ?? 0,
-          resolvedCount: audit.resolvedCount ?? 0,
+          itemCount: audit.producerItemCount ?? 0,
+          resolvedCount: audit.producerResolvedCount ?? 0,
         }),
-        itemCount: audit.itemCount ?? 0,
-        openCount: audit.openFailedCount ?? 0,
+        itemCount: audit.producerItemCount ?? 0,
+        openCount: audit.producerOpenCount ?? 0,
+        readyToSubmit: (audit.producerOpenCount ?? 0) === 0,
+        sentBack: this.toSentBackView(audit.sentBack, senders),
         /*
          * Recomputed on read rather than served from a stored number (PAC-40).
          * `oldestOpenAt` is a real timestamp so the age is always current,
@@ -255,10 +313,13 @@ export class DealAuditsService {
   /**
    * The checklists for one page of audits, keyed by audit id.
    *
-   * Loads **every** item, not just the outstanding ones: the drawer sorts
-   * missing requirements to the top, which needs the settled ones present to
-   * sort above. Outstanding first, then oldest first — the order the drawer
-   * renders them in, decided here so the client does not re-derive it.
+   * Loads every **producer-actionable** item, not just the outstanding ones:
+   * the drawer sorts missing requirements to the top, which needs the settled
+   * ones present to sort above. Manager-only items are left out unless the
+   * manager failed one (PAC-106 — `PRODUCER_ACTIONABLE_FILTER`, the query twin
+   * of `isProducerActionable`). Outstanding first, then the manager's failures, then
+   * oldest first — the order the drawer renders them in, decided here so the
+   * client does not re-derive it.
    */
   private async loadChecklists(
     agencyId: string | null,
@@ -271,8 +332,11 @@ export class DealAuditsService {
       .find({
         agencyId,
         dealAuditId: { $in: audits.map((audit) => audit._id) },
+        ...PRODUCER_ACTIONABLE_FILTER,
       })
       .lean<DealAuditItemLean[]>();
+
+    const reviewers = await this.resolveUserNames(reviewerIds(records));
 
     for (const record of records) {
       const auditId = record.dealAuditId?.toString();
@@ -299,6 +363,9 @@ export class DealAuditsService {
           contentType: file.contentType,
           size: file.size,
         })),
+        requiresUpload: record.requiresUpload === true,
+        managerOnly: record.producerVisible === false,
+        review: toReviewView(record, reviewers),
       };
 
       const list = byAudit.get(auditId);
@@ -306,12 +373,30 @@ export class DealAuditsService {
       else byAudit.set(auditId, [row]);
     }
 
+    const failed = (row: DealAuditItemRow) => row.review.verdict === 'fail';
     for (const list of byAudit.values()) {
       list.sort(
-        (a, b) => Number(b.open) - Number(a.open) || b.daysOpen - a.daysOpen,
+        (a, b) =>
+          Number(b.open) - Number(a.open) ||
+          Number(failed(b)) - Number(failed(a)) ||
+          b.daysOpen - a.daysOpen,
       );
     }
     return byAudit;
+  }
+
+  /** The stored send-back marker, with the manager's name resolved. */
+  toSentBackView(
+    sentBack: AuditSentBack | null | undefined,
+    names: ReadonlyMap<string, string>,
+  ): DealAuditSentBackView | null {
+    if (!sentBack) return null;
+    return {
+      at: sentBack.at.toISOString(),
+      byName: names.get(sentBack.byId.toString()) ?? 'Your manager',
+      note: sentBack.note?.trim() || null,
+      failedItemCount: sentBack.failedItemCount ?? 0,
+    };
   }
 
   /**
@@ -444,6 +529,21 @@ export class DealAuditsService {
         resolved: true,
         resolvedAt: (item.resolvedAt ?? new Date()).toISOString(),
       };
+    }
+
+    /*
+     * A discount proof is the whole point of its item (PAC-106 §3): "Good
+     * Student — upload". A document attached at sale time already counts; the
+     * yes/no items (inspection, actual cash value, mortgagee) take a note.
+     */
+    if (
+      item.requiresUpload &&
+      !dto.attachment &&
+      (item.attachments?.length ?? 0) === 0
+    ) {
+      throw new BadRequestException(
+        'This requirement needs a document. Upload one before marking it resolved.',
+      );
     }
 
     // If an attachment was declared, confirm this agency and item produced the
@@ -676,12 +776,14 @@ export class DealAuditsService {
    * The assignee hands the audit to the reviewer: `→ Pending`.
    *
    * Re-submitting a `Fail` is the correction loop the brief asks for — fix the
-   * problem, submit again — so only an audit already sitting with the reviewer
-   * is rejected.
+   * problem, submit again. An audit already with the reviewer is rejected, and
+   * so is an approved one (`canSubmitAudit`).
    *
    * ⚠ Not restricted to the assignee. An owner or manager acting on their
    * behalf is legitimate and common; `submittedById` records who actually did
    * it, and {@link review} is where the meaningful separation is enforced.
+   *
+   * One transaction — see {@link transitionAudit}.
    */
   async submit(
     access: AccessContext,
@@ -691,27 +793,67 @@ export class DealAuditsService {
     const audit = await this.loadAuditForDeal(access, branchId, dealId);
 
     if (!canSubmitAudit(audit.auditStatus)) {
-      throw new ConflictException('This audit is already awaiting review.');
+      throw new ConflictException(
+        audit.auditStatus === 'Pass'
+          ? 'This audit has been approved and cannot be submitted again.'
+          : 'This audit is already awaiting review.',
+      );
     }
 
-    audit.auditStatus = 'Pending';
-    audit.submittedAt = new Date();
-    audit.submittedById = new Types.ObjectId(access.userId);
-    await audit.save();
-    await this.mirrorStatusToDeal(audit);
+    const saved = await this.transitionAudit(
+      audit,
+      {
+        auditStatus: 'Pending',
+        submittedAt: new Date(),
+        submittedById: new Types.ObjectId(access.userId),
+        // The send-back has been answered (PAC-106); the marker describes the
+        // current round only.
+        sentBack: null,
+      },
+      (session) =>
+        /*
+         * A new round of review for what failed (PAC-106): the failed verdicts
+         * are cleared so the manager rules on the corrected evidence, and the
+         * passed ones stand — they were checked against documents that have
+         * not changed, and the manager can still overturn any of them.
+         */
+        this.dealAuditItemModel.updateMany(
+          {
+            agencyId: audit.agencyId,
+            dealAuditId: audit._id,
+            reviewVerdict: 'fail',
+          },
+          {
+            $set: { reviewVerdict: null },
+            $unset: { reviewNote: 1, reviewedAt: 1, reviewedById: 1 },
+          },
+          { session: session ?? undefined },
+        ),
+    );
 
     await this.recordWorkflowActivity(
       access,
-      audit,
+      saved,
       'audit_submitted',
       'Audit submitted for review',
     );
-    return this.toWorkflowView(audit, access);
+    return this.toWorkflowView(saved, access);
   }
 
   /**
    * The reviewer's verdict: approve → `Pass`, request changes → `Fail`, send
    * back → `Not Submitted`.
+   *
+   * Since PAC-106 the verdict is the sum of the manager's item-by-item rulings
+   * (`PATCH /deal-audits/:itemId/verdict`):
+   *
+   * - **approve** only when every item is `pass` — the strict gate decided on
+   *   19 Oct 2026. The `409` lists what is left (`approveBlockers`, the same
+   *   rule the page disables its button with).
+   * - **request changes** — the page's **Send back** — needs at least one
+   *   `fail` and a note (the DTO requires the note). It reopens every failed
+   *   item on the producer's board, leaves the "sent back by …" marker, and
+   *   notifies the assignee.
    */
   async review(
     access: AccessContext,
@@ -726,45 +868,292 @@ export class DealAuditsService {
         'Only an audit awaiting review can be reviewed.',
       );
     }
+    this.assertReviewer(access, audit);
 
-    /*
-     * 🔴 The one rule that makes the two roles mean anything.
-     *
-     * Both submitting and reviewing are `deal_audits:write`, and the Producer
-     * template holds it — so without this the producer who gathered the
-     * evidence can approve their own work, which is exactly the gap section B
-     * item 6 exists to close. Nothing else in the guard chain expresses
-     * "a different person".
-     */
+    const items = await this.loadReviewItems(audit);
+    const failed = items.filter((item) => item.review.verdict === 'fail');
+
+    if (dto.decision === 'approve') {
+      const unmet = approveBlockers(items);
+      if (unmet.length) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          code: 'audit_items_not_passed',
+          message: 'Every item must pass before the audit can be approved.',
+          unmet,
+        });
+      }
+    }
+    if (dto.decision === 'request_changes' && failed.length === 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'audit_nothing_failed',
+        message:
+          'Mark at least one item as failed before sending the audit back.',
+      });
+    }
+
+    const now = new Date();
+    const decided = AUDIT_REVIEW_OUTCOMES[dto.decision];
+    const sendingBack = dto.decision === 'request_changes';
+
+    const saved = await this.transitionAudit(
+      audit,
+      {
+        auditStatus: decided,
+        reviewedAt: now,
+        reviewedById: new Types.ObjectId(access.userId),
+        // Cleared on anything but a failure: stale codes on a passed audit
+        // would read as "passed, but here's what was wrong with it".
+        reasonCodes: decided === 'Fail' ? (dto.reasonCodes ?? []) : [],
+        ...(dto.notes !== undefined ? { auditNotes: dto.notes } : {}),
+        ...(dto.score !== undefined ? { auditScore: dto.score } : {}),
+        sentBack: sendingBack
+          ? {
+              at: now,
+              byId: new Types.ObjectId(access.userId),
+              note: dto.notes,
+              failedItemCount: failed.length,
+            }
+          : null,
+      },
+      sendingBack
+        ? (session) =>
+            /*
+             * Back on the producer's board (PAC-106 §4). The producer's
+             * earlier "resolved" claim is withdrawn on exactly the items the
+             * manager failed; the verdict and its note stay, so the producer
+             * sees why.
+             */
+            this.dealAuditItemModel.updateMany(
+              {
+                agencyId: audit.agencyId,
+                dealAuditId: audit._id,
+                reviewVerdict: 'fail',
+              },
+              {
+                $set: {
+                  isFailed: true,
+                  isResolved: false,
+                  status: 'in_progress',
+                  statusLabel: 'Failed',
+                  updateStatus: 'in_progress',
+                  updateStatusLabel: 'In Progress',
+                },
+                $unset: { resolvedAt: 1, resolvedById: 1 },
+              },
+              { session: session ?? undefined },
+            )
+        : undefined,
+    );
+
+    await this.recordWorkflowActivity(
+      access,
+      saved,
+      REVIEW_ACTIVITY_TYPES[dto.decision],
+      sendingBack && dto.notes
+        ? `Sent back: ${dto.notes}`
+        : REVIEW_SUMMARIES[dto.decision],
+    );
+
+    if (sendingBack) {
+      await this.notifySentBack(
+        access,
+        saved,
+        dto.notes ?? null,
+        failed.length,
+      );
+    }
+    return this.toWorkflowView(saved, access);
+  }
+
+  /**
+   * Move an audit to its next status — the audit, its items, its counters and
+   * the deal's mirror — as **one transaction** (PAC-106 review).
+   *
+   * These were four separate writes. A failure between the first two left, for
+   * instance, a `Fail` audit whose items were never reopened; and because its
+   * `producerItemCount` was never recomputed, the producer's board — which
+   * filters on that counter — hid it, so nothing ever surfaced the half-applied
+   * state. Hence also why the counter sync here is **not** quiet: on these
+   * paths the counters decide board membership, and a failure must roll the
+   * whole transition back rather than commit a card into the wrong place.
+   *
+   * The status update is conditional on the status the caller validated, so a
+   * concurrent transition (a double-click, two managers) is a `409` rather than
+   * a second write over the first. Written with `updateOne` rather than
+   * `document.save()`: `withTransaction` may re-run the callback, and a
+   * re-run `save()` finds nothing modified and writes nothing.
+   *
+   * Timeline rows and notifications stay outside, post-commit and best-effort,
+   * exactly as before. Returns the audit as committed — counters included.
+   */
+  private async transitionAudit(
+    audit: DealAuditDocument,
+    $set: Partial<DealAudit>,
+    updateItems?: (session: ClientSession | null) => Promise<unknown>,
+  ): Promise<DealAuditDocument> {
+    await this.transactions.run(async (session) => {
+      const moved = await this.dealAuditModel.updateOne(
+        { _id: audit._id, auditStatus: audit.auditStatus },
+        { $set },
+        { session: session ?? undefined },
+      );
+      if (moved.matchedCount === 0) {
+        throw new ConflictException(
+          'This audit changed while you were working on it. Reload it and try again.',
+        );
+      }
+      await updateItems?.(session);
+      await syncAuditCounters(
+        this.dealAuditItemModel,
+        this.dealAuditModel,
+        audit.agencyId,
+        audit._id,
+        session,
+      );
+      if (audit.dealId && $set.auditStatus) {
+        await this.dealModel.updateOne(
+          { _id: audit.dealId },
+          { $set: { dealAuditStatus: $set.auditStatus } },
+          { session: session ?? undefined },
+        );
+      }
+    });
+
+    const saved = await this.dealAuditModel.findById(audit._id);
+    if (!saved) throw new NotFoundException('Audit not found.');
+    return saved;
+  }
+
+  /**
+   * The two rules that make "the manager is the gatekeeper" true (PAC-106):
+   *
+   * 1. **Management only.** Reviewing is `deal_audits:write`, which the
+   *    Producer template holds too; `management:read` is what separates the
+   *    people who rule on audits. The review routes require both in the guard;
+   *    this repeats it where `canReview` is decided, so the two cannot drift.
+   * 2. 🔴 **Not your own submission** — the rule section B item 6 exists for.
+   *    A system submission (`submittedById: null`) blocks nobody.
+   */
+  assertReviewer(access: AccessContext, audit: DealAuditDocument): void {
+    if (!this.holdsManagementRead(access)) {
+      throw new ForbiddenException('Only a manager can review an audit.');
+    }
     if (audit.submittedById?.toString() === access.userId) {
       throw new ForbiddenException(
         'An audit must be reviewed by someone other than the person who submitted it.',
       );
     }
+  }
 
-    const decided = AUDIT_REVIEW_OUTCOMES[dto.decision];
-    audit.auditStatus = decided;
-    audit.reviewedAt = new Date();
-    audit.reviewedById = new Types.ObjectId(access.userId);
-    // Cleared on anything but a failure: stale codes on a passed audit would
-    // read as "passed, but here's what was wrong with it".
-    audit.reasonCodes = decided === 'Fail' ? (dto.reasonCodes ?? []) : [];
-    if (dto.notes !== undefined) {
-      audit.auditNotes = dto.notes;
-    }
-    if (dto.score !== undefined) {
-      audit.auditScore = dto.score;
-    }
-    await audit.save();
-    await this.mirrorStatusToDeal(audit);
-
-    await this.recordWorkflowActivity(
-      access,
-      audit,
-      REVIEW_ACTIVITY_TYPES[dto.decision],
-      REVIEW_SUMMARIES[dto.decision],
+  private holdsManagementRead(access: AccessContext): boolean {
+    return access.permissions.includes(
+      modulePermission(ModuleKey.Management, 'read'),
     );
-    return this.toWorkflowView(audit, access);
+  }
+
+  /** Every item of the audit, as the review surfaces read it. */
+  async loadReviewItems(audit: DealAuditDocument) {
+    const records = await this.dealAuditItemModel
+      .find({ agencyId: audit.agencyId, dealAuditId: audit._id })
+      .select(REVIEW_ITEM_PROJECTION)
+      .lean<ReviewItemLean[]>();
+    const names = await this.resolveUserNames(reviewerIds(records));
+    return records.map((record) => toReviewItem(record, names));
+  }
+
+  /**
+   * Recompute the audit's roll-ups after a per-item verdict. Best-effort: the
+   * verdict is committed, and the next sync converges any drift.
+   *
+   * Quiet is safe **here** and nowhere a status changes. A verdict is only
+   * written while the audit is `Pending`, which is off the producer's board
+   * whatever its counters say; the transition that puts it back on (send-back)
+   * recomputes them inside its own transaction (`transitionAudit`).
+   */
+  async syncCountersQuietly(audit: DealAuditDocument): Promise<void> {
+    try {
+      await syncAuditCounters(
+        this.dealAuditItemModel,
+        this.dealAuditModel,
+        audit.agencyId,
+        audit._id,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to sync counters for audit ${audit._id.toString()}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * Tell the assignee their audit came back (PAC-106 §4, `audit.sent_back`).
+   *
+   * A user assignee is told directly; a role assignee is a queue, so every
+   * active member of the role is. Never the manager who sent it. Best-effort
+   * like every producer of `notification/requested.v1`: the send-back is
+   * committed, and a lost notification must not report it as failed.
+   */
+  private async notifySentBack(
+    access: AccessContext,
+    audit: DealAuditDocument,
+    note: string | null,
+    failedItemCount: number,
+  ): Promise<void> {
+    const assignee = audit.auditAssignee;
+    if (!assignee || !audit.sentBack) return;
+    try {
+      const candidates =
+        assignee.type === 'role'
+          ? await this.roleAssignments.roleUserIds(assignee.id)
+          : [assignee.id];
+      const active = await this.userModel
+        .find({
+          _id: { $in: candidates, $ne: new Types.ObjectId(access.userId) },
+          isActive: true,
+        })
+        .select({ _id: 1 })
+        .lean<Array<{ _id: Types.ObjectId }>>();
+      if (active.length === 0) return;
+
+      const dealId = audit.dealId?.toString() ?? '';
+      const [deal, names] = await Promise.all([
+        audit.dealId
+          ? this.dealModel
+              .findById(audit.dealId)
+              .select('clientName')
+              .lean<{ clientName?: string }>()
+          : null,
+        this.resolveUserNames([new Types.ObjectId(access.userId)]),
+      ]);
+
+      await this.inngest.send(notificationRequested, {
+        type: 'audit.sent_back',
+        recipientIds: active.map((user) => user._id.toHexString()),
+        agencyId: audit.agencyId,
+        actorId: access.userId,
+        entity: { kind: 'dealAudit', id: audit._id.toString() },
+        data: {
+          dealId,
+          dealAuditId: audit._id.toString(),
+          clientName: deal?.clientName?.trim() || audit.title || null,
+          reviewerName: names.get(access.userId) || null,
+          note,
+          failedItemCount,
+        },
+        // One per send-back round: a retried request collapses, a second
+        // send-back of the same audit is a new fact and notifies again.
+        dedupeKey: `audit.sent_back:${audit._id.toString()}:${audit.sentBack.at.getTime()}`,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not request the sent-back notification for audit ${audit._id.toString()}: ${String(error)}`,
+      );
+    }
   }
 
   /** Read the audit's note + workflow thread, newest first. */
@@ -853,7 +1242,7 @@ export class DealAuditsService {
    * 404 rather than 403 throughout, matching `LeadAccessService.loadOwnedLead`:
    * whether another team's audit exists is not the caller's business.
    */
-  private async loadAuditForDeal(
+  async loadAuditForDeal(
     access: AccessContext,
     branchId: string | null,
     dealId: string,
@@ -862,10 +1251,15 @@ export class DealAuditsService {
       throw new NotFoundException('Audit not found.');
     }
 
-    const audit = await this.dealAuditModel.findOne({
-      agencyId: access.agencyId,
-      dealId: new Types.ObjectId(dealId),
-    });
+    const audit = await this.dealAuditModel
+      .findOne({
+        agencyId: access.agencyId,
+        dealId: new Types.ObjectId(dealId),
+      })
+      // The newest row, as every deal-first reader takes it
+      // (`latestDealAuditLookup`): a legacy re-audit can leave two, and the
+      // Deal Audits page must open the one its queue row described.
+      .sort({ createdAt: -1 });
     if (!audit) {
       throw new NotFoundException('Audit not found.');
     }
@@ -897,36 +1291,15 @@ export class DealAuditsService {
     );
   }
 
-  /**
-   * Keep `Deal.dealAuditStatus` in step with the authoritative value.
-   *
-   * Best-effort: the audit's own transition is already committed, and failing
-   * the request over a denormalized display copy would fail in the wrong
-   * direction.
-   */
-  private async mirrorStatusToDeal(audit: DealAuditDocument): Promise<void> {
-    if (!audit.dealId) return;
-    try {
-      await this.dealModel.updateOne(
-        { _id: audit.dealId },
-        { $set: { dealAuditStatus: audit.auditStatus } },
-      );
-    } catch (error) {
-      this.logger.error(
-        `Failed to mirror audit status onto deal ${audit.dealId.toString()}`,
-        error instanceof Error ? error.stack : String(error),
-      );
-    }
-  }
-
   /** The workflow response shape, with both owners resolved to display names. */
-  private async toWorkflowView(
+  async toWorkflowView(
     audit: DealAuditDocument,
     access: AccessContext,
   ): Promise<AuditWorkflowView> {
-    const [assignee, reviewer] = await Promise.all([
+    const [assignee, reviewer, senders] = await Promise.all([
       this.resolveOwner(audit.agencyId, audit.auditAssignee),
       this.resolveOwner(audit.agencyId, audit.auditReviewer),
+      this.resolveUserNames(audit.sentBack?.byId ? [audit.sentBack.byId] : []),
     ]);
 
     return {
@@ -947,14 +1320,27 @@ export class DealAuditsService {
         itemCount: audit.itemCount ?? 0,
         resolvedCount: audit.resolvedCount ?? 0,
       }),
+      sentBack: this.toSentBackView(audit.sentBack, senders),
       canSubmit: canSubmitAudit(audit.auditStatus),
-      // The submitter may not review their own work — the one rule that makes
-      // the two roles mean anything. Decided here so the UI does not have to
-      // know who submitted, and cannot disagree with the endpoint.
-      canReview:
-        canReviewAudit(audit.auditStatus) &&
-        audit.submittedById?.toString() !== access.userId,
+      canReview: this.canReview(audit, access),
     };
+  }
+
+  /**
+   * Whether `access` may rule on `audit` now: it is `Pending`, plus
+   * `assertReviewer`'s two rules — a manager, and not the submitter.
+   *
+   * Decided here so the UI does not have to know who submitted, and cannot
+   * disagree with the endpoint (PAC-106: the producer's drawer no longer offers
+   * review at all). Every `canApprove` / `canSendBack` the API returns is
+   * clamped by this, through `DealAuditReviewService`'s one helper.
+   */
+  canReview(audit: DealAuditDocument, access: AccessContext): boolean {
+    return (
+      canReviewAudit(audit.auditStatus) &&
+      this.holdsManagementRead(access) &&
+      audit.submittedById?.toString() !== access.userId
+    );
   }
 
   /**
@@ -993,7 +1379,7 @@ export class DealAuditsService {
   }
 
   /** Batch `userId -> display name`. */
-  private async resolveUserNames(
+  async resolveUserNames(
     userIds: Types.ObjectId[],
   ): Promise<Map<string, string>> {
     const map = new Map<string, string>();
@@ -1038,7 +1424,7 @@ export class DealAuditsService {
    * committed, so a failed timeline write must not report the whole operation
    * as failed.
    */
-  private async recordWorkflowActivity(
+  async recordWorkflowActivity(
     access: AccessContext,
     audit: DealAuditDocument,
     type: ActivityType,

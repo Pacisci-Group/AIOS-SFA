@@ -1,0 +1,75 @@
+meta {
+  name: Review Queue Options
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/deal-audits/queue/options
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{auditReviewerToken}}
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists producers as { id, name }, sorted by name", function () {
+    const producers = res.getBody().producers;
+    expect(producers).to.be.an("array").and.not.be.empty;
+    for (const producer of producers) {
+      expect(producer.id).to.match(/^[a-f0-9]{24}$/);
+      expect(producer.name).to.be.a("string").and.not.be.empty;
+    }
+    const names = producers.map((producer) => producer.name.toLowerCase());
+    expect(names).to.deep.equal([...names].sort((a, b) => a.localeCompare(b)));
+  });
+
+  test("includes the seller captured from the queue", function () {
+    const id = bru.getVar("queueProducerId");
+    if (id) {
+      expect(res.getBody().producers.map((p) => p.id)).to.include(id);
+    }
+  });
+}
+
+docs {
+  # GET /deal-audits/queue/options — the queue's producer filter (20 Oct 2026)
+
+  Who the Deal Audits queue's **producer** multi-select can offer.
+
+  - **Module:** `deal_audits`
+  - **Permission:** `deal_audits:read` **and** `management:read` — the queue's
+    own gate, so a manager filters by producer without `agency:users:read`
+    (the Analytics and Data Export pages serve their options the same way).
+  - **Data scope:** the deals the caller's queue could show — branch for a
+    branch manager, agency for the owner.
+
+  The list is the **sellers of the new-business deals in reach**, not the
+  holders of the producer role: an owner's own sales and a departed producer's
+  are real rows in the queue, and a role list would leave them unfilterable. A
+  seller who has left is marked `(inactive)`.
+
+  ## Response `200`
+  ```json
+  {
+    "producers": [
+      { "id": "665f...b11", "name": "Pat Producer" },
+      { "id": "665f...b19", "name": "Sam Torres (inactive)" }
+    ]
+  }
+  ```
+
+  ## Errors
+  - `401 Unauthorized` — missing/expired token.
+  - `403 Forbidden` — missing `deal_audits:read` or `management:read`.
+}
