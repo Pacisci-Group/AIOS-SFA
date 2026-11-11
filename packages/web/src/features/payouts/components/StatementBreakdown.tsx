@@ -1,10 +1,15 @@
-import type { ReactNode } from "react";
-import { TriangleAlert } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Loader2, MoreHorizontal, Plus, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 import {
   ANY_CARRIER,
+  enteredAdjustmentNotesOf,
   rateRuleCarrierLabel,
   statementNetPay,
   type PayStatementView,
+  type StatementAdjustmentView,
+  type StatementChargebackView,
 } from "@sfa/shared";
 import {
   DataRow,
@@ -12,7 +17,24 @@ import {
   SectionLabel,
 } from "@/components/common/DetailCard";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -25,7 +47,9 @@ import {
 import { formatMoney, formatPercent } from "@/lib/money";
 import { formatMonth } from "@/lib/months";
 import { NOT_AVAILABLE } from "@/lib/not-available";
+import { removePayStatementAdjustment } from "@/lib/payouts-api";
 import { cn } from "@/lib/utils";
+import { payoutErrorMessage } from "../payout-errors";
 import {
   chargebackSourceLabel,
   complianceLabel,
@@ -37,6 +61,9 @@ import {
   SOM_LABELS,
   statementReference,
 } from "../payout-format";
+import { useApplyStatement } from "../statement-cache";
+import { AddChargebackDialog } from "./AddChargebackDialog";
+import { LeaveOutChargebackDialog } from "./LeaveOutChargebackDialog";
 
 /**
  * A commission statement in the app (PAC-178): the sections of the
@@ -49,10 +76,16 @@ import {
  * agency premium bonus, Producer of the Year, referrals, the compliance
  * floor) show only when the statement has them: one computed before they
  * existed has none of those fields, and its net pay is its net commission.
+ *
+ * PAC-182: the entered amounts show their notes, for everyone, and the
+ * chargeback detail says which rows a manager left out or added. A reviewer
+ * who may edit the statement corrects the chargebacks there: leave one out,
+ * restore it, add one the ledger does not hold, or remove an added one.
  */
 export function StatementBreakdown({
   statement,
   figures,
+  chargebacksEditable = false,
 }: {
   statement: PayStatementView;
   /**
@@ -60,8 +93,15 @@ export function StatementBreakdown({
    * warnings they answer.
    */
   figures?: ReactNode;
+  /**
+   * A reviewer may correct the chargebacks: `payouts:write`, a draft or
+   * disputed statement, and not their own without `agency:payouts:admin`.
+   * The API checks all three again.
+   */
+  chargebacksEditable?: boolean;
 }) {
   const s = statement;
+  const editable = chargebacksEditable;
   const t = s.totals;
   // Commission is the rate on net premium (10 Nov 2026). A statement
   // calculated before carries `chargebackImpact` — commission on sold premium
@@ -77,6 +117,38 @@ export function StatementBreakdown({
   const steppedLines = s.premiumLines.filter(
     (line) => line.rateStep !== null && line.rateStep !== undefined,
   );
+  const notes = enteredAdjustmentNotesOf(s.adjustments);
+
+  // The chargeback lines (PAC-182): see `ChargebackActions`.
+  const [leavingOut, setLeavingOut] = useState<StatementChargebackView | null>(
+    null,
+  );
+  const [removing, setRemoving] = useState<{
+    row: StatementChargebackView;
+    adjustment: StatementAdjustmentView;
+  } | null>(null);
+  const [adding, setAdding] = useState(false);
+  const apply = useApplyStatement();
+  const undo = useMutation({
+    mutationFn: ({ adjustment }: { adjustment: StatementAdjustmentView }) =>
+      removePayStatementAdjustment(s.id, adjustment.id),
+    onSuccess: async (updated, { adjustment }) => {
+      await apply(updated);
+      setRemoving(null);
+      toast.success(
+        adjustment.kind === "add_chargeback"
+          ? "Chargeback removed and the statement recalculated."
+          : "Chargeback restored and the statement recalculated.",
+      );
+    },
+    onError: (error) => {
+      setRemoving(null);
+      toast.error(payoutErrorMessage(error));
+    },
+  });
+  // The last column carries the card's right padding.
+  const actionColumn = editable && s.chargebacks.length > 0;
+
   return (
     <div className="space-y-6">
       {s.warnings.length > 0 && (
@@ -307,7 +379,11 @@ export function StatementBreakdown({
               <SummaryLine label="Base pay" amount={t.basePay} />
             )}
             <OptionalLine label="Stipend" amount={t.stipend} />
-            <SummaryLine label="Other bonuses / SPIFFs" amount={t.spiffs} />
+            <SummaryLine
+              label="Other bonuses / SPIFFs"
+              amount={t.spiffs}
+              note={notes.spiffs}
+            />
             <OptionalLine
               label={referral < 0 ? "Referral deduction" : "Referral bonus"}
               amount={referral}
@@ -315,6 +391,7 @@ export function StatementBreakdown({
             <SummaryLine
               label="Compliance adjustment"
               amount={t.complianceAdjustment}
+              note={notes.complianceAdjustment}
             />
             <OptionalLine
               label={
@@ -335,6 +412,7 @@ export function StatementBreakdown({
             <SummaryLine
               label="Other adjustments"
               amount={t.otherAdjustments}
+              note={notes.otherAdjustments}
             />
           </dl>
         </div>
@@ -361,7 +439,18 @@ export function StatementBreakdown({
         </div>
       </DetailCard>
 
-      <DetailCard title="Chargeback detail" bodyless>
+      <DetailCard
+        title="Chargeback detail"
+        bodyless
+        action={
+          editable ? (
+            <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+              <Plus aria-hidden />
+              Add chargeback
+            </Button>
+          ) : undefined
+        }
+      >
         {s.chargebacks.length === 0 ? (
           <p className="px-5 py-8 text-center text-sm text-muted-foreground">
             Nothing was charged back in {formatMonth(s.month)}.
@@ -379,14 +468,21 @@ export function StatementBreakdown({
                 <TableHead
                   className={cn(
                     "text-right",
-                    legacyImpact === undefined && "pr-5",
+                    legacyImpact === undefined && !actionColumn && "pr-5",
                   )}
                 >
                   Premium
                 </TableHead>
                 {legacyImpact !== undefined && (
-                  <TableHead className="pr-5 text-right">
+                  <TableHead
+                    className={cn("text-right", !actionColumn && "pr-5")}
+                  >
                     Commission deduction
+                  </TableHead>
+                )}
+                {actionColumn && (
+                  <TableHead className="w-12 pr-5">
+                    <span className="sr-only">Actions</span>
                   </TableHead>
                 )}
               </TableRow>
@@ -397,13 +493,18 @@ export function StatementBreakdown({
                   key={row.chargebackId}
                   className={cn(row.excluded && "text-muted-foreground")}
                 >
-                  <TableCell
-                    className={cn("pl-5", row.excluded && "line-through")}
-                  >
-                    {row.customerName ?? NOT_AVAILABLE}
+                  <TableCell className="pl-5">
+                    <span className={cn(row.excluded && "line-through")}>
+                      {row.customerName ?? NOT_AVAILABLE}
+                    </span>
                     {row.excluded && row.excludedNote && (
-                      <div className="text-xs no-underline">
+                      <div className="max-w-xs text-xs whitespace-pre-line">
                         Left out: {row.excludedNote}
+                      </div>
+                    )}
+                    {row.addedNote && (
+                      <div className="max-w-xs text-xs whitespace-pre-line text-muted-foreground">
+                        Added: {row.addedNote}
                       </div>
                     )}
                   </TableCell>
@@ -425,7 +526,8 @@ export function StatementBreakdown({
                     // left out, since then it does not.
                     <TableCell
                       className={cn(
-                        "pr-5 text-right tabular-nums",
+                        "text-right tabular-nums",
+                        !actionColumn && "pr-5",
                         row.excluded && "line-through",
                       )}
                     >
@@ -438,13 +540,33 @@ export function StatementBreakdown({
                       </TableCell>
                       <TableCell
                         className={cn(
-                          "pr-5 text-right tabular-nums",
+                          "text-right tabular-nums",
+                          !actionColumn && "pr-5",
                           row.excluded && "line-through",
                         )}
                       >
                         {formatMoney(deduction(row.commissionDeduction ?? 0))}
                       </TableCell>
                     </>
+                  )}
+                  {actionColumn && (
+                    <TableCell className="pr-5 text-right">
+                      <ChargebackActions
+                        row={row}
+                        adjustments={s.adjustments}
+                        busy={undo.isPending}
+                        undoing={
+                          undo.isPending &&
+                          undo.variables?.adjustment.chargebackId ===
+                            row.chargebackId
+                        }
+                        onLeaveOut={() => setLeavingOut(row)}
+                        onRestore={(adjustment) => undo.mutate({ adjustment })}
+                        onRemove={(adjustment) =>
+                          setRemoving({ row, adjustment })
+                        }
+                      />
+                    </TableCell>
                   )}
                 </TableRow>
               ))}
@@ -457,7 +579,12 @@ export function StatementBreakdown({
                     : "Total chargeback impact"}
                 </TableCell>
                 {legacyImpact !== undefined && <TableCell />}
-                <TableCell className="pr-5 text-right font-semibold tabular-nums">
+                <TableCell
+                  className={cn(
+                    "text-right font-semibold tabular-nums",
+                    !actionColumn && "pr-5",
+                  )}
+                >
                   {formatMoney(
                     deduction(
                       legacyImpact === undefined
@@ -466,11 +593,70 @@ export function StatementBreakdown({
                     ),
                   )}
                 </TableCell>
+                {actionColumn && <TableCell className="pr-5" />}
               </TableRow>
             </TableFooter>
           </Table>
         )}
       </DetailCard>
+
+      {editable && (
+        <>
+          <LeaveOutChargebackDialog
+            statementId={s.id}
+            employeeName={s.userName}
+            row={leavingOut}
+            onClose={() => setLeavingOut(null)}
+          />
+          <AddChargebackDialog
+            statement={s}
+            open={adding}
+            onOpenChange={setAdding}
+          />
+          <AlertDialog
+            open={removing !== null}
+            onOpenChange={(next) =>
+              !next && !undo.isPending && setRemoving(null)
+            }
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove this chargeback?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {removing
+                    ? `${removing.row.customerName ?? "The policy"}${
+                        removing.row.policyNumber
+                          ? ` · ${removing.row.policyNumber}`
+                          : ""
+                      } · ${formatMoney(removing.row.amount)}. `
+                    : ""}
+                  It was added on this statement, so it is deleted from the
+                  chargeback ledger, not only left out, and the statement is
+                  recalculated.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={undo.isPending}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={undo.isPending}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (removing)
+                      undo.mutate({ adjustment: removing.adjustment });
+                  }}
+                >
+                  {undo.isPending && (
+                    <Loader2 aria-hidden className="size-4 animate-spin" />
+                  )}
+                  Remove
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>
+      )}
 
       <DetailCard title="How the bonuses were reached">
         <div className="grid gap-4 md:grid-cols-2">
@@ -603,6 +789,75 @@ export function StatementBreakdown({
   );
 }
 
+/**
+ * One chargeback row's menu (PAC-182). A row is the manager's to undo when
+ * an adjustment names it — Restore one left out, Remove one added (behind a
+ * confirmation, since that deletes the ledger row). A row with none may be
+ * left out; one left out with none is outside the chargeback window, and
+ * nothing is offered on it.
+ */
+function ChargebackActions({
+  row,
+  adjustments,
+  busy,
+  undoing,
+  onLeaveOut,
+  onRestore,
+  onRemove,
+}: {
+  row: StatementChargebackView;
+  adjustments: StatementAdjustmentView[];
+  /** A restore or remove is in flight, on any row. */
+  busy: boolean;
+  /** …on this one. */
+  undoing: boolean;
+  onLeaveOut: () => void;
+  onRestore: (adjustment: StatementAdjustmentView) => void;
+  onRemove: (adjustment: StatementAdjustmentView) => void;
+}) {
+  const lineOf = (kind: StatementAdjustmentView["kind"]) =>
+    adjustments.find(
+      (adjustment) =>
+        adjustment.kind === kind &&
+        adjustment.chargebackId === row.chargebackId,
+    );
+  const leftOut = lineOf("exclude_chargeback");
+  const added = lineOf("add_chargeback");
+  if (!leftOut && !added && row.excluded) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          disabled={busy}
+          aria-label={`Actions for the chargeback on ${row.policyNumber ?? row.customerName ?? "this policy"}`}
+        >
+          {undoing ? (
+            <Loader2 aria-hidden className="animate-spin" />
+          ) : (
+            <MoreHorizontal aria-hidden />
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {added ? (
+          <DropdownMenuItem onSelect={() => onRemove(added)}>
+            Remove
+          </DropdownMenuItem>
+        ) : leftOut ? (
+          <DropdownMenuItem onSelect={() => onRestore(leftOut)}>
+            Restore
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem onSelect={onLeaveOut}>Leave out…</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** " on Allstate", or "" for every carrier — the API labels `*` "Any other carrier". */
 function carrierPhrase(carrier: string): string {
   return carrier === rateRuleCarrierLabel(ANY_CARRIER) ||
@@ -623,9 +878,23 @@ function OptionalLine({
   return <SummaryLine label={label} amount={amount} />;
 }
 
-function SummaryLine({ label, amount }: { label: string; amount: number }) {
+function SummaryLine({
+  label,
+  amount,
+  note,
+}: {
+  label: string;
+  amount: number;
+  /** Why the amount was given (PAC-182), under it; `''` = none. */
+  note?: string;
+}) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border/60 pb-2 last:border-b-0">
+    <div
+      className={cn(
+        "flex items-baseline justify-between gap-4 border-b border-border/60 pb-2 last:border-b-0",
+        note && "flex-wrap gap-y-0.5",
+      )}
+    >
       <dt className="text-sm text-muted-foreground">{label}</dt>
       <dd
         className={cn(
@@ -635,6 +904,11 @@ function SummaryLine({ label, amount }: { label: string; amount: number }) {
       >
         {formatMoney(amount)}
       </dd>
+      {note && (
+        <dd className="basis-full text-xs whitespace-pre-line text-muted-foreground">
+          {note}
+        </dd>
+      )}
     </div>
   );
 }

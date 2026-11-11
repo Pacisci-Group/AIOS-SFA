@@ -21,12 +21,16 @@ const POLICYLESS_REASONS: readonly ChargebackReason[] = [
  * the amount, the window verdict and the dates are all stamped at the moment of
  * cancellation, so a later correction to a deal's sold date cannot silently
  * rewrite what a producer was charged three months ago. Reversing a row means
- * writing the reversal, not deleting the row.
+ * writing the reversal, not deleting the row — with one exception: a
+ * manager's manual line (PAC-182) is deleted with its statement adjustment,
+ * and only while that statement is a draft or disputed (an issued version
+ * that printed it keeps its file in the statement's history).
  *
  * Rows come from the app (cancel rewrite, cancellation), from the chargeback
  * report the owner imports on the Payouts page (PAC-180, `source:
- * 'carrier_statement'`) and, with PAC-182, from a manager's line on a
- * statement (`reason: 'manual'`). See `domain/chargeback.ts`.
+ * 'carrier_statement'`) and from a manager's line on a statement (PAC-182,
+ * `reason: 'manual'`, `source: 'app'`, `statementId`). See
+ * `domain/chargeback.ts`.
  */
 @Schema({ timestamps: true, collection: 'chargebacks' })
 export class Chargeback extends TenantRecord {
@@ -60,6 +64,17 @@ export class Chargeback extends TenantRecord {
   /** Denormalized so a ledger row renders without loading a dead policy. */
   @Prop({ trim: true })
   policyNumber?: string;
+
+  /**
+   * `policyNumberKey(policyNumber)` (`@sfa/shared`), on a row that names no
+   * policy — `''` when the number has no letters or digits — so "is this
+   * number already charged back?" reads that number's rows, not every
+   * policy-less row the agency has (PAC-182 review). `null` on rows that
+   * name their policy: those are found by `policyId`. Migration
+   * `20261111120000-chargeback_number_keys` filled it in on older rows.
+   */
+  @Prop({ type: String, default: null })
+  policyNumberKey: string | null;
 
   @Prop({ trim: true })
   policyType?: string;
@@ -185,6 +200,12 @@ ChargebackSchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });
  * lines), beside the `occurredAt` index above for the app's own.
  */
 ChargebackSchema.index({ agencyId: 1, statementMonth: 1, producerId: 1 });
+
+/**
+ * "A policy is charged back once" for a number the app holds no policy for
+ * (`existingChargebacks`): the policy-less rows of a few numbers.
+ */
+ChargebackSchema.index({ agencyId: 1, policyId: 1, policyNumberKey: 1 });
 
 /**
  * One chargeback per policy per rewrite.

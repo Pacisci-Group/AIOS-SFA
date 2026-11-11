@@ -267,6 +267,154 @@ describe('buildStatementPdfModel', () => {
     expect(field(model.details, 'Producer ID')).toBe(PDF_NOT_AVAILABLE);
     expect(field(model.indicators, 'SOM status')).toBe(PDF_NOT_AVAILABLE);
   });
+
+  it('prints an added chargeback with its note (PAC-182)', () => {
+    const model = buildStatementPdfModel(
+      storedStatement({
+        chargebackRows: [
+          { ...chargebackRow(1), reason: 'manual', addedNote: 'Carrier call' },
+          { ...chargebackRow(2), addedNote: null },
+        ],
+      }),
+      ISSUED,
+    );
+    expect(model.chargebackRows.map((row) => row.note)).toEqual([
+      'Added: Carrier call',
+      null,
+    ]);
+  });
+});
+
+describe('the producer acknowledgment (PAC-182)', () => {
+  const SHA = 'a'.repeat(64);
+  const PDF = { key: 'k', sha256: SHA, size: 9000, renderedAt: new Date() };
+  const sent = () => ({
+    ...storedStatement(),
+    status: 'sent' as const,
+    pdf: PDF,
+    sentAt: new Date('2026-11-06T15:00:00.000Z'),
+  });
+
+  it('is empty on an issued statement', () => {
+    expect(buildStatementPdfModel(sent(), ISSUED).acknowledgment).toEqual({
+      statement:
+        'I acknowledge receipt and review of this commission statement.',
+      checked: false,
+      typedName: null,
+      dateSigned: null,
+      comments: null,
+      audit: null,
+    });
+  });
+
+  it('is ticked and signed on the accepted copy, with the audit lines', () => {
+    const model = buildStatementPdfModel(
+      {
+        ...sent(),
+        status: 'accepted',
+        // 11:30 pm in Chicago on Nov 9 is Nov 10 in UTC.
+        acceptance: {
+          acceptedAt: new Date('2026-11-10T05:30:00.000Z'),
+          typedName: 'Pat Producer',
+          accountEmail: 'producer@demoagency.local',
+          userAgent: 'Mozilla/5.0 (Macintosh)',
+        },
+      },
+      ISSUED,
+    );
+    const ack = model.acknowledgment;
+    expect(ack.checked).toBe(true);
+    expect(ack.typedName).toBe('Pat Producer');
+    expect(ack.dateSigned).toBe('Nov 9, 2026');
+    expect(ack.audit).toEqual([
+      'Accepted electronically by producer@demoagency.local on Nov 9, 2026, 11:30 PM CST',
+      'Browser: Mozilla/5.0 (Macintosh)',
+      `SHA-256 of the issued statement: ${SHA}`,
+    ]);
+    // Never an IP address (owner, 10 Nov 2026).
+    expect(JSON.stringify(ack)).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+  });
+
+  it("prints the dispute's notes on the version sent again over it", () => {
+    const rejection = {
+      rejectedAt: new Date('2026-11-07T15:00:00.000Z'),
+      notes: 'The Lee chargeback\r\nwas rewritten.',
+    };
+    // Rendered while disputed, as the next version: the send and the preview.
+    const resend = buildStatementPdfModel(
+      { ...sent(), status: 'rejected', rejection, version: 2 },
+      ISSUED,
+    );
+    // The same version once sent, and its signed copy: from history.
+    const superseded = {
+      ...sent(),
+      version: 2,
+      rejection: null,
+      history: [
+        {
+          version: 1,
+          outcome: 'superseded' as const,
+          pdf: PDF,
+          sentAt: null,
+          sentBy: null,
+          sentByName: null,
+          at: new Date(),
+          rejection: {
+            ...rejection,
+            notes: 'The Lee chargeback\nwas rewritten.',
+          },
+        },
+      ],
+    };
+    const issued = buildStatementPdfModel(superseded, ISSUED);
+    const signed = buildStatementPdfModel(
+      {
+        ...superseded,
+        status: 'accepted',
+        acceptance: {
+          acceptedAt: new Date(),
+          typedName: 'Pat',
+          accountEmail: 'p@x.local',
+          userAgent: '',
+        },
+      },
+      ISSUED,
+    );
+    expect(issued.acknowledgment.comments).toBe(
+      'The Lee chargeback\nwas rewritten.',
+    );
+    expect(signed.acknowledgment.comments).toBe(issued.acknowledgment.comments);
+    expect(resend.acknowledgment.comments).toBe(
+      // Stored notes are normalised (`\n`) before they get here.
+      winAnsi(rejection.notes),
+    );
+    expect(signed.acknowledgment.audit?.[1]).toBe(
+      `Browser: ${PDF_NOT_AVAILABLE}`,
+    );
+  });
+
+  it('prints no notes on a version that follows a reopen', () => {
+    const model = buildStatementPdfModel(
+      {
+        ...sent(),
+        version: 2,
+        history: [
+          {
+            version: 1,
+            outcome: 'reopened',
+            pdf: PDF,
+            sentAt: null,
+            sentBy: null,
+            sentByName: null,
+            at: new Date(),
+            rejection: null,
+          },
+        ],
+      },
+      ISSUED,
+    );
+    expect(model.acknowledgment.comments).toBeNull();
+  });
 });
 
 describe('winAnsi', () => {

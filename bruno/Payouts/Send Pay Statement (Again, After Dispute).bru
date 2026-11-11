@@ -1,0 +1,47 @@
+meta {
+  name: Send Pay Statement (Again, After Dispute)
+  type: http
+  seq: 76
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/send
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("issues the next version, the dispute moved into history", function () {
+    const s = res.getBody();
+    expect(s.status).to.equal("sent");
+    expect(s.version).to.equal(Number(bru.getVar("payoutsSentVersion")) + 1);
+    expect(s.version).to.equal(s.history.length + 1);
+    expect(s.rejection).to.equal(null);
+    const last = s.history[s.history.length - 1];
+    expect(last.outcome).to.equal("superseded");
+    expect(last.version).to.equal(s.version - 1);
+    expect(last.rejection.notes).to.match(/^Bruno: the October contest SPIFF/);
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/send — send a disputed statement again (PAC-181/182)
+
+  **Send Pay Statement** on a disputed statement: the disputed version moves
+  into `history` as `superseded`, carrying its `rejection`, and the
+  statement goes out as the next version — its PDF prints the dispute's
+  notes in the Comments / Dispute notes box. The employee is notified again
+  (`payouts.statement_sent`, "has been reissued"). See **Send Pay
+  Statement**.
+}

@@ -1,7 +1,7 @@
 meta {
   name: Send Pay Statement
   type: http
-  seq: 57
+  seq: 63
 }
 
 post {
@@ -15,6 +15,12 @@ auth:bearer {
 
 script:pre-request {
   if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+script:post-response {
+  // The version Dispute Pay Statement must leave alone (PAC-182).
+  const body = res.getBody();
+  bru.setVar("payoutsSentVersion", body && body.version ? body.version : "");
 }
 
 tests {

@@ -1,0 +1,41 @@
+meta {
+  name: Remove Chargeback Line
+  type: http
+  seq: 60
+}
+
+delete {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/adjustments/{{payoutsAddedAdjustmentId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsAddedAdjustmentId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("takes the chargeback and its adjustment off the statement", function () {
+    const s = res.getBody();
+    expect(s.chargebacks.some(function (c) {
+      return c.policyNumber === bru.getVar("payoutsManualPolicy");
+    })).to.equal(false);
+    expect(s.adjustments.some(function (a) { return a.kind === "add_chargeback"; }))
+      .to.equal(false);
+  });
+}
+
+docs {
+  # DELETE /payouts/statements/:id/adjustments/:adjustmentId — remove an added chargeback
+
+  Removes the line **Add Chargeback Line** added and **deletes its ledger
+  row**, so the demo statement is sent without it. See **Restore Chargeback**
+  for the rules.
+}

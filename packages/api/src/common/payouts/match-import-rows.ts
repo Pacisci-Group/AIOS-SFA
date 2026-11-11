@@ -98,6 +98,11 @@ export interface ExistingChargeback {
   amount: number;
   occurredAt: Date;
   statementMonth: string | null;
+  /**
+   * Who it was charged to. A manual line names them only when it is the
+   * statement's own employee (PAC-182 review): a reviewer may not see others.
+   */
+  producerId: Types.ObjectId | null;
   producerName: string;
 }
 
@@ -269,57 +274,11 @@ export async function matchImportRows(
     if (key) byName.set(key, [...(byName.get(key) ?? []), user._id]);
   }
 
-  // Policies by their stored number key (every writer sets it; migration
-  // `20261106120000-policy_number_keys` filled in the rows that lacked one),
-  // then their sales.
-  const keys = [
-    ...new Set(rows.map((row) => policyNumberKey(row.policyNumber))),
-  ].filter(Boolean);
-  const policies = keys.length
-    ? await models.policy
-        .find({
-          agencyId,
-          policyNumberKey: { $in: keys },
-          isTestRecord: { $ne: true },
-        })
-        .select({
-          policyNumber: 1,
-          policyNumberKey: 1,
-          policyType: 1,
-          carrier: 1,
-          householdId: 1,
-          dealId: 1,
-          branchId: 1,
-        })
-        .sort({ _id: -1 })
-        .lean<LeanPolicy[]>()
-    : [];
-  const policiesByKey = new Map<string, LeanPolicy[]>();
-  for (const policy of policies) {
-    const key = policy.policyNumberKey ?? '';
-    policiesByKey.set(key, [...(policiesByKey.get(key) ?? []), policy]);
-  }
-  const dealIds = [
-    ...new Set(
-      policies
-        .map((policy) => policy.dealId)
-        .filter(Boolean)
-        .map(String),
-    ),
-  ];
-  const deals = dealIds.length
-    ? await models.deal
-        .find({ agencyId, _id: { $in: dealIds } })
-        .select({
-          producerId: 1,
-          clientName: 1,
-          soldDate: 1,
-          branchId: 1,
-          householdId: 1,
-        })
-        .lean<LeanDeal[]>()
-    : [];
-  const dealById = new Map(deals.map((deal) => [String(deal._id), deal]));
+  const { policiesByKey, dealById } = await policiesByNumber(
+    models,
+    agencyId,
+    rows.map((row) => row.policyNumber),
+  );
 
   const picked = rows.map((row) =>
     pickPolicy(
@@ -329,6 +288,7 @@ export async function matchImportRows(
   );
   const charged = await existingChargebacks(models.chargeback, agencyId, {
     policyIds: picked.flatMap((policy) => (policy ? [policy._id] : [])),
+    numberKeys: rows.map((row) => policyNumberKey(row.policyNumber)),
   });
 
   // The policy each line charges — the first line to name it claims it.
@@ -413,6 +373,116 @@ export async function matchImportRows(
 }
 
 /**
+ * The agency's policies holding any of `numbers`, by their stored number
+ * key (every writer sets it; migration `20261106120000-policy_number_keys`
+ * filled in the rows that lacked one), newest first — and their sales.
+ */
+async function policiesByNumber(
+  models: Pick<ImportMatchModels, 'policy' | 'deal'>,
+  agencyId: string,
+  numbers: readonly (string | null | undefined)[],
+): Promise<{
+  policiesByKey: Map<string, LeanPolicy[]>;
+  dealById: Map<string, LeanDeal>;
+}> {
+  const keys = [
+    ...new Set(numbers.map((number) => policyNumberKey(number))),
+  ].filter(Boolean);
+  const policies = keys.length
+    ? await models.policy
+        .find({
+          agencyId,
+          policyNumberKey: { $in: keys },
+          isTestRecord: { $ne: true },
+        })
+        .select({
+          policyNumber: 1,
+          policyNumberKey: 1,
+          policyType: 1,
+          carrier: 1,
+          householdId: 1,
+          dealId: 1,
+          branchId: 1,
+        })
+        .sort({ _id: -1 })
+        .lean<LeanPolicy[]>()
+    : [];
+  const policiesByKey = new Map<string, LeanPolicy[]>();
+  for (const policy of policies) {
+    const key = policy.policyNumberKey ?? '';
+    policiesByKey.set(key, [...(policiesByKey.get(key) ?? []), policy]);
+  }
+  const dealIds = [
+    ...new Set(
+      policies
+        .map((policy) => policy.dealId)
+        .filter(Boolean)
+        .map(String),
+    ),
+  ];
+  const deals = dealIds.length
+    ? await models.deal
+        .find({ agencyId, _id: { $in: dealIds } })
+        .select({
+          producerId: 1,
+          clientName: 1,
+          soldDate: 1,
+          branchId: 1,
+          householdId: 1,
+        })
+        .lean<LeanDeal[]>()
+    : [];
+  return {
+    policiesByKey,
+    dealById: new Map(deals.map((deal) => [String(deal._id), deal])),
+  };
+}
+
+/** A policy the app holds, found by its number, and the sale it was on. */
+export interface PolicyByNumber {
+  policyId: Types.ObjectId;
+  policyNumber: string | null;
+  policyType: string | null;
+  carrier: string | null;
+  householdId: Types.ObjectId | null;
+  dealId: Types.ObjectId | null;
+  clientName: string | null;
+  soldDate: Date | null;
+}
+
+/**
+ * The policy a number means, as a report line's would be found (PAC-182's
+ * manual chargeback): the given carrier first, then one with a sale, then
+ * the newest. `null` when the app holds no policy with that number.
+ */
+export async function findPolicyByNumber(
+  models: Pick<ImportMatchModels, 'policy' | 'deal'>,
+  agencyId: string,
+  policyNumber: string,
+  carrier: string | null,
+): Promise<PolicyByNumber | null> {
+  const { policiesByKey, dealById } = await policiesByNumber(models, agencyId, [
+    policyNumber,
+  ]);
+  const policy = pickPolicy(
+    policiesByKey.get(policyNumberKey(policyNumber)) ?? [],
+    carrier ?? '',
+  );
+  if (!policy) return null;
+  const deal = policy.dealId ? dealById.get(String(policy.dealId)) : null;
+  return {
+    policyId: policy._id,
+    policyNumber: policy.policyNumber ?? null,
+    policyType: policy.policyType ?? null,
+    carrier: policy.carrier ?? null,
+    householdId: policy.householdId ?? deal?.householdId ?? null,
+    dealId: deal?._id ?? null,
+    clientName: deal?.clientName?.trim() || null,
+    soldDate: deal?.soldDate ?? null,
+  };
+}
+
+/**
  * Of the policies holding a number, the one a line means: the report's
  * carrier first (carriers reuse numbers), then one with a sale, then the
  * newest. Carriers compare as slugs of their canonical names, so `ALLSTATE`,
@@ -461,21 +531,32 @@ interface LeanLedgerRow {
   amount: number;
   occurredAt: Date;
   statementMonth?: string | null;
+  producerId?: Types.ObjectId | null;
   producerName?: string | null;
 }
 
 /**
  * The chargebacks already on these policies, in any month: rows naming the
- * policy, and report rows that name no policy (the app did not hold it), by
- * number. Both reads use the `policyId` index. With a session, inside the
- * commit's transaction.
+ * policy, and rows that name no policy (the app did not hold it) carrying
+ * one of `numberKeys`. Both reads are indexed. A policy-less row with no
+ * stored key — one written before the key was — is read whatever its
+ * number, and matched by the number it shows, so a missing key costs a read
+ * and never a second charge. With a session, inside the caller's
+ * transaction.
  */
 export async function existingChargebacks(
   model: Model<Chargeback>,
   agencyId: string,
-  { policyIds }: { policyIds: readonly Types.ObjectId[] },
+  {
+    policyIds,
+    numberKeys,
+  }: {
+    policyIds: readonly Types.ObjectId[];
+    numberKeys: readonly string[];
+  },
   session: ClientSession | null = null,
 ): Promise<ChargedPolicies> {
+  const keys = [...new Set(numberKeys)].filter(Boolean);
   const fields = {
     policyId: 1,
     policyNumber: 1,
@@ -484,6 +565,7 @@ export async function existingChargebacks(
     amount: 1,
     occurredAt: 1,
     statementMonth: 1,
+    producerId: 1,
     producerName: 1,
   };
   const [onPolicies, unattached] = await Promise.all([
@@ -496,7 +578,12 @@ export async function existingChargebacks(
           .lean<LeanLedgerRow[]>()
       : Promise.resolve([] as LeanLedgerRow[]),
     model
-      .find({ agencyId, policyId: null })
+      .find({
+        agencyId,
+        policyId: null,
+        // `null` also matches a row with no key at all.
+        policyNumberKey: { $in: [...keys, null] },
+      })
       .select(fields)
       .sort({ occurredAt: 1, _id: 1 })
       .session(session)
@@ -521,6 +608,7 @@ export async function existingChargebacks(
           amount: row.amount,
           occurredAt: row.occurredAt,
           statementMonth: row.statementMonth ?? null,
+          producerId: row.producerId ?? null,
           producerName: row.producerName ?? '',
         }
       : null;

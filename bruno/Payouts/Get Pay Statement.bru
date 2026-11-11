@@ -18,6 +18,14 @@ script:pre-request {
   if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
 }
 
+script:post-response {
+  // A carrier the statement has a line for: what a manual chargeback on a
+  // policy the app does not hold must name (PAC-182).
+  const lines = (res.getBody() && res.getBody().premiumLines) || [];
+  const line = lines.find(function (l) { return l.carrier !== "(no carrier)"; });
+  bru.setVar("payoutsCarrier", line ? line.carrier : "");
+}
+
 tests {
   test("returns 200 OK", function () {
     expect(res.getStatus()).to.equal(200);

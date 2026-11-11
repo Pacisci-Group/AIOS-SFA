@@ -1,0 +1,94 @@
+meta {
+  name: Accept Pay Statement
+  type: http
+  seq: 84
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/accept
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+body:json {
+  {
+    "typedName": "Pat Producer",
+    "acknowledged": true
+  }
+}
+
+script:pre-request {
+  // Opt-in only: accepting is final, so a run that accepts the month's
+  // statement makes every later run fail until the month changes. Run with
+  // `--env-var payoutsAcceptStatement=true` on a database you can spare.
+  if (
+    !bru.getVar("payoutsStatementId") ||
+    String(bru.getEnvVar("payoutsAcceptStatement")) !== "true"
+  ) {
+    bru.runner.skipRequest();
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is accepted, signed, and its issued file kept", function () {
+    const s = res.getBody();
+    expect(s.status).to.equal("accepted");
+    expect(s.acceptance.typedName).to.equal("Pat Producer");
+    expect(s.acceptance.accountEmail).to.be.a("string");
+    expect(s.acceptance).to.not.have.property("ip");
+    expect(s.signedPdf.sha256).to.match(/^[a-f0-9]{64}$/);
+    expect(s.pdf.sha256).to.match(/^[a-f0-9]{64}$/);
+    expect(s.signedPdf.sha256).to.not.equal(s.pdf.sha256);
+    expect(s.version).to.equal(s.history.length + 1);
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/accept — accept a statement (PAC-182)
+
+  **Module** — `payouts`. **Permission** — `payouts:read`, and only **the
+  statement's own employee** (anyone else who can see it: `403`
+  `PAYOUT_STATEMENT_NOT_YOURS`, the admin included). Only a **sent**
+  statement.
+
+  **Body** — `{ typedName, acknowledged: true }`: the employee's name, typed
+  as their signature (one line, at most 120 characters), and the
+  acknowledgment's box ticked ("I acknowledge receipt and review of this
+  commission statement.").
+
+  **Final.** The statement becomes `accepted`: nothing reopens,
+  recalculates, sends or adjusts it again; a late correction goes on a later
+  month's statement. `version` and `history` do not change.
+
+  The issued PDF is rendered again with the acknowledgment filled — the box
+  ticked, the typed name, the date signed (the statement's time zone) and an
+  audit line: the account's email and the time, the browser
+  (`User-Agent`), and the SHA-256 of the issued file — and stored as a
+  second file, `signedPdf`; the issued `pdf` is kept. **No IP address** is
+  kept or printed (owner, 10 Nov 2026). `acceptance { acceptedAt,
+  typedName, accountEmail, userAgent }`. Open the copy with
+  `GET …/pdf?variant=signed`.
+
+  Notifies (`payouts.statement_accepted`, in-app + push) whoever sent it and
+  the statement's branch managers (else the owners) — never the employee.
+
+  **Response `200`** — the statement, as **Get Pay Statement**.
+
+  **Errors** — `400` no name, the box not ticked; `403`
+  `PAYOUT_STATEMENT_NOT_YOURS`; `404` a statement you cannot see; `409`
+  `PAYOUT_STATEMENT_NOT_SENT` unless it is sent, `PAYOUT_STATEMENT_CHANGED`
+  when a reviewer changed it meanwhile.
+
+  **Opt-in in the collection** (`--env-var payoutsAcceptStatement=true`):
+  accepting the month's demo statement ends it, so every later run fails at
+  **Get Pay Statement** and **Send Pay Statement** until the month changes.
+  The accept is covered by the API's e2e tests either way.
+}

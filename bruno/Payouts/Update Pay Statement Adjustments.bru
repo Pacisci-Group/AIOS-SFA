@@ -18,7 +18,11 @@ body:json {
   {
     "spiffs": 150,
     "complianceAdjustment": 40,
-    "otherAdjustments": 10.5
+    "otherAdjustments": 10.5,
+    "notes": {
+      "spiffs": "October contest",
+      "otherAdjustments": "  Parking pass  "
+    }
   }
 }
 
@@ -45,9 +49,19 @@ tests {
     expect(cents(res.getBody().totals.netPay)).to.equal(cents(before) + 9950);
   });
 
+  test("keeps each amount's note, trimmed (PAC-182)", function () {
+    const notes = {};
+    res.getBody().adjustments.forEach(function (a) { notes[a.kind] = a.note; });
+    expect(notes.spiff).to.equal("October contest");
+    expect(notes.compliance).to.equal("");
+    expect(notes.manual).to.equal("Parking pass");
+  });
+
   test("stores them as the statement's spiff, compliance and manual adjustments", function () {
     const rows = res.getBody().adjustments
-      .filter(function (a) { return a.kind !== "exclude_chargeback"; })
+      .filter(function (a) {
+        return a.kind !== "exclude_chargeback" && a.kind !== "add_chargeback";
+      })
       .map(function (a) { return a.kind + ":" + a.amount; })
       .sort();
     expect(rows).to.eql(["compliance:-40", "manual:-10.5", "spiff:150"]);
@@ -71,22 +85,30 @@ docs {
   | `complianceAdjustment` | Compliance adjustment | **deducted** |
   | `otherAdjustments` | Other adjustments | **deducted** |
 
+  `notes` (optional, PAC-182) — `{ spiffs?, complianceAdjustment?,
+  otherAdjustments? }`: why each amount was given, at most 500 characters,
+  trimmed. A note needs its amount (`400` otherwise). Shown on the statement
+  page under its summary line; not printed on the PDF.
+
   The body is all three, whole: each replaces the statement's adjustments of
-  its kind (`spiff`, `compliance`, `manual`) with one row — the deductions
-  stored negative, as the totals show them — or none for `null`. A left-out
-  chargeback (`exclude_chargeback`) is never touched. The statement is then
-  recalculated as **Recalculate Pay Statement** does; a month's
-  recalculation keeps them.
+  its kind (`spiff`, `compliance`, `manual`) with one row carrying its note —
+  the deductions stored negative, as the totals show them — or none for
+  `null`. Leave `notes` out and no note is kept. The chargeback lines
+  (`exclude_chargeback`, `add_chargeback` — **Add Chargeback Line**) are never
+  touched. The statement is then recalculated as **Recalculate Pay
+  Statement** does; a month's recalculation keeps them.
 
   **Response `200`** — the statement, as **Get Pay Statement**: `totals.spiffs`,
   `complianceAdjustment` and `otherAdjustments` (the last two negative) are in
   `netCommission` and `netPay`; `adjustments[]` lists the rows.
 
   **Errors** — `400` a negative amount, more than two decimals, or over the
-  maximum; `403` without `payouts:write`, or `PAYOUT_STATEMENT_OWN_STATEMENT`
+  maximum; a note over 500 characters or with no amount; `403` without `payouts:write`, or `PAYOUT_STATEMENT_OWN_STATEMENT`
   on your own statement; `404` outside your scope; `409`
   `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted,
-  `PAYOUT_STATEMENT_CHANGED` when it changed while they were being saved.
+  `PAYOUT_STATEMENT_CHANGED` when it changed while they were being saved —
+  the amounts and the statement recalculated from them are one write, onto
+  the statement as it was read (PAC-182 review).
 
   In the collection, **Update Pay Statement Adjustments (Clear)** sets them
   back to none before the statement is sent.

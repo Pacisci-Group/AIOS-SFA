@@ -96,5 +96,8 @@ docs {
 
   **Errors** — `400` a figure out of range; `403` without `payouts:write`, or
   `PAYOUT_STATEMENT_OWN_INPUTS` on your own statement; `404` outside your
-  scope; `409` `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted.
+  scope; `409` `PAYOUT_STATEMENT_NOT_EDITABLE` once sent or accepted,
+  `PAYOUT_STATEMENT_CHANGED` when it changed meanwhile: the figures and the
+  statement recalculated from them are one write, onto the statement as it
+  was read (PAC-182 review).
 }

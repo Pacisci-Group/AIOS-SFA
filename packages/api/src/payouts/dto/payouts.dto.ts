@@ -23,6 +23,11 @@ import {
   teamRequirementsError,
   MAX_PAY_STATEMENTS_PAGE_SIZE,
   MAX_PAYOUT_IMPORT_FILE_BYTES,
+  MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH,
+  MAX_STATEMENT_DISPUTE_NOTES_LENGTH,
+  MAX_STATEMENT_TYPED_NAME_LENGTH,
+  normalizeStatementText,
+  STATEMENT_PDF_VARIANTS,
   MAX_RATE_RULES,
   PAY_STATEMENT_STATUSES,
   PAY_STATEMENTS_PAGE_SIZE,
@@ -32,7 +37,14 @@ import {
   teamBonusError,
 } from '@sfa/shared';
 import { z } from 'zod';
-import { objectId } from '../../common/dashboard/dashboard-filter-query.dto';
+import { objectId as hexId } from '../../common/dashboard/dashboard-filter-query.dto';
+
+/**
+ * A record id, lower-cased: the shared check accepts either case, and the
+ * services compare ids with the form Mongo prints, so an upper-case one
+ * would never match (PAC-182 review).
+ */
+const objectId = hexId.toLowerCase();
 
 /**
  * Request bodies for `/payouts/settings` and `/payouts/structures` (PAC-177).
@@ -383,12 +395,19 @@ export const payStatementIdSchema = objectId;
 /** `:id` of a payout run. */
 export const payoutRunIdSchema = objectId;
 
+/** `:adjustmentId` of a statement adjustment (PAC-182). */
+export const statementAdjustmentIdSchema = objectId;
+
 /**
  * `GET /payouts/statements/:id/pdf` — `version` picks an earlier issued
- * version's file; omitted, the current one.
+ * version's file; omitted, the current one. `variant=signed` (PAC-182) picks
+ * the signed copy of an accepted version instead of the issued file.
  */
 export const payStatementPdfQuerySchema = z
-  .object({ version: z.coerce.number().int().min(1).max(1000).optional() })
+  .object({
+    version: z.coerce.number().int().min(1).max(1000).optional(),
+    variant: z.enum(STATEMENT_PDF_VARIANTS).optional(),
+  })
   .strict();
 export type PayStatementPdfQueryDto = z.infer<
   typeof payStatementPdfQuerySchema
@@ -435,6 +454,17 @@ export const updateStatementAdjustmentsSchema = z
     spiffs: money.nullable(),
     complianceAdjustment: money.nullable(),
     otherAdjustments: money.nullable(),
+    // PAC-182: why each amount was given. Lengths and "a note needs an
+    // amount" are the shared validator's, below.
+    notes: z
+      .object({
+        spiffs: z.string().max(10_000),
+        complianceAdjustment: z.string().max(10_000),
+        otherAdjustments: z.string().max(10_000),
+      })
+      .partial()
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -443,6 +473,112 @@ export const updateStatementAdjustmentsSchema = z
   });
 export type UpdateStatementAdjustmentsDto = z.infer<
   typeof updateStatementAdjustmentsSchema
+>;
+
+/**
+ * Free text a statement stores: `\n` line breaks, trimmed, then required and
+ * capped. Counted after normalising, as it is stored.
+ */
+function statementText(args: {
+  required: string;
+  max: number;
+  tooLong: string;
+}) {
+  return z
+    .string({ message: args.required })
+    .transform(normalizeStatementText)
+    .pipe(z.string().min(1, args.required).max(args.max, args.tooLong));
+}
+
+/**
+ * `POST /payouts/statements/:id/accept` (PAC-182): the employee's typed name
+ * — their signature, on one line — and the acknowledgment's box, ticked.
+ */
+export const acceptPayStatementSchema = z
+  .object({
+    typedName: z
+      .string({ message: 'Type your name to sign.' })
+      .transform((value) => value.replace(/\s+/g, ' ').trim())
+      .pipe(
+        z
+          .string()
+          .min(1, 'Type your name to sign.')
+          .max(
+            MAX_STATEMENT_TYPED_NAME_LENGTH,
+            `Your name can be at most ${MAX_STATEMENT_TYPED_NAME_LENGTH} characters.`,
+          ),
+      ),
+    acknowledged: z.literal(true, {
+      message: 'Tick the box to acknowledge the statement.',
+    }),
+  })
+  .strict();
+export type AcceptPayStatementDto = z.infer<typeof acceptPayStatementSchema>;
+
+/** `POST /payouts/statements/:id/reject` (PAC-182): what is wrong, required. */
+export const rejectPayStatementSchema = z
+  .object({
+    notes: statementText({
+      required: 'Say what is wrong with the statement.',
+      max: MAX_STATEMENT_DISPUTE_NOTES_LENGTH,
+      tooLong: `The notes can be at most ${MAX_STATEMENT_DISPUTE_NOTES_LENGTH} characters.`,
+    }),
+  })
+  .strict();
+export type RejectPayStatementDto = z.infer<typeof rejectPayStatementSchema>;
+
+const adjustmentNote = statementText({
+  required: 'Add a note saying why.',
+  max: MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH,
+  tooLong: `The note can be at most ${MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH} characters.`,
+});
+
+/**
+ * `POST /payouts/statements/:id/adjustments` (PAC-182): one chargeback line —
+ * leave a chargeback on the statement out, or add one the ledger does not
+ * hold. Each with a note.
+ */
+export const addStatementAdjustmentSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('exclude_chargeback'),
+      chargebackId: objectId,
+      note: adjustmentNote,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('add_chargeback'),
+      policyNumber: z
+        .string({ message: 'Enter the policy number.' })
+        .trim()
+        .min(1, 'Enter the policy number.')
+        .max(60, 'The policy number can be at most 60 characters.'),
+      carrier: z
+        .string({ message: 'Choose the carrier.' })
+        .trim()
+        .min(1, 'Choose the carrier.')
+        .max(100),
+      amount: money.superRefine((value, ctx) => {
+        const error =
+          value === 0
+            ? 'The amount charged back must be more than $0.'
+            : amountError(value, 'The amount charged back');
+        if (error) ctx.addIssue({ code: 'custom', message: error });
+      }),
+      customerName: z
+        .string()
+        .trim()
+        .max(120, 'The customer name can be at most 120 characters.')
+        .nullable()
+        .optional()
+        .transform((value) => value || null),
+      note: adjustmentNote,
+    })
+    .strict(),
+]);
+export type AddStatementAdjustmentDto = z.infer<
+  typeof addStatementAdjustmentSchema
 >;
 
 /** `GET /payouts/activity` (PAC-179). No `userId` = the caller. */

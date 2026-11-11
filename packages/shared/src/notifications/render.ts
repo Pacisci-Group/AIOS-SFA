@@ -115,7 +115,54 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
       href: statementId ? `/payouts/statements/${statementId}` : '/my-pay',
     };
   },
+  'payouts.statement_rejected': (data) => {
+    const answer = statementAnswer(data);
+    return {
+      title: answer.who
+        ? `${answer.who} disputed their commission statement`
+        : 'A commission statement was disputed',
+      body: answer.label
+        ? `The ${answer.label} statement needs correcting before it is sent again.`
+        : 'It needs correcting before it is sent again.',
+      href: answer.href,
+    };
+  },
+  'payouts.statement_accepted': (data) => {
+    const answer = statementAnswer(data);
+    return {
+      title: answer.who
+        ? `${answer.who} accepted their commission statement`
+        : 'A commission statement was accepted',
+      body: answer.label
+        ? `The ${answer.label} statement is signed.`
+        : 'It is signed.',
+      href: answer.href,
+    };
+  },
 };
+
+/** What the two sign-off renderers (PAC-182) read from `data`. */
+function statementAnswer(data: NotificationData): {
+  who: string | null;
+  label: string | null;
+  href: string;
+} {
+  const statementId =
+    typeof data.statementId === 'string' &&
+    /^[a-f0-9]{24}$/.test(data.statementId)
+      ? data.statementId
+      : null;
+  const month =
+    typeof data.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(data.month)
+      ? data.month
+      : null;
+  return {
+    who: text(data.employeeName),
+    label: text(data.monthLabel) ?? month,
+    // A reviewer reads them on the statement; the Payouts page otherwise.
+    href: statementId ? `/payouts/statements/${statementId}` : '/payouts',
+  };
+}
 
 /**
  * Thrown for a type the catalog does not know, or a renderer that produced an

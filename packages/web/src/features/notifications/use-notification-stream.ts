@@ -13,7 +13,11 @@ import {
 } from '@/lib/api-client';
 import { reconciliationAssignedKey } from '@/lib/carrier-reconciliation-api';
 import { notificationsKey } from '@/lib/notifications-api';
-import { payoutRunsKey, payStatementListsKey } from '@/lib/payouts-api';
+import {
+  payoutRunsKey,
+  payStatementKey,
+  payStatementListsKey,
+} from '@/lib/payouts-api';
 import { setNotificationStreamConnected } from './notification-stream-status';
 
 /** Reconnect delay after a failed attempt, doubling per attempt up to this. */
@@ -166,12 +170,22 @@ export function useNotificationStream(): void {
             queryKey: reconciliationAssignedKey,
           });
         }
-        // A statement sent to this user (PAC-181): My Pay and the lists
-        // re-ask. Not every statement query: an open PDF's link would be
-        // refetched and its frame reloaded.
-        if (record.type === 'payouts.statement_sent') {
+        // A statement sent to this user (PAC-181), or answered by its
+        // employee (PAC-182, to a reviewer): My Pay, the lists and the
+        // statement itself if it is open re-ask. The statement exactly, not
+        // every key under it: an open PDF's link would be refetched and its
+        // frame reloaded.
+        if (
+          record.type === 'payouts.statement_sent' ||
+          record.type === 'payouts.statement_rejected' ||
+          record.type === 'payouts.statement_accepted'
+        ) {
           void queryClient.invalidateQueries({ queryKey: payStatementListsKey });
           void queryClient.invalidateQueries({ queryKey: payoutRunsKey });
+          void queryClient.invalidateQueries({
+            queryKey: payStatementKey(record.entity.id),
+            exact: true,
+          });
         }
         toast(record.title, {
           description: record.body,

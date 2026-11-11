@@ -3,13 +3,14 @@ import {
   DEFAULT_AGENCY_TIME_ZONE,
   premiumLineLabel,
   somStatusLabel,
+  STATEMENT_ACKNOWLEDGMENT_TEXT,
   statementNetPay,
   statementReference,
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import type { PayStatement } from '../../../payouts/schemas/pay-statement.schema';
 import { monthLabel } from '../month-window';
-import { day, deduction, money, percent, winAnsi } from './format';
+import { day, dayTime, deduction, money, percent, winAnsi } from './format';
 
 /**
  * The Commission Statement as plain, pre-formatted strings (PAC-181).
@@ -84,6 +85,7 @@ export interface PdfChargebackRow {
   deduction: string;
   /** Left out by the manager: struck through, with the note. */
   excluded: boolean;
+  /** "Left out: …", or "Added: …" for one the manager added (PAC-182). */
   note: string | null;
 }
 
@@ -109,12 +111,23 @@ export interface StatementPdfModel {
   chargebackTotal: string;
   /** Printed in place of an empty chargeback table. */
   chargebackEmpty: string;
-  /** Empty until the employee signs (PAC-182). */
+  /**
+   * Producer acknowledgment. Empty boxes on an issued statement; filled on
+   * the signed copy stored when the employee accepts it (PAC-182).
+   */
   acknowledgment: {
     statement: string;
+    /** The box is ticked: the signed copy. */
+    checked: boolean;
     typedName: string | null;
     dateSigned: string | null;
+    /**
+     * The dispute notes the previous version was sent again over — on every
+     * render of this version, issued and signed alike.
+     */
     comments: string | null;
+    /** The signed copy's audit lines; `null` on an issued statement. */
+    audit: string[] | null;
   };
   footerLeft: string;
 }
@@ -290,9 +303,14 @@ export function buildStatementPdfModel(
       excluded: row.excluded,
       note: row.excluded
         ? winAnsi(`Left out: ${row.excludedNote || 'no note'}`)
-        : null,
+        : row.addedNote !== null && row.addedNote !== undefined
+          ? winAnsi(`Added: ${row.addedNote || 'no note'}`)
+          : null,
     }),
   );
+
+  const zone = s.timeZone || DEFAULT_AGENCY_TIME_ZONE;
+  const acceptance = s.acceptance ?? null;
 
   return {
     title: winAnsi(`Commission statement · ${s.userName} · ${period}`),
@@ -319,14 +337,43 @@ export function buildStatementPdfModel(
         }),
     chargebackEmpty: `Nothing was charged back in ${period}.`,
     acknowledgment: {
-      statement:
-        'I acknowledge receipt and review of this commission statement.',
-      typedName: null,
-      dateSigned: null,
-      comments: null,
+      statement: STATEMENT_ACKNOWLEDGMENT_TEXT,
+      checked: acceptance !== null,
+      typedName: acceptance ? winAnsi(acceptance.typedName) : null,
+      dateSigned: acceptance ? day(acceptance.acceptedAt, zone) : null,
+      comments: previousDisputeNotes(s),
+      audit: acceptance
+        ? [
+            winAnsi(
+              `Accepted electronically by ${acceptance.accountEmail} on ${dayTime(acceptance.acceptedAt, zone)}`,
+            ),
+            winAnsi(`Browser: ${acceptance.userAgent || PDF_NOT_AVAILABLE}`),
+            `SHA-256 of the issued statement: ${s.pdf?.sha256 ?? PDF_NOT_AVAILABLE}`,
+          ]
+        : null,
     },
     footerLeft: `${agencyName} | Commission Statement`,
   };
+}
+
+/**
+ * The dispute notes this version answers (PAC-182), found the same way for
+ * every render of the version so its issued and signed copies agree: while
+ * the statement is disputed, its own dispute (it is being rendered as the
+ * next version — the send and the preview); once sent again, the
+ * `superseded` history row of the version before. A version that follows a
+ * reopen answers no dispute.
+ */
+function previousDisputeNotes(s: StatementForPdf): string | null {
+  if (s.status === 'rejected') {
+    return s.rejection?.notes ? winAnsi(s.rejection.notes) : null;
+  }
+  const before = (s.history ?? []).find(
+    (entry) => entry.version === (s.version ?? 1) - 1,
+  );
+  return before?.outcome === 'superseded' && before.rejection?.notes
+    ? winAnsi(before.rejection.notes)
+    : null;
 }
 
 /** A line of the grid, toned by its sign unless told otherwise. */

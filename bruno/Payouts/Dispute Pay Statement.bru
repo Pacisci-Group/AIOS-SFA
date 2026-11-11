@@ -1,0 +1,77 @@
+meta {
+  name: Dispute Pay Statement
+  type: http
+  seq: 72
+}
+
+post {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/reject
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+body:json {
+  {
+    "notes": "Bruno: the October contest SPIFF is missing.\r\nPlease check the chargebacks too."
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("payoutsStatementId")) bru.runner.skipRequest();
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("is disputed, with the notes, and the version and history untouched", function () {
+    const s = res.getBody();
+    expect(s.status).to.equal("rejected");
+    expect(s.rejection.notes).to.equal(
+      "Bruno: the October contest SPIFF is missing.\nPlease check the chargebacks too."
+    );
+    expect(s.rejection.rejectedAt).to.be.a("string");
+    expect(s.version).to.equal(s.history.length + 1);
+    expect(s.version).to.equal(Number(bru.getVar("payoutsSentVersion")));
+    // The issued file stays: sending it again moves it into history.
+    expect(s.pdf.sha256).to.match(/^[a-f0-9]{64}$/);
+    expect(s.acceptance).to.equal(null);
+    expect(s.signedPdf).to.equal(null);
+  });
+}
+
+docs {
+  # POST /payouts/statements/:id/reject — dispute a statement (PAC-182)
+
+  **Module** — `payouts`. **Permission** — `payouts:read`, and only **the
+  statement's own employee** (anyone else who can see it: `403`
+  `PAYOUT_STATEMENT_NOT_YOURS`, the admin included). Only a **sent**
+  statement.
+
+  **Body** — `{ notes }`: what is wrong, required, at most 2,000 characters
+  (line breaks kept as `\n`, the ends trimmed).
+
+  The statement becomes `rejected` (shown as **Disputed**) with
+  `rejection { rejectedAt, notes }`. **Its `version` and `history` do not
+  change**, and the issued file and sender stay: a reviewer corrects it (the
+  figures, the amounts, chargeback lines) and sends it again, which moves
+  this version into `history` as `superseded`, the dispute with it, and
+  issues the next version — whose PDF prints these notes in its Comments /
+  Dispute notes box. The employee still sees it, disputed.
+
+  Notifies (`payouts.statement_rejected`, in-app + push + email) the branch
+  managers of the statement's branch, else the agency owners — never the
+  employee. No notes and no amounts in it. Once per version.
+
+  **Response `200`** — the statement, as **Get Pay Statement**.
+
+  **Errors** — `400` notes missing, blank or too long; `403`
+  `PAYOUT_STATEMENT_NOT_YOURS`; `404` a statement you cannot see; `409`
+  `PAYOUT_STATEMENT_NOT_SENT` unless it is sent (already answered, a draft),
+  `PAYOUT_STATEMENT_CHANGED` when a reviewer changed it meanwhile.
+}

@@ -299,9 +299,46 @@ temperature/aging that aren't first-class in legacy payloads. See
   ⚠ **`version === history.length + 1`, always**: reopening
   and re-sending a disputed statement both move the issued version into
   `history` and bump `version` in one update, so every issued version keeps
-  its own file and the notification dedupes per version. PAC-182's reject
-  must not touch either. The file is reached only through
-  `GET …/:id/pdf`, a presigned link minted per read.
+  its own file and the notification dedupes per version. The file is reached
+  only through `GET …/:id/pdf`, a presigned link minted per read.
+  **Sign-off (PAC-182):** only the statement's own employee answers a sent
+  statement (403 `PAYOUT_STATEMENT_NOT_YOURS` for anyone else, the admin
+  included; `loadOwnSentStatement`). **Accept** (`POST …/:id/accept
+  { typedName, acknowledged: true }`) is **final**: the PDF is re-rendered
+  with the acknowledgment filled (ticked box, typed name, date signed, an
+  audit line of account, browser and the issued file's SHA-256 — ⚠ **no IP
+  address**, owner's choice) and stored as `signedPdf` beside the issued
+  `pdf` (`GET …/pdf?variant=signed`). **Dispute** (`POST …/:id/reject
+  { notes }`) makes it `rejected` (Disputed) and editable; ⚠ **neither
+  touches `version` or `history`** — sending it again moves the disputed
+  version into `history` as `superseded` with its `rejection`, and the next
+  version's PDF prints the notes (the model reads them from `rejection`
+  while disputed, from that history row once sent, so the issued and signed
+  copies of a version agree). Reviewers hear of both
+  (`payouts.statement_rejected` / `_accepted`: the statement's branch
+  managers, else the owners, never the employee). A reviewer sees their own
+  sent statements wherever they are, outside their branch scope too.
+  **Chargeback lines** (`POST` / `DELETE …/:id/adjustments`, draft or
+  disputed, with a note): leave a chargeback out (`exclude_chargeback`), or
+  add one (`add_chargeback` — a `manual` ledger row, `source: 'app'`, with
+  the statement's id and month; the engine reads it like any row, the
+  adjustment only carries the note). ⚠ A manual line obeys "charged back
+  once" under the import's ledger lock (`lockChargebackLedger`), takes a
+  held policy's carrier or one of the statement's lines, and is the one
+  ledger row ever **deleted** — with its adjustment, while the statement is
+  editable, or by a month's recalculation when its draft is dropped. The
+  three entered amounts stay the `PATCH` and carry an optional note each.
+  ⚠ **An edit and its figures are one write** (PAC-182 review):
+  `recomputeStatement` writes computed figures only onto the statement as it
+  read it (`updatedAt`), and takes a reviewer's `edit` (inputs or the whole
+  adjustments array) into that same write — so a send, an answer or a
+  month's run can never land between an edit and its figures. A miss is 409
+  `PAYOUT_STATEMENT_CHANGED`; the month's run counts a statement edited
+  under it as raced and recalculates it after storing the run (its sweep
+  takes every editable statement whose `computedAt` is not the run's).
+  Never add a statement edit that saves first and recalculates after. The
+  issued `pdf` stores the `agencyName` and `logoKey` its header printed, and
+  the signed copy is rendered with those, not today's branding.
 
 > ⚠ The form-pipeline docs mention **Next.js** + a **localStorage mock API** —
 > these predate the monorepo decision. Reality: `packages/web` is **Vite/React**

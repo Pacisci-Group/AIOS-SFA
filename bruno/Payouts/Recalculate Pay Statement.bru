@@ -48,5 +48,8 @@ docs {
   **Errors** — `403` without `payouts:write`, or
   `PAYOUT_STATEMENT_OWN_STATEMENT` on your own statement without
   `agency:payouts:admin`; `404` outside your scope; `409`
-  `PAYOUT_STATEMENT_NOT_EDITABLE` once it has been sent or accepted.
+  `PAYOUT_STATEMENT_NOT_EDITABLE` once it has been sent or accepted,
+  `PAYOUT_STATEMENT_CHANGED` when it was written while it was being
+  recalculated (the figures are written only onto the statement they were
+  computed from — PAC-182 review).
 }

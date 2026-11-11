@@ -53,6 +53,7 @@ import {
   type ChargebackFileFormat,
 } from '../common/payouts/chargeback-file-reader';
 import {
+  lockChargebackLedger,
   writeImportedChargebacks,
   type ImportedChargebackLine,
 } from '../common/payouts/chargeback-writers';
@@ -525,6 +526,7 @@ export class ChargebackImportsService {
             policyIds: charged.flatMap((row) =>
               row.match.policyId ? [row.match.policyId] : [],
             ),
+            numberKeys: charged.map((row) => policyNumberKey(row.policyNumber)),
           },
           session,
         );
@@ -654,11 +656,8 @@ export class ChargebackImportsService {
     agencyId: string,
     session: ClientSession | null,
   ): Promise<void> {
-    await this.models.agency.updateOne(
-      { _id: new Types.ObjectId(agencyId) },
-      { $inc: { chargebackImportsRevision: 1 } },
-      { ...(session ? { session } : {}), timestamps: false },
-    );
+    // Shared with a manual chargeback on a statement (PAC-182).
+    await lockChargebackLedger(this.models.agency, agencyId, session);
   }
 
   /** Lines whose policies were charged back since the preview become duplicates. */

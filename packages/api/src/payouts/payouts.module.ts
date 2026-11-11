@@ -57,13 +57,16 @@ import {
   PayStatement,
   PayStatementSchema,
 } from './schemas/pay-statement.schema';
+import { StatementSignoffService } from './statement-signoff.service';
 
 /**
  * Payouts (PAC-176). PAC-177 brought the admin half — payout settings and
  * payment structures; PAC-178/179 the monthly statements, the run that drafts
  * them and the activity behind them; PAC-180 the carrier chargeback report
  * import; PAC-181 the Commission Statement PDF and sending it
- * (`StatementIssueService`). The sign-off follows in PAC-182.
+ * (`StatementIssueService`); PAC-182 the employee's answer — accept with a
+ * signed copy, or dispute — (`StatementSignoffService`) and the reviewer's
+ * chargeback lines.
  *
  * `LeadSourcesModule` for the structures' lead-source rates: the service
  * checks each source is the agency's to use and names it on read.
@@ -111,6 +114,7 @@ import {
     PayoutActivityService,
     ChargebackImportsService,
     StatementIssueService,
+    StatementSignoffService,
   ],
 })
 export class PayoutsModule {}

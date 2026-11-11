@@ -96,6 +96,31 @@ export const NOTIFICATION_TYPES = {
     category: 'payouts',
     defaultChannels: { email: true, push: true },
   },
+  /**
+   * An employee disputed their commission statement (PAC-182). Recipients:
+   * the branch managers of the employee's branch, else the agency owners —
+   * never the employee. `data`: `{ statementId, month, monthLabel, version,
+   * employeeName }`. Dedupe: `pay-statement:<id>:rejected:v<version>` — one
+   * dispute per version, since a disputed version can only be sent again as
+   * the next one. **No notes and no amounts**: the notes may quote pay, and
+   * the link opens them behind sign-in. Email is on: someone has to correct
+   * the statement and send it again.
+   */
+  'payouts.statement_rejected': {
+    category: 'payouts',
+    defaultChannels: { email: true, push: true },
+  },
+  /**
+   * An employee accepted their commission statement (PAC-182). Recipients:
+   * whoever sent the version, and the same managers as a dispute — never the
+   * employee. `data`: `{ statementId, month, monthLabel, version,
+   * employeeName }`. Dedupe: `pay-statement:<id>:accepted:v<version>`. Push
+   * only: nothing is asked of anyone.
+   */
+  'payouts.statement_accepted': {
+    category: 'payouts',
+    defaultChannels: { email: false, push: true },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

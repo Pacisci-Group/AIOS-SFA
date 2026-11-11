@@ -55,10 +55,12 @@ const PayStatementAdjustmentSchema = SchemaFactory.createForClass(
 );
 
 /**
- * An issued Commission Statement PDF (PAC-181), in object storage under
- * `agencies/<agencyId>/pay-statements/<year>/<statementId>/
- * commission-statement-<month>-v<n>.pdf`. Only the key is kept — a link is
- * minted per read and never stored.
+ * An issued Commission Statement PDF (PAC-181), or the signed copy of one
+ * (PAC-182), in object storage under `agencies/<agencyId>/pay-statements/
+ * <year of upload>/<statementId>/<uuid>-commission-statement-<month>-v<n>.pdf`
+ * (`…-v<n>-signed.pdf` for a signed copy). The UUID makes each upload's key
+ * unique, so an attempt that loses a race deletes only its own file. Only the
+ * key is kept — a link is minted per read and never stored.
  */
 @Schema({ _id: false, timestamps: false })
 export class PayStatementPdf {
@@ -74,14 +76,72 @@ export class PayStatementPdf {
 
   @Prop({ type: Date, required: true })
   renderedAt: Date;
+
+  /**
+   * What the header band printed (PAC-182 review): the agency's branded name,
+   * and the storage key of the logo embedded — `null` when it printed the
+   * name alone. A signed copy is printed with these, so it matches the
+   * issued file it signs whatever the branding is today. A replaced logo
+   * keeps its file: every upload has a key of its own. Missing on files
+   * issued before it was stored.
+   */
+  @Prop({ type: String, default: null })
+  agencyName?: string | null;
+
+  @Prop({ type: String, default: null })
+  logoKey?: string | null;
 }
 const PayStatementPdfSchema = SchemaFactory.createForClass(PayStatementPdf);
 
 /**
+ * The employee's dispute of the current version (PAC-182). It moves onto the
+ * `superseded` history row when the statement is sent again, and the next
+ * version prints its notes in the PDF's Comments / Dispute notes box.
+ */
+@Schema({ _id: false, timestamps: false })
+export class PayStatementRejection {
+  @Prop({ type: Date, required: true })
+  rejectedAt: Date;
+
+  /** `\n` line breaks, trimmed (`normalizeStatementText`). */
+  @Prop({ type: String, required: true })
+  notes: string;
+}
+const PayStatementRejectionSchema = SchemaFactory.createForClass(
+  PayStatementRejection,
+);
+
+/**
+ * The employee's acceptance (PAC-182): the name they typed as a signature,
+ * and the account and browser they accepted from — what the signed copy's
+ * audit line prints. No IP address (owner, 10 Nov 2026: behind the load
+ * balancer the API sees only the balancer's, and the forwarded one is the
+ * client's to say).
+ */
+@Schema({ _id: false, timestamps: false })
+export class PayStatementAcceptance {
+  @Prop({ type: Date, required: true })
+  acceptedAt: Date;
+
+  @Prop({ type: String, required: true })
+  typedName: string;
+
+  /** The signed-in account's email when they accepted. */
+  @Prop({ type: String, required: true })
+  accountEmail: string;
+
+  @Prop({ type: String, default: '' })
+  userAgent: string;
+}
+const PayStatementAcceptanceSchema = SchemaFactory.createForClass(
+  PayStatementAcceptance,
+);
+
+/**
  * An issued version that is no longer current (PAC-181): its file and who
  * sent it, kept when the statement is reopened or a disputed one is sent
- * again. `version === history.length + 1` always — see
- * `STATEMENT_HISTORY_OUTCOMES`.
+ * again — with the dispute that led to it, for a `superseded` one (PAC-182).
+ * `version === history.length + 1` always — see `STATEMENT_HISTORY_OUTCOMES`.
  */
 @Schema({ _id: false, timestamps: false })
 export class PayStatementHistoryEntry {
@@ -106,6 +166,10 @@ export class PayStatementHistoryEntry {
   /** When it stopped being current. */
   @Prop({ type: Date, required: true })
   at: Date;
+
+  /** The dispute a `superseded` version was sent again over (PAC-182). */
+  @Prop({ type: PayStatementRejectionSchema, default: null })
+  rejection?: PayStatementRejection | null;
 }
 const PayStatementHistoryEntrySchema = SchemaFactory.createForClass(
   PayStatementHistoryEntry,
@@ -133,8 +197,13 @@ const PayStatementHistoryEntrySchema = SchemaFactory.createForClass(
  * (`pdf`) and marks the statement `sent` with who sent it; reopening takes it
  * back to `draft` and moves the issued version into `history`. The PDF,
  * sender and history fields are absent on statements written before them —
- * read them as `null` / `[]`. Acceptance and dispute fields arrive with
- * PAC-182.
+ * read them as `null` / `[]`.
+ *
+ * **Sign-off (PAC-182)**: the employee accepts a sent statement (`accepted`,
+ * final: `acceptance` and a `signedPdf` beside the issued `pdf`) or disputes
+ * it (`rejected`: `rejection`, then a reviewer corrects it and sends it again
+ * as the next version). Neither touches `version` or `history`. Absent on
+ * older statements — read as `null`.
  */
 @Schema({ timestamps: true, collection: 'payStatements' })
 export class PayStatement {
@@ -257,6 +326,21 @@ export class PayStatement {
 
   @Prop({ type: [PayStatementHistoryEntrySchema], default: [] })
   history: PayStatementHistoryEntry[];
+
+  /** The current version's dispute, while it is disputed (PAC-182). */
+  @Prop({ type: PayStatementRejectionSchema, default: null })
+  rejection?: PayStatementRejection | null;
+
+  /** How the employee accepted it (PAC-182); set with `accepted`. */
+  @Prop({ type: PayStatementAcceptanceSchema, default: null })
+  acceptance?: PayStatementAcceptance | null;
+
+  /**
+   * The signed copy (PAC-182): the issued statement re-rendered with the
+   * acknowledgment filled. The issued `pdf` is kept.
+   */
+  @Prop({ type: PayStatementPdfSchema, default: null })
+  signedPdf?: PayStatementPdf | null;
 
   @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdBy: Types.ObjectId | null;

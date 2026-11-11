@@ -5,9 +5,13 @@ import {
   bundleMinimumFor,
   chargebackWindowError,
   EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+  enteredAdjustmentNotesOf,
   enteredAdjustmentsOf,
+  MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH,
   memberStartsError,
+  normalizeStatementText,
   statementEnteredAdjustmentsError,
+  statementSignedPdfFilename,
   overridesError,
   referralRuleError,
   statementInputsError,
@@ -81,6 +85,76 @@ describe('the entered adjustments (10 Nov 2026)', () => {
       complianceAdjustment: 40,
       otherAdjustments: null,
     });
+  });
+
+  // PAC-182: a note on each amount.
+  it('takes a note on an amount, and refuses one with no amount to explain', () => {
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        spiffs: 150,
+        notes: { spiffs: '  Q4 contest  ' },
+      }),
+    ).toBeNull();
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        notes: { otherAdjustments: 'Parking' },
+      }),
+    ).toBe('Other adjustments: enter an amount for the note to explain.');
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        complianceAdjustment: 0,
+        notes: { complianceAdjustment: 'Nothing' },
+      }),
+    ).toBe(
+      'The compliance adjustment: enter an amount for the note to explain.',
+    );
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        spiffs: 10,
+        notes: { spiffs: 'x'.repeat(MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH + 1) },
+      }),
+    ).toBe(
+      `The note on other bonuses / SPIFFs is longer than ${MAX_STATEMENT_ADJUSTMENT_NOTE_LENGTH} characters.`,
+    );
+    // Blank is no note.
+    expect(
+      statementEnteredAdjustmentsError({
+        ...EMPTY_STATEMENT_ENTERED_ADJUSTMENTS,
+        notes: { spiffs: '   ' },
+      }),
+    ).toBeNull();
+  });
+
+  it('reads the notes back from the rows that carry an amount', () => {
+    expect(
+      enteredAdjustmentNotesOf([
+        { kind: 'spiff', amount: 100, note: 'Q4 contest' },
+        { kind: 'compliance', amount: -40, note: '' },
+        { kind: 'exclude_chargeback', amount: null, note: 'Rewritten' },
+      ]),
+    ).toEqual({
+      spiffs: 'Q4 contest',
+      complianceAdjustment: '',
+      otherAdjustments: '',
+    });
+  });
+});
+
+describe('statement text (PAC-182)', () => {
+  it('stores line breaks as \\n and trims the ends', () => {
+    expect(normalizeStatementText('  one\r\ntwo\rthree\n ')).toBe(
+      'one\ntwo\nthree',
+    );
+  });
+
+  it('names a signed copy after its version', () => {
+    expect(statementSignedPdfFilename('2026-10', 3)).toBe(
+      'commission-statement-2026-10-v3-signed.pdf',
+    );
   });
 });
 

@@ -1,0 +1,48 @@
+meta {
+  name: Get Pay Statement PDF Link (Signed, Opt-In)
+  type: http
+  seq: 85
+}
+
+get {
+  url: {{baseUrl}}/payouts/statements/{{payoutsStatementId}}/pdf?variant=signed
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsProducerToken}}
+}
+
+script:pre-request {
+  // Opt-in only: accepting is final, so a run that accepts the month's
+  // statement makes every later run fail until the month changes. Run with
+  // `--env-var payoutsAcceptStatement=true` on a database you can spare.
+  if (
+    !bru.getVar("payoutsStatementId") ||
+    String(bru.getEnvVar("payoutsAcceptStatement")) !== "true"
+  ) {
+    bru.runner.skipRequest();
+  }
+}
+
+params:query {
+  variant: signed
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("links the signed copy", function () {
+    expect(res.getBody().filename).to.match(/^commission-statement-\d{4}-\d{2}-v\d+-signed\.pdf$/);
+    expect(res.getBody().url).to.be.a("string");
+  });
+}
+
+docs {
+  # GET /payouts/statements/:id/pdf?variant=signed — the signed copy
+
+  After the opt-in **Accept Pay Statement**. See **Get Pay Statement PDF
+  Link**.
+}

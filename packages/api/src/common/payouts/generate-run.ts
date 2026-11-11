@@ -25,7 +25,7 @@ import {
   type StatementRules,
   type StatementStructureSnapshot,
 } from '@sfa/shared';
-import { Types, type Model } from 'mongoose';
+import { Types, type ClientSession, type Model } from 'mongoose';
 import type { BranchDocument } from '../../branches/schemas/branch.schema';
 import type { Carrier } from '../../carriers/schemas/carrier.schema';
 import type { LeadSource } from '../../lead-sources/schemas/lead-source.schema';
@@ -128,13 +128,30 @@ interface LeanStatement {
   bonuses?: Partial<StatementBonusesView> | null;
   totals?: { grossPremium?: number } | null;
   inputs?: Partial<StatementInputs> | null;
-  adjustments?: {
-    _id: Types.ObjectId;
-    kind: PayoutAdjustment['kind'];
-    chargebackId?: Types.ObjectId | null;
-    amount?: number | null;
-    note?: string;
-  }[];
+  adjustments?: StoredAdjustment[];
+  /** The last write — what every write of computed figures is conditional on. */
+  updatedAt?: Date | null;
+}
+
+interface StoredAdjustment {
+  _id: Types.ObjectId;
+  kind: PayoutAdjustment['kind'];
+  chargebackId?: Types.ObjectId | null;
+  amount?: number | null;
+  note?: string;
+}
+
+/**
+ * A reviewer's edit (PAC-182 review): saved in the same write as the figures
+ * computed with it, on the statement exactly as the reviewer read it.
+ */
+export interface StatementEdit {
+  /** The statement's `updatedAt` when the reviewer read it. */
+  updatedAt: Date | null;
+  /** The entered figures, whole. */
+  inputs?: StatementInputs;
+  /** The adjustments, whole: the entered amounts and the chargeback lines. */
+  adjustments?: StoredAdjustment[];
 }
 
 export function peopleModels(models: PayoutModels) {
@@ -435,6 +452,8 @@ async function computeRun(
 
   let drafted = 0;
   let untouched = 0;
+  /** Statements changed between this run's read and its write. */
+  const raced = new Set<string>();
   for (const recipient of recipients) {
     const { person, structure, pool, snapshot } = recipient;
     const userId = person.id;
@@ -482,6 +501,38 @@ async function computeRun(
         winner: som.winnerIds.includes(userId),
       },
     });
+    const figures = {
+      month: run.month,
+      branchId: person.branchId,
+      branchName: person.branchName,
+      userName: person.name,
+      allstateBindId: person.allstateBindId,
+      roleNames: person.roles,
+      roleSlugs: person.roleSlugs,
+      pool,
+      structureId: structure._id,
+      structureSnapshot: snapshot,
+      timeZone,
+      ...computed,
+      inputsNeeded: inputsNeededFor(recipient.rules, settings),
+      computedAt: now,
+    };
+    if (prior) {
+      // Only onto the statement as it was read: one edited, sent or answered
+      // since was computed from other figures. A sent one is left as it is;
+      // an edited one is recalculated once the run is written (below).
+      const written = await models.payStatement.updateOne(
+        {
+          _id: prior._id,
+          status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
+          updatedAt: prior.updatedAt ?? null,
+        },
+        { $set: figures },
+      );
+      if (written.matchedCount === 1) drafted += 1;
+      else raced.add(String(prior._id));
+      continue;
+    }
     try {
       await models.payStatement.updateOne(
         {
@@ -491,22 +542,7 @@ async function computeRun(
           status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
         },
         {
-          $set: {
-            month: run.month,
-            branchId: person.branchId,
-            branchName: person.branchName,
-            userName: person.name,
-            allstateBindId: person.allstateBindId,
-            roleNames: person.roles,
-            roleSlugs: person.roleSlugs,
-            pool,
-            structureId: structure._id,
-            structureSnapshot: snapshot,
-            timeZone,
-            ...computed,
-            inputsNeeded: inputsNeededFor(recipient.rules, settings),
-            computedAt: now,
-          },
+          $set: figures,
           $setOnInsert: { status: 'draft', version: 1, adjustments: [] },
         },
         { upsert: true },
@@ -531,6 +567,20 @@ async function computeRun(
     userId: {
       $nin: recipients.map((r) => new Types.ObjectId(r.person.id)),
     },
+  });
+  // A manager's manual chargeback (PAC-182) belongs to its statement: one
+  // whose statement went above goes too, or it would block its policy for
+  // good and come back on a later draft with no adjustment to remove it.
+  // Matched by what is left rather than by what was deleted, so a run that
+  // died between the two writes is put right by the next.
+  const kept: Types.ObjectId[] = await models.payStatement
+    .find({ agencyId, runId })
+    .distinct('_id');
+  await models.chargeback.deleteMany({
+    agencyId,
+    reason: 'manual',
+    statementMonth: run.month,
+    statementId: { $ne: null, $nin: kept },
   });
 
   const names = new Map(recipients.map((r) => [r.person.id, r.person.name]));
@@ -594,31 +644,38 @@ async function computeRun(
     },
   );
 
-  // Editable statements of people who are no longer recipients — a reopened
-  // draft kept above, or a disputed one — were not written by the loop.
-  // Left as they were, Send all would issue them with the figures of the
-  // last calculation. Each is recalculated as Recalculate does: by the rules
-  // it was drafted with, against the split just stored on the run, and
-  // saying the person is no longer on a payment structure. After the run's
-  // write, because that is what `recomputeStatement` reads.
+  // Editable statements the loop did not write — those of people who are no
+  // longer recipients (a reopened draft kept above, or a disputed one), and
+  // those a reviewer edited while the month was being calculated — would
+  // otherwise keep the figures of an earlier calculation, and Send all would
+  // issue them. Each is recalculated as Recalculate does: by its current
+  // structure, else the rules it was drafted with, against the split just
+  // stored on the run. After the run's write, because that is what
+  // `recomputeStatement` reads.
   const leftOver = await models.payStatement
     .find({
       agencyId,
       runId,
       status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
-      userId: {
-        $nin: recipients.map((r) => new Types.ObjectId(r.person.id)),
-      },
+      computedAt: { $ne: now },
     })
     .select({ _id: 1 })
     .lean<{ _id: Types.ObjectId }[]>();
   for (const row of leftOver) {
-    await recomputeStatement(models, {
-      agencyId,
-      statementId: String(row._id),
-      now,
-    });
+    const statementId = String(row._id);
+    // Re-read on a miss: an edit landing meanwhile may have been computed
+    // against the run as it was before this write.
+    let done = false;
+    for (let attempt = 0; attempt < 3 && !done; attempt += 1) {
+      done = await recomputeStatement(models, { agencyId, statementId, now });
+    }
+    if (raced.delete(statementId)) {
+      if (done) drafted += 1;
+      else untouched += 1;
+    }
   }
+  // Raced and no longer editable: sent meanwhile, so left as it is.
+  untouched += raced.size;
 
   return { runId: String(runId), statements, drafted, untouched };
 }
@@ -714,18 +771,43 @@ async function producerOfYearWinners(
  * person's premium has moved, the statement says the month needs a full
  * recalculation instead.
  *
- * `false` when the statement is not there or is no longer editable.
+ * **One write, onto the statement as it was read** (PAC-182 review). The
+ * figures are written only if nothing wrote the statement since it was read
+ * here, and a reviewer's `edit` — new entered figures or adjustments — is
+ * saved in that same write, and only onto the statement as the reviewer read
+ * it. So a send, an answer or a month's calculation can never land between
+ * an edit and the figures computed from it. With a `session`, the ledger is
+ * read and the statement written inside the caller's transaction.
+ *
+ * `false` when the statement is not there, is no longer editable, or was
+ * written since it was read (here, or by the reviewer).
  */
 export async function recomputeStatement(
   models: PayoutModels,
-  args: { agencyId: string; statementId: string; now?: Date },
+  args: {
+    agencyId: string;
+    statementId: string;
+    now?: Date;
+    edit?: StatementEdit;
+    session?: ClientSession | null;
+  },
 ): Promise<boolean> {
-  const { agencyId } = args;
+  const { agencyId, edit } = args;
+  const session = args.session ?? null;
   const now = args.now ?? new Date();
-  const statement = await models.payStatement
+  const read = await models.payStatement
     .findOne({ _id: new Types.ObjectId(args.statementId), agencyId })
+    .session(session)
     .lean<LeanStatement | null>();
-  if (!statement || !isEditableStatementStatus(statement.status)) return false;
+  if (!read || !isEditableStatementStatus(read.status)) return false;
+  const readAt = read.updatedAt ?? null;
+  if (edit && readAt?.getTime() !== edit.updatedAt?.getTime()) return false;
+  // The statement as the edit leaves it: what the figures are computed from.
+  const statement: LeanStatement = {
+    ...read,
+    ...(edit?.inputs ? { inputs: edit.inputs } : {}),
+    ...(edit?.adjustments ? { adjustments: edit.adjustments } : {}),
+  };
   const run = await models.payoutRun
     .findOne({ _id: statement.runId, agencyId })
     .lean<(PayoutRun & { _id: Types.ObjectId }) | null>();
@@ -752,6 +834,7 @@ export async function recomputeStatement(
         window,
         timeZone,
         memberIds: [userId],
+        session,
       }),
       models.agency.findById(agencyId).select({ carrierAppointments: 1 }).lean<{
         carrierAppointments?: {
@@ -848,9 +931,12 @@ export async function recomputeStatement(
     {
       _id: statement._id,
       status: { $in: [...EDITABLE_PAY_STATEMENT_STATUSES] },
+      updatedAt: readAt,
     },
     {
       $set: {
+        ...(edit?.inputs ? { inputs: edit.inputs } : {}),
+        ...(edit?.adjustments ? { adjustments: edit.adjustments } : {}),
         ...(person
           ? {
               branchId: person.branchId,
@@ -871,6 +957,7 @@ export async function recomputeStatement(
         computedAt: now,
       },
     },
+    session ? { session } : {},
   );
   return result.matchedCount === 1;
 }

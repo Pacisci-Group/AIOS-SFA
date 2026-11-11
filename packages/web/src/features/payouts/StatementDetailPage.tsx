@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowLeft,
   Calculator,
+  CircleCheck,
   Loader2,
+  MessageSquareWarning,
   Send,
   Undo2,
 } from "lucide-react";
@@ -35,27 +37,30 @@ import { useUrlState } from "@/hooks/useUrlState";
 import { formatMonth } from "@/lib/months";
 import {
   getPayStatement,
-  payoutRunsKey,
   payStatementKey,
-  payStatementListsKey,
   recalculatePayStatement,
   reopenPayStatement,
   sendPayStatement,
 } from "@/lib/payouts-api";
+import { AcceptStatementDialog } from "./components/AcceptStatementDialog";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { DisputeStatementDialog } from "./components/DisputeStatementDialog";
 import { StatementAdjustmentsCard } from "./components/StatementAdjustmentsCard";
+import { StatementAnswerCard } from "./components/StatementAnswerCard";
 import { StatementBreakdown } from "./components/StatementBreakdown";
 import { StatementInputsCard } from "./components/StatementInputsCard";
 import { StatementPdfPanel } from "./components/StatementPdfPanel";
 import { StatementStatusBadge } from "./components/StatementStatusBadge";
 import { payoutErrorMessage } from "./payout-errors";
-import { useOwnStatementBlocked } from "./own-statement";
+import { useIsOwnStatement, useOwnStatementBlocked } from "./own-statement";
 import { formatInstantDay, POOL_LABELS } from "./payout-format";
+import { useApplyStatement } from "./statement-cache";
 
 const TAB_DEFAULTS = { tab: "" };
 const TAB_ALLOWED = { tab: ["pdf", "activity"] as const };
 
 type Confirming = "send" | "reopen" | null;
+type Answering = "accept" | "dispute" | null;
 
 /**
  * One commission statement (PAC-178), the same page for the reviewer and the
@@ -71,14 +76,20 @@ type Confirming = "send" | "reopen" | null;
  *
  * PAC-181: the PDF tab shows the issued Commission Statement (or, for a
  * reviewer, a preview of a draft); a reviewer sends a draft or disputed
- * statement, and reopens a sent one until the employee answers. Accepting
- * and disputing arrive with PAC-182.
+ * statement, and reopens a sent one until the employee answers.
+ *
+ * PAC-182: the statement's own employee — whatever their permissions —
+ * answers a sent one: **Accept** signs it with their typed name (final; the
+ * PDF tab then shows the signed copy) and **Dispute** sends it back with
+ * notes. Where the answer stands shows above every tab. A reviewer corrects
+ * a disputed statement — the chargeback lines, the entered amounts, each
+ * with a note — and sends it again as the next version.
  */
 export default function StatementDetailPage() {
   const { id = "" } = useParams();
   const { canWrite } = usePermissions();
   const reviewer = canWrite(ModuleKey.Payouts);
-  const queryClient = useQueryClient();
+  const apply = useApplyStatement();
   const [view, setView] = useUrlState({
     defaults: TAB_DEFAULTS,
     allowed: TAB_ALLOWED,
@@ -92,23 +103,16 @@ export default function StatementDetailPage() {
   const recalculate = useMutation({
     mutationFn: () => recalculatePayStatement(id),
     onSuccess: async (updated) => {
-      queryClient.setQueryData(payStatementKey(id), updated);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: payStatementListsKey }),
-        queryClient.invalidateQueries({ queryKey: payoutRunsKey }),
-      ]);
+      await apply(updated);
       toast.success("Statement recalculated.");
     },
     onError: (error) => toast.error(payoutErrorMessage(error)),
   });
 
   const [confirming, setConfirming] = useState<Confirming>(null);
+  const [answering, setAnswering] = useState<Answering>(null);
   const applied = async (updated: PayStatementView) => {
-    queryClient.setQueryData(payStatementKey(id), updated);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: payStatementListsKey }),
-      queryClient.invalidateQueries({ queryKey: payoutRunsKey }),
-    ]);
+    await apply(updated);
     setConfirming(null);
   };
   const send = useMutation({
@@ -140,6 +144,9 @@ export default function StatementDetailPage() {
   // `PAYOUT_STATEMENT_OWN_STATEMENT`): someone else decides one's pay.
   const ownBlocked = useOwnStatementBlocked(s);
   const issues = reviewer && !ownBlocked;
+  // Only the employee answers, an admin on their own statement included —
+  // who may then see Reopen beside these, which is theirs too.
+  const answers = useIsOwnStatement(s) && s?.status === "sent";
   const backTo = reviewer && s ? `/payouts?month=${s.month}` : "/my-pay";
   const firstName = s?.userName.split(" ")[0] ?? "";
 
@@ -223,6 +230,27 @@ export default function StatementDetailPage() {
               Reopen
             </Button>
           )}
+          {answers && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={() => setAnswering("dispute")}
+              >
+                <MessageSquareWarning aria-hidden />
+                Dispute
+              </Button>
+              <Button
+                size="sm"
+                disabled={pending}
+                onClick={() => setAnswering("accept")}
+              >
+                <CircleCheck aria-hidden />
+                Accept
+              </Button>
+            </>
+          )}
           {issues && s && isEditableStatementStatus(s.status) && (
             <Button
               size="sm"
@@ -252,22 +280,47 @@ export default function StatementDetailPage() {
             <Skeleton className="h-40 w-full rounded-xl" />
             <Skeleton className="h-64 w-full rounded-xl" />
           </div>
-        ) : view.tab === "activity" ? (
-          <ActivityPanel userId={s.userId} month={s.month} />
-        ) : view.tab === "pdf" ? (
-          <StatementPdfPanel statement={s} reviewer={reviewer} />
         ) : (
-          <StatementBreakdown
-            statement={s}
-            figures={
-              <>
-                <StatementInputsCard statement={s} />
-                <StatementAdjustmentsCard statement={s} />
-              </>
-            }
-          />
+          <div className="space-y-6">
+            <StatementAnswerCard statement={s} reviewer={reviewer} />
+            {view.tab === "activity" ? (
+              <ActivityPanel userId={s.userId} month={s.month} />
+            ) : view.tab === "pdf" ? (
+              <StatementPdfPanel statement={s} reviewer={reviewer} />
+            ) : (
+              <StatementBreakdown
+                statement={s}
+                chargebacksEditable={
+                  issues && isEditableStatementStatus(s.status)
+                }
+                figures={
+                  <>
+                    <StatementInputsCard statement={s} />
+                    <StatementAdjustmentsCard statement={s} />
+                  </>
+                }
+              />
+            )}
+          </div>
         )}
       </main>
+
+      {s && (
+        // Mounted whatever the status: an answer changes it before the
+        // dialog has closed.
+        <>
+          <AcceptStatementDialog
+            statement={s}
+            open={answering === "accept"}
+            onOpenChange={(next) => !next && setAnswering(null)}
+          />
+          <DisputeStatementDialog
+            statement={s}
+            open={answering === "dispute"}
+            onOpenChange={(next) => !next && setAnswering(null)}
+          />
+        </>
+      )}
 
       {s && (
         <AlertDialog

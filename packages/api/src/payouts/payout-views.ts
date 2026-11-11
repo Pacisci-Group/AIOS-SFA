@@ -7,15 +7,19 @@ import {
   type PayStatementSummary,
   type PayStatementPdfView,
   type PayStatementView,
+  type StatementAcceptanceView,
   type StatementAdjustmentView,
   type StatementHistoryEntryView,
+  type StatementRejectionView,
 } from '@sfa/shared';
 import type { Types } from 'mongoose';
 import type { PayoutRun } from './schemas/payout-run.schema';
 import type {
   PayStatement,
+  PayStatementAcceptance,
   PayStatementHistoryEntry,
   PayStatementPdf,
+  PayStatementRejection,
 } from './schemas/pay-statement.schema';
 
 /**
@@ -152,6 +156,28 @@ function pdfView(
   };
 }
 
+function rejectionView(
+  rejection: PayStatementRejection | null | undefined,
+): StatementRejectionView | null {
+  if (!rejection) return null;
+  return {
+    rejectedAt: rejection.rejectedAt.toISOString(),
+    notes: rejection.notes,
+  };
+}
+
+function acceptanceView(
+  acceptance: PayStatementAcceptance | null | undefined,
+): StatementAcceptanceView | null {
+  if (!acceptance) return null;
+  return {
+    acceptedAt: acceptance.acceptedAt.toISOString(),
+    typedName: acceptance.typedName,
+    accountEmail: acceptance.accountEmail,
+    userAgent: acceptance.userAgent ?? '',
+  };
+}
+
 function senderView(
   id: Types.ObjectId | null | undefined,
   name: string | null | undefined,
@@ -169,6 +195,7 @@ function historyEntryView(
     sentAt: entry.sentAt ? entry.sentAt.toISOString() : null,
     sentBy: senderView(entry.sentBy, entry.sentByName),
     at: entry.at.toISOString(),
+    rejection: rejectionView(entry.rejection),
   };
 }
 
@@ -218,5 +245,9 @@ export function statementView(doc: LeanStatement): PayStatementView {
     pdf: pdfView(doc.pdf),
     sentBy: senderView(doc.sentBy, doc.sentByName),
     history: (doc.history ?? []).map(historyEntryView),
+    // Absent on statements written before PAC-182.
+    acceptance: acceptanceView(doc.acceptance),
+    rejection: rejectionView(doc.rejection),
+    signedPdf: pdfView(doc.signedPdf),
   };
 }

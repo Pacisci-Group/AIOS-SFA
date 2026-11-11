@@ -1,9 +1,15 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   AgencyPermission,
   DataScope,
   modulePermission,
   ModuleKey,
+  PAYOUT_STATEMENT_NOT_SENT,
+  PAYOUT_STATEMENT_NOT_YOURS,
   PAYOUT_STATEMENT_OWN_STATEMENT,
   type AccessContext,
 } from '@sfa/shared';
@@ -70,6 +76,11 @@ export function statementVisibility(
  * One statement the caller may see, or a 404 — never a 403, so whether a
  * statement exists is not given away. Every statement route starts here.
  *
+ * A reviewer sees what their scope reaches **and their own sent statements
+ * wherever they are** (PAC-182): a statement keeps the branch it was
+ * computed in, so a branch manager who moved branch would otherwise list
+ * their own in My Pay and get a 404 opening it — and could never answer it.
+ *
  * `projection` reads only the fields a route needs (an inclusion
  * projection): the result then carries those fields and `_id` alone, so the
  * caller must list every field it reads.
@@ -81,16 +92,61 @@ export async function loadVisibleStatement(
   id: string,
   projection?: Partial<Record<keyof PayStatement, 1>>,
 ): Promise<PayStatement & { _id: Types.ObjectId }> {
-  const query = model.findOne({
-    ...statementVisibility(access, branchId),
-    _id: new Types.ObjectId(id),
-  });
+  const visible = readsOthersPay(access)
+    ? { $or: [statementVisibility(access, branchId), ownStatements(access)] }
+    : statementVisibility(access, branchId);
+  const query = model.findOne({ ...visible, _id: new Types.ObjectId(id) });
   if (projection) query.select(projection);
   const doc = await query.lean<
     (PayStatement & { _id: Types.ObjectId }) | null
   >();
   if (!doc) throw new NotFoundException('Statement not found');
   return doc;
+}
+
+/**
+ * The caller's own **sent** statement, for the employee's answer — accept
+ * or dispute (PAC-182). Only the person it is for answers it: a reviewer who
+ * can see someone else's statement gets a 403 `PAYOUT_STATEMENT_NOT_YOURS`
+ * (`agency:payouts:admin` too — an answer is a signature); one they cannot
+ * see is a 404, as everywhere. Their own statement in any other status is a
+ * 409 `PAYOUT_STATEMENT_NOT_SENT`.
+ */
+export async function loadOwnSentStatement(
+  model: Model<PayStatement>,
+  access: AccessContext,
+  branchId: string | null,
+  id: string,
+): Promise<PayStatement & { _id: Types.ObjectId }> {
+  const doc = await model
+    .findOne({ ...ownStatements(access), _id: new Types.ObjectId(id) })
+    .lean<(PayStatement & { _id: Types.ObjectId }) | null>();
+  if (!doc) {
+    // Not among their own non-drafts: someone else's they may see (403), a
+    // draft of their own a reviewer can see (409), or nothing (404).
+    const seen = await loadVisibleStatement(model, access, branchId, id, {
+      userId: 1,
+    });
+    if (String(seen.userId) === access.userId) throw notSentToAnswer();
+    throw new ForbiddenException({
+      code: PAYOUT_STATEMENT_NOT_YOURS,
+      message: 'Only the person a statement is for can accept or dispute it.',
+    });
+  }
+  if (doc.status !== 'sent') throw notSentToAnswer(doc.status);
+  return doc;
+}
+
+function notSentToAnswer(status?: PayStatement['status']): ConflictException {
+  return new ConflictException({
+    code: PAYOUT_STATEMENT_NOT_SENT,
+    message:
+      status === 'accepted'
+        ? 'You have already accepted this statement.'
+        : status === 'rejected'
+          ? 'You have disputed this statement. It will be sent to you again once it is corrected.'
+          : 'This statement has not been sent to you yet.',
+  });
 }
 
 /**

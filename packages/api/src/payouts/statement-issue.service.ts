@@ -13,11 +13,13 @@ import {
   PAYOUT_STATEMENT_NOT_EDITABLE,
   PAYOUT_STATEMENT_NOT_SENT,
   statementPdfFilename,
+  statementSignedPdfFilename,
   type AccessContext,
   type PayStatementPdfLinkResponse,
   type PayStatementStatus,
   type PayStatementView,
   type SendAllDraftsResponse,
+  type StatementPdfVariant,
 } from '@sfa/shared';
 import type { Response } from 'express';
 import { Types, type FilterQuery } from 'mongoose';
@@ -56,7 +58,7 @@ import {
 /** The `buildObjectKey` purpose of issued statements. */
 export const PAY_STATEMENTS_PURPOSE = 'pay-statements';
 
-const PDF_TYPE = 'application/pdf';
+export const PDF_TYPE = 'application/pdf';
 
 /** A logo larger than this is not embedded (the name stands in). */
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -81,7 +83,15 @@ interface IssueContext {
   agencyId: string;
   agencyName: string;
   logo: StatementPdfLogo | null;
+  /** The key of `logo`, stored on the file; `null` when none is embedded. */
+  logoKey: string | null;
   senderName: string | null;
+}
+
+/** What an issued file's header band printed (`PayStatementPdf`). */
+export interface PrintedBranding {
+  agencyName?: string | null;
+  logoKey?: string | null;
 }
 
 type SendOutcome =
@@ -284,7 +294,9 @@ export class StatementIssueService {
     if (!isEditableStatementStatus(doc.status)) throw notEditable();
     const now = new Date();
     // A disputed statement goes out as the next version; a draft is already
-    // the version it will be issued as.
+    // the version it will be issued as. Its dispute moves onto the history
+    // row of the version it supersedes (PAC-182) — the next version prints
+    // its notes, read from there once it is sent.
     const supersedes = doc.status === 'rejected';
     const version = supersedes ? doc.version + 1 : doc.version;
     const statementId = String(doc._id);
@@ -309,6 +321,9 @@ export class StatementIssueService {
       sha256: sha256Hex(rendered.buffer),
       size: stored.size,
       renderedAt: now,
+      // What its header band printed, for the signed copy (PAC-182).
+      agencyName: context.agencyName,
+      logoKey: context.logoKey,
     };
     const sentBy = new Types.ObjectId(access.userId);
 
@@ -333,6 +348,7 @@ export class StatementIssueService {
             sentAt: now,
             sentBy,
             sentByName: context.senderName,
+            rejection: null,
           },
           ...(supersedes
             ? {
@@ -345,6 +361,7 @@ export class StatementIssueService {
                     sentBy: doc.sentBy ?? null,
                     sentByName: doc.sentByName ?? null,
                     at: now,
+                    rejection: doc.rejection ?? null,
                   },
                 },
               }
@@ -500,14 +517,17 @@ export class StatementIssueService {
 
   /**
    * A short-lived inline link to an issued PDF — the current version's, or
-   * an earlier one's with `version`. Minted for this read and never stored.
-   * 404 when that version has no file (a draft, or a version never issued).
+   * an earlier one's with `version`. `variant: 'signed'` (PAC-182) links the
+   * signed copy instead, which only an accepted statement's current version
+   * has. Minted for this read and never stored. 404 when that version has no
+   * such file (a draft, a version never issued, or one never signed).
    */
   async pdfLink(
     access: AccessContext,
     branchId: string | null,
     id: string,
     version?: number,
+    variant: StatementPdfVariant = 'issued',
   ): Promise<PayStatementPdfLinkResponse> {
     const doc = await loadVisibleStatement(
       this.models.payStatement,
@@ -518,22 +538,31 @@ export class StatementIssueService {
         month: 1,
         version: 1,
         pdf: 1,
+        signedPdf: 1,
         // Earlier versions' files are only looked up when one is asked for.
         ...(version === undefined ? {} : { history: 1 as const }),
       },
     );
     const wanted = version ?? doc.version;
+    const signed = variant === 'signed';
     const pdf =
       wanted === doc.version
-        ? (doc.pdf ?? null)
-        : ((doc.history ?? []).find((entry) => entry.version === wanted)?.pdf ??
-          null);
+        ? ((signed ? doc.signedPdf : doc.pdf) ?? null)
+        : signed
+          ? // Accepted is final: no earlier version was ever signed.
+            null
+          : ((doc.history ?? []).find((entry) => entry.version === wanted)
+              ?.pdf ?? null);
     if (!pdf) {
       throw new NotFoundException(
-        'No PDF has been issued for this version of the statement.',
+        signed
+          ? 'This version of the statement has not been signed.'
+          : 'No PDF has been issued for this version of the statement.',
       );
     }
-    const filename = statementPdfFilename(doc.month, wanted);
+    const filename = signed
+      ? statementSignedPdfFilename(doc.month, wanted)
+      : statementPdfFilename(doc.month, wanted);
     const url = await this.storage.createPresignedDownload(pdf.key, {
       disposition: 'inline',
       filename,
@@ -584,6 +613,32 @@ export class StatementIssueService {
 
   // --- Context -------------------------------------------------------------
 
+  /**
+   * What a statement of `agencyId` is rendered with besides itself — the
+   * branded name and logo — for `issue`. The signed copy (PAC-182) passes
+   * what the issued file `printed`, so it matches that file whatever the
+   * branding is today; a file issued before that was stored gets today's.
+   */
+  async renderContext(
+    agencyId: string,
+    issue: StatementPdfIssue,
+    printed?: PrintedBranding | null,
+  ): Promise<StatementPdfContext & { logoKey: string | null }> {
+    if (printed?.agencyName) {
+      const logo = printed.logoKey
+        ? await this.cachedLogo(agencyId, printed.logoKey)
+        : null;
+      return {
+        agencyName: printed.agencyName,
+        logo,
+        logoKey: logo ? (printed.logoKey ?? null) : null,
+        issue,
+      };
+    }
+    const today = await this.issueContext(agencyId, null);
+    return { ...pdfContext(today, issue), logoKey: today.logoKey };
+  }
+
   private async assertRunIdle(
     agencyId: string,
     runId: Types.ObjectId,
@@ -613,10 +668,12 @@ export class StatementIssueService {
         ? displayNamesFor(this.models.user, [senderId])
         : Promise.resolve(new Map<string, string>()),
     ]);
+    const logo = await this.cachedLogo(agencyId, logoKey);
     return {
       agencyId,
       agencyName: brand.name,
-      logo: await this.cachedLogo(agencyId, logoKey),
+      logo,
+      logoKey: logo ? logoKey : null,
       senderName: senderId ? (names.get(senderId) ?? null) : null,
     };
   }

@@ -1,7 +1,7 @@
 meta {
   name: Get Pay Statement PDF Link
   type: http
-  seq: 59
+  seq: 65
 }
 
 get {
@@ -38,12 +38,17 @@ docs {
   reaches with `payouts:write`. Anything else is a `404`.
 
   **Query** — `version` (optional): an earlier issued version's file, from
-  the statement's `history`; omitted, the current version's.
+  the statement's `history`; omitted, the current version's. `variant`
+  (optional, PAC-182): `issued` (the default) or `signed` — the signed copy
+  stored when the employee accepted the statement, which only an accepted
+  statement's current version has (filename
+  `commission-statement-<month>-v<n>-signed.pdf`). Anything else is a `400`.
 
   **Response `200`** — `{ url, filename, expiresIn }`: a presigned `inline`
   link (`application/pdf`) minted for this read, valid `expiresIn` seconds.
   It is never stored — ask again when it is needed.
 
-  **Errors** — `404` when the statement is not yours to see, or that version
-  has no file (a draft; a version never issued).
+  **Errors** — `400` an unknown `variant`; `404` when the statement is not
+  yours to see, or that version has no such file (a draft; a version never
+  issued; `signed` on a statement not accepted).
 }
