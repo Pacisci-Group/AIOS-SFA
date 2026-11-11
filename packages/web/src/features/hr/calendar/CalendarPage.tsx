@@ -17,15 +17,17 @@ import {
 } from "@/lib/hr-calendar-api";
 import { CalendarToolbar } from "./CalendarToolbar";
 import { layerOf, type CalendarLayer } from "./calendar-display";
-import { EntryDialog } from "./EntryDialog";
+import { DaySheet } from "./DaySheet";
+import { EntrySheet } from "./EntrySheet";
 import { EventSheet } from "./EventSheet";
 import { HrCalendar, type CalendarRange } from "./HrCalendar";
 
 const URL_DEFAULTS = { branch: [] as string[], employee: [] as string[] };
 
-/** What is open on top of the calendar. */
+/** What is open on top of the calendar — one sheet at a time. */
 type Overlay =
   | { kind: "entry"; entry: HrCalendarEntry }
+  | { kind: "day"; date: string }
   | { kind: "request"; requestId: string }
   | { kind: "editRequest"; request: TimeOffRequestView }
   | { kind: "event"; eventId: string | null; range?: CalendarRange };
@@ -40,9 +42,10 @@ type Overlay =
  * response — not the permission list — whether to offer the filters and the
  * **Add event** button (`viewer.managesEvents`, i.e. `agency:hr:admin`).
  *
- * Time off you may open (your own, or as a reviewer) opens the same request
- * window the Time off page uses, on top of the calendar. Everything else
- * opens a small dialog saying what it is.
+ * Everything opens in the same right-hand sheet. Time off you may open
+ * (your own, or as a reviewer) opens the request window the Time off page
+ * uses; every other entry opens a sheet saying what it is. On a phone the
+ * month grid is a day picker, and a day opens a sheet listing it.
  *
  * The filters live in the query string, so a manager's "my branch" view
  * survives a reload and can be shared as a link.
@@ -52,7 +55,9 @@ export default function CalendarPage() {
   const today = agencyTodayYmd(user?.timeZone);
   // Decided once: switching the initial view under a resize would move the
   // reader off the month they were looking at.
-  const [compact] = useState(() => window.matchMedia("(max-width: 639px)").matches);
+  const [compact] = useState(
+    () => window.matchMedia("(max-width: 639px)").matches,
+  );
 
   const [range, setRange] = useState<CalendarRange | null>(null);
   const [hidden, setHidden] = useState<ReadonlySet<CalendarLayer>>(new Set());
@@ -83,9 +88,13 @@ export default function CalendarPage() {
   });
 
   const entries = useMemo(
-    () => (calendar.data?.entries ?? []).filter((entry) => !hidden.has(layerOf(entry))),
+    () =>
+      (calendar.data?.entries ?? []).filter(
+        (entry) => !hidden.has(layerOf(entry)),
+      ),
     [calendar.data, hidden],
   );
+  const holidayPolicies = calendar.data?.holidayPolicies ?? [];
   const managesEvents = calendar.data?.viewer.managesEvents ?? false;
 
   const editing = overlay?.kind === "event" ? overlay.eventId : null;
@@ -103,6 +112,15 @@ export default function CalendarPage() {
       return next;
     });
 
+  const openEntry = (entry: HrCalendarEntry) =>
+    setOverlay(
+      entry.kind === "leave" && entry.detail
+        ? { kind: "request", requestId: entry.detail.requestId }
+        : { kind: "entry", entry },
+    );
+  const openEventForm = (eventId: string | null, picked?: CalendarRange) =>
+    setOverlay({ kind: "event", eventId, range: picked });
+
   return (
     <SettingsPage
       title="Calendar"
@@ -111,7 +129,8 @@ export default function CalendarPage() {
       backTo="/"
       width="wide"
     >
-      <div className="space-y-4">
+      {/* Breathing room: the grid sits inside the page, not on its edges. */}
+      <div className="mx-auto max-w-7xl space-y-4 pb-6 sm:px-2">
         <CalendarToolbar
           hidden={hidden}
           onToggle={toggle}
@@ -124,7 +143,9 @@ export default function CalendarPage() {
         {calendar.isError && (
           <Alert variant="destructive">
             <AlertCircle />
-            <AlertDescription>Could not load the calendar. Try again.</AlertDescription>
+            <AlertDescription>
+              Could not load the calendar. Try again.
+            </AlertDescription>
           </Alert>
         )}
 
@@ -134,31 +155,43 @@ export default function CalendarPage() {
           compact={compact}
           onRangeChange={(next) =>
             setRange((current) =>
-              current?.from === next.from && current.to === next.to ? current : next,
+              current?.from === next.from && current.to === next.to
+                ? current
+                : next,
             )
           }
-          onEntryClick={(entry) =>
-            setOverlay(
-              entry.kind === "leave" && entry.detail
-                ? { kind: "request", requestId: entry.detail.requestId }
-                : { kind: "entry", entry },
-            )
+          onEntryClick={openEntry}
+          onDayPick={
+            compact ? (date) => setOverlay({ kind: "day", date }) : undefined
           }
           onAdd={
-            managesEvents
-              ? (picked) => setOverlay({ kind: "event", eventId: null, range: picked })
-              : undefined
+            managesEvents ? (picked) => openEventForm(null, picked) : undefined
           }
         />
       </div>
 
+      {overlay?.kind === "day" && (
+        <DaySheet
+          date={overlay.date}
+          entries={entries}
+          onClose={() => setOverlay(null)}
+          onEntryClick={openEntry}
+          onAdd={
+            managesEvents
+              ? () =>
+                  openEventForm(null, { from: overlay.date, to: overlay.date })
+              : undefined
+          }
+        />
+      )}
       {overlay?.kind === "entry" && (
-        <EntryDialog
+        <EntrySheet
           entry={overlay.entry}
+          holidayPolicies={holidayPolicies}
           onClose={() => setOverlay(null)}
           onEditEvent={
             managesEvents
-              ? (eventId) => setOverlay({ kind: "event", eventId })
+              ? (eventId: string) => openEventForm(eventId)
               : undefined
           }
         />
@@ -177,18 +210,21 @@ export default function CalendarPage() {
           mode="self"
           request={overlay.request}
           onClose={() => setOverlay(null)}
-          onSaved={(saved) => setOverlay({ kind: "request", requestId: saved.id })}
+          onSaved={(saved) =>
+            setOverlay({ kind: "request", requestId: saved.id })
+          }
         />
       )}
-      {overlay?.kind === "event" && (overlay.eventId === null || event.data) && (
-        <EventSheet
-          // Remounted per event: the audience lists are array fields.
-          key={overlay.eventId ?? "new"}
-          event={overlay.eventId === null ? null : (event.data ?? null)}
-          range={overlay.range}
-          onClose={() => setOverlay(null)}
-        />
-      )}
+      {overlay?.kind === "event" &&
+        (overlay.eventId === null || event.data) && (
+          <EventSheet
+            // Remounted per event: the audience lists are array fields.
+            key={overlay.eventId ?? "new"}
+            event={overlay.eventId === null ? null : (event.data ?? null)}
+            range={overlay.range}
+            onClose={() => setOverlay(null)}
+          />
+        )}
     </SettingsPage>
   );
 }

@@ -16,6 +16,7 @@ import {
   type HrCalendarEntry,
   type HrCalendarEventEntry,
   type HrCalendarFilters,
+  type HrCalendarHolidayPolicy,
   type HrCalendarLeaveEntry,
   type HrCalendarResponse,
   type TimeOffDayMode,
@@ -148,7 +149,12 @@ export class HrCalendarService {
         (person.homeBranchId !== null &&
           query.branchIds.includes(person.homeBranchId)));
 
-    const [leave, holidays, dates, eventEntries] = await Promise.all([
+    const [
+      leave,
+      { entries: holidays, policies: holidayPolicies },
+      dates,
+      eventEntries,
+    ] = await Promise.all([
       this.leave(
         access,
         agencyId,
@@ -162,6 +168,7 @@ export class HrCalendarService {
         agencyId,
         access.userId,
         this.inView(access, people, teamFilter !== null).filter(inFilter),
+        people,
         from,
         to,
       ),
@@ -185,6 +192,7 @@ export class HrCalendarService {
       to,
       viewer: { seesTeam: teamFilter !== null, seesPending, managesEvents },
       entries,
+      holidayPolicies,
     };
   }
 
@@ -426,10 +434,14 @@ export class HrCalendarService {
     agencyId: string,
     viewerId: string,
     inView: readonly Person[],
+    people: Map<string, Person>,
     from: string,
     to: string,
-  ): Promise<HrCalendarEntry[]> {
-    if (inView.length === 0) return [];
+  ): Promise<{
+    entries: HrCalendarEntry[];
+    policies: HrCalendarHolidayPolicy[];
+  }> {
+    if (inView.length === 0) return { entries: [], policies: [] };
     const policies = await this.holidayPolicies
       .find({
         agencyId,
@@ -441,6 +453,7 @@ export class HrCalendarService {
       .select('name holidays customHolidays memberIds')
       .lean<
         {
+          _id: Types.ObjectId;
           name: string;
           holidays?: HolidayKey[];
           customHolidays?: CustomHoliday[];
@@ -462,11 +475,35 @@ export class HrCalendarService {
         date: row.date,
         name: row.name,
         observedFor: row.observedFor,
-        policyName: policy.name,
+        policy: { id: policy._id.toString(), name: policy.name },
         mine,
       }));
     });
-    return mergeHolidays(rows);
+    const entries = mergeHolidays(rows);
+    // The people of each policy an entry names — by name, not by scope:
+    // who shares your holidays is not leave, and the birthday layer already
+    // puts every colleague's name on this page.
+    const named = new Set(
+      entries.flatMap((entry) =>
+        entry.kind === 'holiday'
+          ? entry.policies.map((policy) => policy.id)
+          : [],
+      ),
+    );
+    const withPeople: HrCalendarHolidayPolicy[] = policies
+      .filter((policy) => named.has(policy._id.toString()))
+      .map((policy) => ({
+        id: policy._id.toString(),
+        name: policy.name,
+        members: (policy.memberIds ?? [])
+          .flatMap((id) => {
+            const person = people.get(id.toString());
+            return person ? [{ id: person.id, name: person.name }] : [];
+          })
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { entries, policies: withPeople };
   }
 
   // ── Events ─────────────────────────────────────────────────────────────

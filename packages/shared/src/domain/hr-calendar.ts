@@ -12,9 +12,9 @@
  * a colleague's leave arrives with `detail: null`, a birthday never carries
  * a year.
  */
-import type { AgencyEventEffect } from './agency-event';
-import { anniversaryMonthDay } from './time-off-accrual';
-import { addIsoDays } from './us-holidays';
+import type { AgencyEventEffect } from "./agency-event";
+import { anniversaryMonthDay } from "./time-off-accrual";
+import { addIsoDays } from "./us-holidays";
 
 type IsoDate = string;
 
@@ -22,11 +22,11 @@ type IsoDate = string;
 export const HR_CALENDAR_MAX_RANGE_DAYS = 92;
 
 export const HR_CALENDAR_ENTRY_KINDS = [
-  'holiday',
-  'event',
-  'leave',
-  'birthday',
-  'anniversary',
+  "holiday",
+  "event",
+  "leave",
+  "birthday",
+  "anniversary",
 ] as const;
 export type HrCalendarEntryKind = (typeof HR_CALENDAR_ENTRY_KINDS)[number];
 
@@ -42,19 +42,30 @@ interface EntryBase {
   lastDay: IsoDate;
 }
 
+/** A Holiday policy named on an entry; its people are in `HrCalendarResponse.holidayPolicies`. */
+export interface HrCalendarPolicyRef {
+  id: string;
+  name: string;
+}
+
 export interface HrCalendarHolidayEntry extends EntryBase {
-  kind: 'holiday';
+  kind: "holiday";
   name: string;
   /** Set when the holiday itself falls on another day (a weekend). */
   observedFor: IsoDate | null;
   /** The viewer's own Holiday policy closes these days. */
   mine: boolean;
-  /** The Holiday policies that close them, by name. */
-  policies: string[];
+  /** The Holiday policies that close them, sorted by name. */
+  policies: HrCalendarPolicyRef[];
+}
+
+/** A Holiday policy in view, with the people it holds — the holiday sheet's list. */
+export interface HrCalendarHolidayPolicy extends HrCalendarPolicyRef {
+  members: HrCalendarPersonRef[];
 }
 
 export interface HrCalendarEventEntry extends EntryBase {
-  kind: 'event';
+  kind: "event";
   eventId: string;
   name: string;
   description: string | null;
@@ -70,7 +81,7 @@ export interface HrCalendarEventEntry extends EntryBase {
 export interface LeaveEventConflict {
   eventId: string;
   name: string;
-  effect: Exclude<AgencyEventEffect, 'none'>;
+  effect: Exclude<AgencyEventEffect, "none">;
   /** The days the request takes hours on that the event blocks or closes. */
   dates: IsoDate[];
 }
@@ -84,11 +95,11 @@ export interface HrCalendarLeaveDetail {
 }
 
 export interface HrCalendarLeaveEntry extends EntryBase {
-  kind: 'leave';
+  kind: "leave";
   person: HrCalendarPersonRef;
   mine: boolean;
   /** `pending` = Submitted or Changes Requested. */
-  status: 'approved' | 'pending';
+  status: "approved" | "pending";
   /** Some day of it is less than the full scheduled day. */
   partial: boolean;
   /**
@@ -100,12 +111,12 @@ export interface HrCalendarLeaveEntry extends EntryBase {
 }
 
 export interface HrCalendarBirthdayEntry extends EntryBase {
-  kind: 'birthday';
+  kind: "birthday";
   person: HrCalendarPersonRef;
 }
 
 export interface HrCalendarAnniversaryEntry extends EntryBase {
-  kind: 'anniversary';
+  kind: "anniversary";
   person: HrCalendarPersonRef;
   /** Full years of service on the day; one or more. */
   years: number;
@@ -133,6 +144,8 @@ export interface HrCalendarResponse {
   to: IsoDate;
   viewer: HrCalendarViewer;
   entries: HrCalendarEntry[];
+  /** Every Holiday policy an entry names, once, with its people. */
+  holidayPolicies: HrCalendarHolidayPolicy[];
 }
 
 /** `GET /hr/calendar/filters` — both empty for someone who sees no team. */
@@ -167,9 +180,13 @@ export function yearlyOccurrences(
 ): { date: IsoDate; years: number }[] {
   const origin = Number(date.slice(0, 4));
   const out: { date: IsoDate; years: number }[] = [];
-  for (let year = Number(from.slice(0, 4)); year <= Number(to.slice(0, 4)); year += 1) {
+  for (
+    let year = Number(from.slice(0, 4));
+    year <= Number(to.slice(0, 4));
+    year += 1
+  ) {
     if (year < origin) continue;
-    const day = `${String(year).padStart(4, '0')}-${anniversaryMonthDay(date, year)}`;
+    const day = `${String(year).padStart(4, "0")}-${anniversaryMonthDay(date, year)}`;
     if (day >= from && day <= to) out.push({ date: day, years: year - origin });
   }
   return out;
@@ -180,7 +197,7 @@ export interface HolidayRow {
   date: IsoDate;
   name: string;
   observedFor: IsoDate | null;
-  policyName: string;
+  policy: HrCalendarPolicyRef;
   /** The viewer is in this policy. */
   mine: boolean;
 }
@@ -191,17 +208,25 @@ export interface HolidayRow {
  * entry naming both; a custom "Winter closure" of five consecutive days is
  * one five-day entry, not five. Sorted by first day, then name.
  */
-export function mergeHolidays(rows: readonly HolidayRow[]): HrCalendarHolidayEntry[] {
+export function mergeHolidays(
+  rows: readonly HolidayRow[],
+): HrCalendarHolidayEntry[] {
   const byDay = new Map<
     string,
-    { date: IsoDate; name: string; observedFor: IsoDate | null; mine: boolean; policies: Set<string> }
+    {
+      date: IsoDate;
+      name: string;
+      observedFor: IsoDate | null;
+      mine: boolean;
+      policies: Map<string, HrCalendarPolicyRef>;
+    }
   >();
   for (const row of rows) {
     const key = `${row.date}|${row.name}`;
     const held = byDay.get(key);
     if (held) {
       held.mine = held.mine || row.mine;
-      held.policies.add(row.policyName);
+      held.policies.set(row.policy.id, row.policy);
       held.observedFor = held.observedFor ?? row.observedFor;
     } else {
       byDay.set(key, {
@@ -209,7 +234,7 @@ export function mergeHolidays(rows: readonly HolidayRow[]): HrCalendarHolidayEnt
         name: row.name,
         observedFor: row.observedFor,
         mine: row.mine,
-        policies: new Set([row.policyName]),
+        policies: new Map([[row.policy.id, row.policy]]),
       });
     }
   }
@@ -218,11 +243,18 @@ export function mergeHolidays(rows: readonly HolidayRow[]): HrCalendarHolidayEnt
   );
 
   const entries: HrCalendarHolidayEntry[] = [];
-  let open: (HrCalendarHolidayEntry & { held: Set<string> }) | null = null;
+  let open:
+    | (HrCalendarHolidayEntry & { held: Map<string, HrCalendarPolicyRef> })
+    | null = null;
   const close = () => {
     if (!open) return;
     const { held, ...entry } = open;
-    entries.push({ ...entry, policies: [...held].sort() });
+    entries.push({
+      ...entry,
+      policies: [...held.values()].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      ),
+    });
     open = null;
   };
   for (const day of days) {
@@ -237,25 +269,26 @@ export function mergeHolidays(rows: readonly HolidayRow[]): HrCalendarHolidayEnt
     if (continues && open) {
       open.lastDay = day.date;
       open.mine = open.mine || day.mine;
-      for (const policy of day.policies) open.held.add(policy);
+      for (const [id, policy] of day.policies) open.held.set(id, policy);
       continue;
     }
     close();
     open = {
       id: `holiday:${day.date}:${day.name}`,
-      kind: 'holiday',
+      kind: "holiday",
       firstDay: day.date,
       lastDay: day.date,
       name: day.name,
       observedFor: day.observedFor,
       mine: day.mine,
       policies: [],
-      held: new Set(day.policies),
+      held: new Map(day.policies),
     };
   }
   close();
   return entries.sort(
-    (a, b) => a.firstDay.localeCompare(b.firstDay) || a.name.localeCompare(b.name),
+    (a, b) =>
+      a.firstDay.localeCompare(b.firstDay) || a.name.localeCompare(b.name),
   );
 }
 
@@ -281,10 +314,20 @@ export function leaveEventConflicts(
   const charged = days.filter((day) => day.hours > 0).map((day) => day.date);
   const out: LeaveEventConflict[] = [];
   for (const event of events) {
-    if (event.effect === 'none') continue;
-    const dates = charged.filter((date) => date >= event.firstDay && date <= event.lastDay);
+    if (event.effect === "none") continue;
+    const dates = charged.filter(
+      (date) => date >= event.firstDay && date <= event.lastDay,
+    );
     if (dates.length === 0) continue;
-    out.push({ eventId: event.id, name: event.name, effect: event.effect, dates });
+    out.push({
+      eventId: event.id,
+      name: event.name,
+      effect: event.effect,
+      dates,
+    });
   }
-  return out.sort((a, b) => a.dates[0].localeCompare(b.dates[0]) || a.name.localeCompare(b.name));
+  return out.sort(
+    (a, b) =>
+      a.dates[0].localeCompare(b.dates[0]) || a.name.localeCompare(b.name),
+  );
 }

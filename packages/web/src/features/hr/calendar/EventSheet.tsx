@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-form";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -82,7 +87,9 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
   const save = useMutation({
     mutationFn: (values: EventFormValues) => {
       const input = toEventInput(values);
-      return event ? updateAgencyEvent(event.id, input) : createAgencyEvent(input);
+      return event
+        ? updateAgencyEvent(event.id, input)
+        : createAgencyEvent(input);
     },
     onSuccess: async () => {
       await refresh();
@@ -90,7 +97,11 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
       onClose();
     },
     onError: (failure) =>
-      setError(failure instanceof ApiError ? failure.message : "Could not save. Try again."),
+      setError(
+        failure instanceof ApiError
+          ? failure.message
+          : "Could not save. Try again.",
+      ),
   });
 
   const remove = useMutation({
@@ -102,7 +113,11 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
     },
     onError: (failure) => {
       setRemoving(false);
-      setError(failure instanceof ApiError ? failure.message : "Could not remove. Try again.");
+      setError(
+        failure instanceof ApiError
+          ? failure.message
+          : "Could not remove. Try again.",
+      );
     },
   });
 
@@ -134,7 +149,9 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
         >
           <div className="flex-1 space-y-5 px-6 py-5">
             <form.AppField name="name">
-              {(f) => <f.TextField label="Name" placeholder="Christmas party" />}
+              {(f) => (
+                <f.TextField label="Name" placeholder="Christmas party" />
+              )}
             </form.AppField>
 
             <FormGrid>
@@ -156,7 +173,11 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
               </form.AppField>
               <form.AppField name="lastDay">
                 {(f) => (
-                  <f.TextField label="Last day" type="date" min={values.firstDay || undefined} />
+                  <f.TextField
+                    label="Last day"
+                    type="date"
+                    min={values.firstDay || undefined}
+                  />
                 )}
               </form.AppField>
             </FormGrid>
@@ -180,11 +201,13 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
               {(f) => (
                 <f.RadioGroupField
                   label="Time off on these days"
-                  options={(["none", "blackout", "day_off"] as const).map((effect) => ({
-                    value: effect,
-                    label: EVENT_EFFECT_META[effect].label,
-                    caption: EVENT_EFFECT_META[effect].hint,
-                  }))}
+                  options={(["none", "blackout", "day_off"] as const).map(
+                    (effect) => ({
+                      value: effect,
+                      label: EVENT_EFFECT_META[effect].label,
+                      caption: EVENT_EFFECT_META[effect].hint,
+                    }),
+                  )}
                 />
               )}
             </form.AppField>
@@ -194,13 +217,21 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
                 <f.RadioGroupField
                   label="Who it is for"
                   options={[
-                    { value: "agency", label: "Everyone", caption: "The whole agency." },
+                    {
+                      value: "agency",
+                      label: "Everyone",
+                      caption: "The whole agency.",
+                    },
                     {
                       value: "branches",
                       label: "Branches",
                       caption: "Everyone whose home branch is one you choose.",
                     },
-                    { value: "people", label: "People", caption: "Only the people you choose." },
+                    {
+                      value: "people",
+                      label: "People",
+                      caption: "Only the people you choose.",
+                    },
                   ]}
                 />
               )}
@@ -237,7 +268,9 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
             )}
 
             <form.AppField name="description">
-              {(f) => <f.TextareaField label="Description" placeholder="Optional" />}
+              {(f) => (
+                <f.TextareaField label="Description" placeholder="Optional" />
+              )}
             </form.AppField>
 
             <EventImpact impact={impact} effect={values.effect} />
@@ -266,7 +299,11 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
               Cancel
             </Button>
             <Button type="submit" variant="brand" disabled={save.isPending}>
-              {save.isPending ? "Saving…" : event ? "Save changes" : "Add event"}
+              {save.isPending
+                ? "Saving…"
+                : event
+                  ? "Save changes"
+                  : "Add event"}
             </Button>
           </div>
         </form>
@@ -277,8 +314,8 @@ export function EventSheet({ event, range, onClose }: EventSheetProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this event?</AlertDialogTitle>
             <AlertDialogDescription>
-              It comes off the calendar and stops affecting new time off requests.
-              Requests already sent keep the hours they have now.
+              It comes off the calendar and stops affecting new time off
+              requests. Requests already sent keep the hours they have now.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -349,7 +386,10 @@ function EventImpact({
         {impact.requests.length > 0 && (
           <ul className="mt-2 space-y-1">
             {impact.requests.map((row) => (
-              <li key={`${row.person.id}-${row.firstDay}`} className="text-sm text-foreground">
+              <li
+                key={`${row.person.id}-${row.firstDay}`}
+                className="text-sm text-foreground"
+              >
                 {row.requestId ? (
                   <Link
                     className="font-medium underline underline-offset-2"

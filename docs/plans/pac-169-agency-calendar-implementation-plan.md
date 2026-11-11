@@ -257,3 +257,11 @@ Ten commits off `asad/pac-148-hr-demo-feedback`. Decisions 1–19 stand as writt
 
 **Open points taken as written:** decisions 6–18 and the three UI calls in §11 (flavour is now `breezy`).
 
+## Review round 1 (2026-11-11, Asad, after testing the PR)
+
+Three points, all built on the same branch:
+
+1. **Space around the calendar.** The grids now fit the screen (`max(34rem, 100dvh − 17rem)`) and scroll inside; the page no longer scrolls by a few pixels. The list view keeps `height: auto` and scrolls with the page.
+2. **Everything opens in the side sheet.** `EntryDialog` is gone; `EntrySheet` opens every entry in the same right-hand sheet the request window uses. A holiday lists each Holiday policy that closes the day — several when several do — with the people in it (`GET /hr/calendar` now returns `holidayPolicies[]`, and an entry's `policies` carry ids). The policy name links to Settings → HR policies for an `agency:hr:admin` holder; everyone else reads it as text. People link to their profile.
+3. **Phone.** The toolbar is three rows (title + arrows, views + Today, a full-width Add event). List dates are one line ("Wed, Nov 11"), so the today pill no longer wraps. The month grid is a **day picker**: entries draw as colour bars with no words, and a tap on a day opens a `DaySheet` listing it (with "Add event on this day" for an admin); the week view is left out below `sm`.
+

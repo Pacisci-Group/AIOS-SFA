@@ -2,7 +2,11 @@ import type { HrCalendarFilters } from "@sfa/shared";
 import { MultiSelect } from "@/components/common/MultiSelect";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { CALENDAR_LAYERS, LAYER_META, type CalendarLayer } from "./calendar-display";
+import {
+  CALENDAR_LAYERS,
+  LAYER_META,
+  type CalendarLayer,
+} from "./calendar-display";
 
 interface CalendarToolbarProps {
   hidden: ReadonlySet<CalendarLayer>;
@@ -35,12 +39,18 @@ export function CalendarToolbar({
   const people = filters?.people ?? [];
   // Choosing branches first narrows the people offered to those branches.
   const offered = branchIds.length
-    ? people.filter((person) => person.branchId && branchIds.includes(person.branchId))
+    ? people.filter(
+        (person) => person.branchId && branchIds.includes(person.branchId),
+      )
     : people;
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-      <div role="group" aria-label="Show on the calendar" className="flex flex-wrap gap-2">
+      <div
+        role="group"
+        aria-label="Show on the calendar"
+        className="flex flex-wrap gap-2"
+      >
         {CALENDAR_LAYERS.map((layer) => {
           const { label, icon: Icon, color } = LAYER_META[layer];
           const shown = !hidden.has(layer);
@@ -52,12 +62,18 @@ export function CalendarToolbar({
               variant="outline"
               aria-pressed={shown}
               onClick={() => onToggle(layer)}
-              className={cn("gap-2", !shown && "text-muted-foreground opacity-60")}
+              className={cn(
+                "gap-2",
+                !shown && "text-muted-foreground opacity-60",
+              )}
             >
               <span
                 aria-hidden
                 className="size-2.5 rounded-full"
-                style={{ backgroundColor: shown ? color : "transparent", outline: `1px solid ${color}` }}
+                style={{
+                  backgroundColor: shown ? color : "transparent",
+                  outline: `1px solid ${color}`,
+                }}
               />
               <Icon aria-hidden />
               {label}
@@ -70,7 +86,10 @@ export function CalendarToolbar({
         <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
           {branches.length > 1 && (
             <MultiSelect
-              options={branches.map((branch) => ({ value: branch.id, label: branch.name }))}
+              options={branches.map((branch) => ({
+                value: branch.id,
+                label: branch.name,
+              }))}
               value={branchIds}
               onChange={(branch) => onFilter({ branch })}
               placeholder="All branches"
@@ -80,7 +99,10 @@ export function CalendarToolbar({
             />
           )}
           <MultiSelect
-            options={offered.map((person) => ({ value: person.id, label: person.name }))}
+            options={offered.map((person) => ({
+              value: person.id,
+              label: person.name,
+            }))}
             value={employeeIds}
             onChange={(employee) => onFilter({ employee })}
             placeholder="Everyone"

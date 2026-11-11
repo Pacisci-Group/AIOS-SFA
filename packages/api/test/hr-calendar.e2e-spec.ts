@@ -705,8 +705,17 @@ describe('HR calendar (e2e)', () => {
         firstDay: addDays(monday, 5),
         lastDay: addDays(monday, 6),
         mine: true,
-        policies: ['Calendar holidays'],
+        policies: [{ id: expect.any(String), name: 'Calendar holidays' }],
       });
+      // The policy's people ride along once, for the holiday sheet.
+      const asProducerResponse = await calendar(producerToken);
+      expect(asProducerResponse.holidayPolicies).toEqual([
+        {
+          id: founders!.policies[0].id,
+          name: 'Calendar holidays',
+          members: [{ id: producerId, name: expect.any(String) }],
+        },
+      ]);
       // Someone in no Holiday policy, who sees only themself, has no holidays.
       expect(
         (await calendar(outsiderToken)).entries.filter(

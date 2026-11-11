@@ -55,12 +55,15 @@ docs {
     holidays). They never widen what the caller may see.
 
   Returns `{ from, to, viewer: { seesTeam, seesPending, managesEvents },
-  entries[] }`. Every entry is whole days — `{ id, kind, firstDay, lastDay }`
-  — plus, by `kind`:
+  entries[], holidayPolicies[] }`. Every entry is whole days — `{ id, kind,
+  firstDay, lastDay }` — plus, by `kind`:
 
-  - `holiday` — `name`, `observedFor`, `mine`, `policies[]`. The closures of
-    the Holiday policies of the people in view (the caller alone without the
-    team calendar). One entry per name and run of days.
+  - `holiday` — `name`, `observedFor`, `mine`, `policies[]` (`{ id, name }`).
+    The closures of the Holiday policies of the people in view (the caller
+    alone without the team calendar). One entry per name and run of days.
+    `holidayPolicies[]` lists every policy an entry names, once, as
+    `{ id, name, members: [{ id, name }] }` — the holiday sheet's list of who
+    shares the day off.
   - `event` — `eventId`, `name`, `description`, `startTime`, `endTime`,
     `effect`, `audienceLabel`, `appliesToMe`. The events whose audience
     includes the caller; **all** of them for an `agency:hr:admin` holder.
