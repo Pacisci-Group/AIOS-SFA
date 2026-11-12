@@ -178,8 +178,8 @@ export class ReconciliationAssignmentsController {
    * `RECONCILIATION_OUTCOME_NOT_ALLOWED` (the row is not being recorded as a
    * chargeback); 403 `RECONCILIATION_OUTCOME_FORBIDDEN` without `leads:write`
    * + `deal_audits:write`; 404 unless the row is mine; 409 before the sale is
-   * booked, `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` when no policy on the
-   * sale is numbered as the Dash line, for a decided row, a replaced or
+   * booked (a sale with no policy numbered as the Dash line is held there,
+   * `RECONCILIATION_SALE_POLICY_UNMATCHED`), for a decided row, a replaced or
    * unfinished run, a policy already off the books without a chargeback, or a
    * concurrent change. A row already finished as a chargeback answers
    * unchanged.

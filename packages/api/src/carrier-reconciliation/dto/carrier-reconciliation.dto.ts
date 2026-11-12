@@ -107,7 +107,7 @@ export const reviewRowSchema = z
 export type ReviewRowDto = z.infer<typeof reviewRowSchema>;
 
 /**
- * Hand a row to a Producer or CSR (`userId`), or take it back (`null`).
+ * Hand a row to someone who can work leads (`userId`), or take it back (`null`).
  * Ids are lower-cased: rows store them as strings and compare them exactly.
  */
 export const assignRowSchema = z.object({

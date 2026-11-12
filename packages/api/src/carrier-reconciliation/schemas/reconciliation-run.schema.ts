@@ -14,9 +14,13 @@ import { ObjectIdType } from '../../common/mongo/object-id';
 
 export type ReconciliationRunDocument = HydratedDocument<ReconciliationRun>;
 
-/** The uploaded report. The key is a capability: never sent to a client. */
+/**
+ * The uploaded report. The key is a capability: never sent to a client.
+ * `null` on a failed run, whose upload is deleted — so the key never names an
+ * object that is gone, and the only run a key can name is one that kept it.
+ */
 export class ReconciliationRunFile {
-  storageKey: string;
+  storageKey: string | null;
   filename: string;
   size: number;
 }
@@ -85,6 +89,15 @@ export class ReconciliationRun {
   @Prop({ type: ObjectIdType, default: null })
   supersededByRunId: Types.ObjectId | null;
 
+  /**
+   * The report period this run is the current one for (`runPeriodKey`), and
+   * `null` otherwise — while it processes, once it fails, and once a re-upload
+   * replaces it. Uniquely indexed, so one period has at most one current run:
+   * two uploads of the same period finishing together cannot both win.
+   */
+  @Prop({ type: String, default: null })
+  currentKey: string | null;
+
   @Prop({ type: Date, default: null })
   startedAt: Date | null;
 
@@ -124,3 +137,21 @@ ReconciliationRunSchema.index({
   'window.to': 1,
   createdAt: -1,
 });
+/** The agency's current runs (`currentRunIds`): every assignee list asks. */
+ReconciliationRunSchema.index({ agencyId: 1, status: 1, supersededByRunId: 1 });
+/** One current run per report period. Partial: only the current one holds a key. */
+ReconciliationRunSchema.index(
+  { agencyId: 1, currentKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { currentKey: { $type: 'string' } },
+  },
+);
+
+/** The report period a run covers, as `currentKey` stores it. */
+export function runPeriodKey(
+  agentNumber: string | null | undefined,
+  window: ReportWindow,
+): string {
+  return `${agentNumber ?? ''}|${window.from}|${window.to}`;
+}

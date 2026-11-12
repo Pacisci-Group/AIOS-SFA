@@ -321,11 +321,17 @@ export function primaryReconciliationTab(
 }
 
 /**
- * Who a row can be assigned to: the agency's active **Producers and CSRs** —
- * users holding a role with one of these slugs (David, 27 Oct 2026). The
- * owner assigns; the assignee works the row from their own page.
+ * Who a row can be assigned to: the agency's active users who can work leads
+ * — effective permissions that include `leads:write` (12 Nov 2026), which the
+ * Producer and CSR templates carry. Decided by permission, never by role
+ * name, so a custom role that carries it qualifies and someone it was revoked
+ * from does not. The owner assigns; the assignee works the row from their own
+ * page.
  */
-export const RECONCILIATION_ASSIGNEE_ROLE_SLUGS = ['producer', 'csr'] as const;
+export const RECONCILIATION_ASSIGNEE_PERMISSION = modulePermission(
+  ModuleKey.Leads,
+  'write',
+);
 
 /**
  * The rows endpoint's `assignee` filter: a user id, `me`, or `unassigned`.
@@ -525,12 +531,18 @@ export const RECONCILIATION_OUTCOME_FORBIDDEN =
   'RECONCILIATION_OUTCOME_FORBIDDEN';
 export const RECONCILIATION_OUTCOME_LOCKED = 'RECONCILIATION_OUTCOME_LOCKED';
 /**
- * A Chargeback's sale links no policy numbered as the Dash line (PAC-173 PR 6),
- * so there is nothing it may cancel: the assignee corrects the number on the
- * sale, then Continues.
+ * Continue on a sale booked for the row whose policies hold none numbered as
+ * the Dash line: the sale is kept on the row, but it is not linked — and a
+ * Chargeback cancels nothing — until the number is corrected (PAC-173
+ * review).
  */
-export const RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED =
-  'RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED';
+export const RECONCILIATION_SALE_POLICY_UNMATCHED =
+  'RECONCILIATION_SALE_POLICY_UNMATCHED';
+/**
+ * A sale carrying a row id, on a lead other than the one the row's sale is
+ * under way on — an old tab, say. Refused before anything is booked.
+ */
+export const RECONCILIATION_SALE_WRONG_LEAD = 'RECONCILIATION_SALE_WRONG_LEAD';
 
 // ---------------------------------------------------------------------------
 // Views
@@ -781,7 +793,10 @@ export interface ReconciliationRowListResponse {
   totalPages: number;
 }
 
-/** Someone a row can be assigned to. `roles` are the role slugs that qualify them. */
+/**
+ * Someone a row can be assigned to. `roles` are their role names, display
+ * only: who qualifies is decided by `RECONCILIATION_ASSIGNEE_PERMISSION`.
+ */
 export interface ReconciliationAssignee {
   id: string;
   name: string;
@@ -804,7 +819,7 @@ export interface ReconciliationAssignee {
 }
 
 export interface ReconciliationOptionsResponse {
-  /** The agency's active Producers and CSRs, by name. */
+  /** The agency's active users who can work leads, by name. */
   assignees: ReconciliationAssignee[];
 }
 

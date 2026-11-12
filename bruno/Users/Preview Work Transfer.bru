@@ -37,6 +37,7 @@ tests {
       "rotationsTakenOver",
       "rotationsDeactivated",
       "reconciliationRows",
+      "reconciliationRowsUnassigned",
     ]) {
       expect(body).to.have.property(key).that.is.a("number");
     }
@@ -57,7 +58,7 @@ docs {
 
   **Response `200`** — `{ tickets, onboardings, renewalCycles, households,
   deals, leads, audits, auditItems, shareLinks, rotationsTakenOver,
-  rotationsDeactivated, reconciliationRows }`.
+  rotationsDeactivated, reconciliationRows, reconciliationRowsUnassigned }`.
   See **Transfer Work** for what each one means.
 
   **Errors** — same as **Transfer Work**.

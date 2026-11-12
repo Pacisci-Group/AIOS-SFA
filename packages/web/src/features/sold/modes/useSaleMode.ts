@@ -129,8 +129,25 @@ export function useSaleMode({
    * and the no-quote block would show for a sale the row waives it on.
    */
   const rowSettled = !rowId || dashRow !== null || rowGone;
+  /*
+   * The outcome this sale records: under way, on a row still waiting on a
+   * decision, at a step a sale moves on — and at `record_sale`, on the lead
+   * the row names, when it names one (PAC-173 review). A tab left open on
+   * another lead books an ordinary sale: no waiver, no prefill, no row id —
+   * the API would refuse it (`RECONCILIATION_SALE_WRONG_LEAD`) anyway.
+   */
+  const underWay =
+    dashRow?.outcome?.status === "in_progress" &&
+    dashRow.review.status === "open"
+      ? dashRow.outcome
+      : null;
   const outcome =
-    dashRow?.outcome?.status === "in_progress" ? dashRow.outcome : null;
+    underWay &&
+    (underWay.step === "write_replacement" ||
+      (underWay.step === "record_sale" &&
+        (!underWay.leadId || underWay.leadId === leadId)))
+      ? underWay
+      : null;
 
   /*
    * A replacement runs this same mode — it is an ordinary sale as far as the
@@ -153,9 +170,10 @@ export function useSaleMode({
         quoteRecapId: OBJECT_ID.test(quoteRecapId) ? quoteRecapId : undefined,
         policies: values.policies.map(toPolicyInput),
         submissionToken: submissionToken.current,
-        // Not for a row known to be someone else's now: there is nothing for
-        // the sale to complete.
-        reconciliationRowId: rowId && !rowGone ? rowId : undefined,
+        // Only for the outcome this sale records (above): a row that is
+        // someone else's now, decided, or under way on another lead has
+        // nothing for this sale to complete.
+        reconciliationRowId: outcome ? rowId : undefined,
       }),
     onSuccess: (deal) => {
       /*
@@ -319,7 +337,9 @@ export function useSaleMode({
       rowGone
         ? "This Dash row is no longer assigned to you, so booking here won't complete it."
         : dashRow && !outcome
-          ? "This Dash row isn't waiting on a sale any more, so booking here won't complete it."
+          ? underWay?.step === "record_sale"
+            ? "This Dash row's sale is under way on another lead, so booking here won't complete it. Open the row from your list and choose Continue."
+            : "This Dash row isn't waiting on a sale any more, so booking here won't complete it."
           : null,
       dashPrefill
         ? `Prefilled from Dash${dashRow?.dash ? ` line ${dashRow.dash.rowNumber}` : ""} — check each card against the application, which is still required.${

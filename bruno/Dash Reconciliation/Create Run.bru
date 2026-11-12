@@ -90,7 +90,11 @@ docs {
   serviced, never sold).
 
   Uploading the same period again **supersedes** the earlier run and carries
-  its review decisions to rows that still say the same thing.
+  its review decisions to rows that still say the same thing. The swap is one
+  transaction: the old run's rows are retired and their decisions read and
+  copied in it, so a decision made while the upload runs is either carried or
+  refused (`409` on the old row), never lost. One period has at most one
+  current run.
 
   ## Body
   - `storageKey` — the key from `Presign Upload`
@@ -112,11 +116,16 @@ docs {
   - `400` — a key that is not this agency's; nothing uploaded; size mismatch
   - `409` `RECONCILIATION_DUPLICATE_FILE` — these exact bytes were reconciled
     already; `runId` names that run
+  - `409` — another upload of the same period finished at the same moment (the
+    other one is current; upload again to replace it), or the database is not
+    a replica set and a run would have to be replaced without a transaction
   - `413` — over 10 MB
   - `422` `RECONCILIATION_UNREADABLE_FILE` — not an `.xlsx`, or not a Dash report
     (`reason`: `no_report_sheet` | `missing_columns` | `too_many_rows`)
   - `422` `RECONCILIATION_WRONG_AGENCY` — the report's agent number is not the agency's
   - `422` `RECONCILIATION_NO_APPOINTMENT` — the agency has no Allstate code on file
 
-  A refused upload's stored object is deleted.
+  A refused upload's stored object is deleted — unless a run still names the
+  key, as a replayed request's does, so a retry never deletes a live run's
+  file. A failed run gives its key up.
 }

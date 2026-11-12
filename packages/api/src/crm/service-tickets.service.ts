@@ -60,7 +60,10 @@ import {
   AgencyRoleDocument,
 } from '../roles/schemas/agency-role.schema';
 import { UserRole } from '../permissions/schemas/user-role.schema';
-import { activeRoleHolders } from '../permissions/role-holders';
+import {
+  activeRoleHolders,
+  TICKET_ASSIGNEE_ROLE_SLUGS,
+} from '../permissions/role-holders';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   AddNoteDto,
@@ -163,7 +166,7 @@ export class ServiceTicketsService {
         userModel: this.userModel,
       },
       access.agencyId,
-      ASSIGNABLE_ROLE_SLUGS,
+      TICKET_ASSIGNEE_ROLE_SLUGS,
       // Agency-wide scopes see every CRM; narrower scopes stay inside the branch.
       access.dataScope !== DataScope.Agency && access.branchId
         ? { branchId: new Types.ObjectId(access.branchId) }
@@ -1961,9 +1964,6 @@ const TICKET_SEARCH_FIELDS = [
   'category',
   'policyNumber',
 ] as const;
-
-/** Roles whose holders can be a ticket's Assigned Client Relation Manager. */
-const ASSIGNABLE_ROLE_SLUGS = ['csr', 'crm'];
 
 function statusLabel(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);

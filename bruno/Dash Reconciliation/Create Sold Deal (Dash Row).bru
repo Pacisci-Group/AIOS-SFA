@@ -79,8 +79,9 @@ docs {
 
   - **Sold** at `record_sale` → `done`, linking the lead, the deal, its
     household and the deal's policy that is the Dash line (matched by the
-    policy number's key, else the deal's first policy); the row is decided
-    `sold_recorded` by the seller.
+    policy number's key); the row is decided `sold_recorded` by the seller.
+    With no policy of that number the deal is kept on the outcome but the
+    row goes no further until the number is corrected (PAC-173 review).
   - **Cancel rewrite** at `record_sale` → the same links, then
     `write_replacement`. At `write_replacement`, a sale whose policy
     replaced the Dash policy (`transferredFromPolicyId`) — the replacement
@@ -90,9 +91,14 @@ docs {
     waiting on a decision, with that step under way; a row id from an upload
     replaced since is followed to its current copy. Anything else is logged
     and left alone. Idempotent on the deal.
-  - **Never fails the sale.** The deal is booked either way; a hook that
-    died after the commit is made good the next time the assignee resumes
-    the outcome (`Record Outcome (Sold)` again).
+  - **Never fails the sale** after it commits. The deal is booked either
+    way; a hook that died after the commit is made good the next time the
+    assignee resumes the outcome (`Record Outcome (Sold)` again).
+  - **Before** booking, one check (PAC-173 review): a sale on a lead other
+    than the one the row's sale is under way on — a tab left open from an
+    earlier attempt — is refused `409` `RECONCILIATION_SALE_WRONG_LEAD`, and
+    nothing is booked. Anything that would make the hook a no-op is let
+    through.
 
   `Get Assigned Row (Done)` checks what it did. A fresh `submissionToken` per
   run (pre-request script).

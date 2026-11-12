@@ -118,5 +118,5 @@ docs {
   | 400 | Validation; a `cancelledOn` in the future or before the sale; `RECONCILIATION_OUTCOME_NOT_ALLOWED` — the row is not being recorded as a chargeback |
   | 403 | `RECONCILIATION_OUTCOME_FORBIDDEN` — without `leads:write` + `deal_audits:write` |
   | 404 | No such row in the agency, or not the caller's |
-  | 409 | The sale is not booked yet; `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` — none of the sale's policies is numbered as the Dash line (correct the number on the sale, then retry or Continue); the policy is already off the books without a chargeback (the owner decides the row by hand); the row was decided; its run was replaced or did not finish; a concurrent change |
+  | 409 | The sale is not booked yet — including a sale none of whose policies is numbered as the Dash line, held at `record_sale` until the number is corrected (`Record Outcome` answers `RECONCILIATION_SALE_POLICY_UNMATCHED`); the policy is already off the books without a chargeback (the owner decides the row by hand); the row was decided; its run was replaced or did not finish; a concurrent change |
 }

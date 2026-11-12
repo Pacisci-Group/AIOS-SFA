@@ -75,9 +75,17 @@ export const reconciliationServiceIntakeOptionsKey = (rowId: string) =>
 
 const BASE = "/carrier-reconciliation";
 
-export function getReconciliationRuns(includeSuperseded = false) {
+/** The API's largest page; the picker loads more on request. */
+export const RECONCILIATION_RUNS_PAGE_SIZE = 50;
+
+export function getReconciliationRuns(page = 1, includeSuperseded = false) {
+  const search = new URLSearchParams({
+    page: String(page),
+    pageSize: String(RECONCILIATION_RUNS_PAGE_SIZE),
+    includeSuperseded: String(includeSuperseded),
+  });
   return apiFetch<ReconciliationRunListResponse>(
-    `${BASE}/runs?pageSize=50&includeSuperseded=${includeSuperseded}`,
+    `${BASE}/runs?${search.toString()}`,
   );
 }
 
@@ -256,10 +264,9 @@ export function recordReconciliationOutcome(
  * 400 for a date in the future or before the sale, or
  * `RECONCILIATION_OUTCOME_NOT_ALLOWED` (not a chargeback); 403
  * `RECONCILIATION_OUTCOME_FORBIDDEN` without the permission to book a sale;
- * 404 when the row is no longer the caller's; 409 before the sale is booked,
- * `RECONCILIATION_CHARGEBACK_POLICY_UNMATCHED` when no policy on the sale is
- * numbered as the Dash line, for a policy already cancelled without a
- * chargeback, a decided row, a
+ * 404 when the row is no longer the caller's; 409 before the sale is booked
+ * (a sale with no policy numbered as the Dash line is held there), for a
+ * policy already cancelled without a chargeback, a decided row, a
  * replaced run, or a concurrent change. A row already finished answers as it
  * is.
  */
@@ -339,8 +346,9 @@ export async function downloadReconciliationExport(
 }
 
 /**
- * Who a row can be assigned to: the agency's active Producers and CSRs, each
- * marked `canRecordSale` — only they can take a `missing_from_app` row.
+ * Who a row can be assigned to: the agency's active users who can work
+ * leads, each marked `canRecordSale` — only they can take a
+ * `missing_from_app` row.
  */
 export function getReconciliationOptions() {
   return apiFetch<ReconciliationOptionsResponse>(`${BASE}/options`);

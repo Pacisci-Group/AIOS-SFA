@@ -1,4 +1,5 @@
 import type { ClientSession, Model, Types } from 'mongoose';
+import { LIVE_ROW } from './live-row';
 
 type AnyModel = Model<any>;
 
@@ -53,5 +54,8 @@ export function openAssignmentsFilter(
     needsReview: true,
     'review.status': 'open' as const,
     'outcome.status': { $ne: 'done' as const },
+    // A row a re-upload is replacing right now is about to be copied; a
+    // release or transfer written to it would be lost, so it matches nothing.
+    ...LIVE_ROW,
   };
 }

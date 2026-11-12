@@ -36,8 +36,9 @@ const GRID =
 
 /**
  * Dash follow-ups (PAC-173): the Dash Reconciliation rows assigned to the
- * signed-in Producer or CSR, oldest first, each opening on
- * `/reconciliation/assigned`.
+ * signed-in person, oldest first, each opening on `/reconciliation/assigned`.
+ * On the Producer Dashboard and the Service Dashboard, so a CSR has a standing
+ * way in besides the notification (PAC-173 review).
  *
  * **Renders nothing** until there is something to say: while loading, when
  * nothing is assigned, and on a 403 — the agency does not use the module, or
@@ -52,8 +53,15 @@ const GRID =
  * A row whose outcome is under way (PAC-173 PR 4) carries a second badge under
  * its reason — "Sold — in progress", "Write the replacement" — so a half-done
  * one reads as the next thing to pick up.
+ *
+ * `className` replaces the outer padding, for a page that spaces its own
+ * blocks (the Service Dashboard's `gap`).
  */
-export function DashFollowUpsPanel() {
+export function DashFollowUpsPanel({
+  className = "px-4 pb-4 md:px-6",
+}: {
+  className?: string;
+} = {}) {
   const { canAny } = usePermissions();
   const canAsk = canAny([
     `${ModuleKey.CarrierReconciliation}:read`,
@@ -75,7 +83,7 @@ export function DashFollowUpsPanel() {
   const total = assigned.data?.total ?? 0;
 
   return (
-    <div className="px-4 pb-4 md:px-6">
+    <div className={className}>
       <DataPanel
         title="Dash follow-ups"
         subheading={

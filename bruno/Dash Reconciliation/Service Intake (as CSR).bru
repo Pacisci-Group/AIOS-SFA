@@ -130,7 +130,8 @@ docs {
   finishing without one. So do the owner's decision or hand-over of the row,
   and a re-upload of the same period (which carries the outcome to the new
   row either way — still pending, the new row waits on a decision until the
-  call opens). A call opened late re-checks its CSR: one no longer an active
+  call opens; a call being opened as the upload lands is found again by the
+  next Continue there). A call opened late re-checks its CSR: one no longer an active
   CSR or CRM leaves it unassigned. Only one caller opens it at a time. The ids in the
   answer are what this request created; `row` is the caller's view of the
   row, or `null` if the owner took it back meanwhile. Otherwise the row is
@@ -144,6 +145,15 @@ docs {
   now disagree on reopens it instead). Next month's report is a new run, so
   its row is simply matched, with no outcome. The policy number has to be
   this Dash line's (400 otherwise).
+
+  **Never a second policy for the number** (PAC-173 review). A row the owner
+  reopened after an intake keeps the household and policy it created; the
+  next intake on the line **adopts** that `carrier_direct` policy — no new
+  household, policy or application check — and opens its welcome call for
+  the CSR chosen. A pending intake is also kept when the row is reassigned,
+  taken back or its assignee removed; only the owner's reopen or decision
+  clears it. The application is uploaded under the Dash policy's key
+  (`serviced-policies/<key>/nba`), so it survives a re-upload of the report.
 
   ## Body
   - `householdId` — optional, an existing client

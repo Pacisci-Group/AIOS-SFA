@@ -66,7 +66,8 @@ export class User {
   /**
    * The three-digit code Allstate credits this person's sales to (PAC-173),
    * zero-padded — `034`. `000` is Allstate's "no sub-producer" and is never
-   * stored. Unique within the agency, absent when unset.
+   * stored. Absent when unset. Not unique: reconciliation reads the Bind ID
+   * only, so a clash here must not refuse an invite or a profile save.
    */
   @Prop({ trim: true })
   allstateSubProducerCode?: string;
@@ -191,23 +192,16 @@ export const UserSchema = SchemaFactory.createForClass(User);
 UserSchema.index({ agencyId: 1, branchId: 1, createdAt: -1 });
 UserSchema.index({ legacySmartSuiteId: 1 }, { unique: true, sparse: true });
 /*
- * One person per Allstate code within an agency (PAC-173). Partial on the
- * field being a string, so the many users without a code never collide. Also
+ * One person per Allstate Bind ID within an agency (PAC-173). Partial on the
+ * field being a string, so the many users without one never collide. Also
  * built by the `user_allstate_code_indexes` migration, which checks for
- * conflicts first — keep `ALLSTATE_CODE_INDEXES` there in step with these.
+ * conflicts first — keep `ALLSTATE_CODE_INDEXES` there in step with this.
  */
 UserSchema.index(
   { agencyId: 1, allstateBindId: 1 },
   {
     unique: true,
     partialFilterExpression: { allstateBindId: { $type: 'string' } },
-  },
-);
-UserSchema.index(
-  { agencyId: 1, allstateSubProducerCode: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { allstateSubProducerCode: { $type: 'string' } },
   },
 );
 /*

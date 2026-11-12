@@ -504,8 +504,9 @@ const REVIEW_TABS: ReadonlySet<ReconciliationTab> = new Set([
 
 /**
  * Whether a row's own tabs ask for a decision — {@link deriveRow}'s
- * `needsReview`, for a stored row whose flag a pending service intake held up
- * (PAC-173 PR 5). `besides` leaves out the tab an outcome just answered.
+ * `needsReview`, for a stored row whose flag an outcome held open has kept up
+ * — a sale under way, or a service intake waiting on its welcome call
+ * (PAC-173). `besides` leaves out the tab an outcome just answered.
  */
 export function asksForDecision(
   tabs: readonly ReconciliationTab[],

@@ -339,7 +339,11 @@ export async function loadAppPolicies(
         { name: 1, primaryContactId: 1 },
       )
       .lean<
-        { _id: Types.ObjectId; name?: string; primaryContactId?: Types.ObjectId }[]
+        {
+          _id: Types.ObjectId;
+          name?: string;
+          primaryContactId?: Types.ObjectId;
+        }[]
       >();
     const contactIds = rows
       .map((row) => row.primaryContactId)
@@ -350,7 +354,9 @@ export async function loadAppPolicies(
             { agencyId, _id: { $in: contactIds } },
             { firstName: 1, lastName: 1 },
           )
-          .lean<{ _id: Types.ObjectId; firstName?: string; lastName?: string }[]>()
+          .lean<
+            { _id: Types.ObjectId; firstName?: string; lastName?: string }[]
+          >()
       : [];
     const personName = new Map(
       people.map((person) => [
@@ -360,7 +366,8 @@ export async function loadAppPolicies(
     );
     for (const row of rows) {
       const name =
-        (row.primaryContactId && personName.get(String(row.primaryContactId))) ||
+        (row.primaryContactId &&
+          personName.get(String(row.primaryContactId))) ||
         row.name?.trim();
       if (name) householdNames.set(String(row._id), name);
     }

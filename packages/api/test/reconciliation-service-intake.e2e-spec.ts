@@ -4,7 +4,6 @@ import * as bcrypt from 'bcrypt';
 import { parse } from 'csv-parse';
 import {
   ModuleKey,
-  RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
   RECONCILIATION_HOUSEHOLD_NOT_VISIBLE,
   RECONCILIATION_OUTCOME_FORBIDDEN,
   RECONCILIATION_OUTCOME_LOCKED,
@@ -443,7 +442,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
       );
     });
 
-    it('refuses a Dash-only one to someone without leads:write, who may still take a matched one', async () => {
+    it('refuses any 1-800 row to someone without leads:write — they are outside the pool', async () => {
       await roleAssignments.setUserOverrides(
         ctx.agencyId,
         secondId,
@@ -451,25 +450,19 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
         ['leads:write'],
       );
       try {
-        expect(await options()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ id: secondId, canSetUpService: false }),
-          ]),
-        );
+        // The pool is everyone who can work leads (PAC-173 review), and
+        // setting a 1-800 policy up for service takes the same permission,
+        // so nobody in it is refused one for want of it.
+        expect((await options()).map((a) => a.id)).not.toContain(secondId);
         const dashOnly = await seedRow({ assignment: null });
-        const res = await assign(dashOnly, secondId).expect(400);
-        expect((res.body as { code: string }).code).toBe(
-          RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
-        );
-
-        // The policy is in the app already: Other only, so anyone may take it.
+        await assign(dashOnly, secondId).expect(400);
         const matched = await seedRow({
           assignment: null,
           match: 'matched',
           side: 'both',
           tabs: ['matched', 'review_1800'],
         });
-        await assign(matched, secondId).expect(200);
+        await assign(matched, secondId).expect(400);
       } finally {
         await roleAssignments.setUserOverrides(ctx.agencyId, secondId, [], []);
       }
@@ -495,12 +488,12 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
       });
     });
 
-    it('presigns the application under the row, PDF only, for its assignee only', async () => {
+    it('presigns the application under the Dash policy, PDF only, for its assignee only', async () => {
       const row = await seedRow();
 
       const res = await presign(row).expect(201);
       expect((res.body as ReconciliationPresignResponse).key).toContain(
-        `agencies/${ctx.agencyId}/reconciliation-rows/${row.rowId}/nba/`,
+        `agencies/${ctx.agencyId}/serviced-policies/${reconciliationPolicyKey(row.policyNumber)}/nba/`,
       );
       await presign(row, { contentType: 'image/png' }).expect(400);
       await presign(row, { size: 11 * 1024 * 1024 }).expect(400);
@@ -604,7 +597,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
         '2026-09-15T00:00:00.000Z',
       );
       expect(policy!.newBusinessApplication?.key).toContain(
-        `/reconciliation-rows/${row.rowId}/nba/`,
+        `/serviced-policies/${reconciliationPolicyKey(row.policyNumber)}/nba/`,
       );
       expect(await deals.countDocuments({})).toBe(dealsBefore);
       expect(await leads.countDocuments({})).toBe(leadsBefore);
@@ -748,7 +741,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
   });
 
   describe('what it refuses, before writing anything', () => {
-    it('an application that never reached storage, or was presigned for another row', async () => {
+    it('an application that never reached storage, or was presigned for another policy', async () => {
       const row = await seedRow();
       const other = await seedRow();
       const missing = {
@@ -782,7 +775,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
         tabs: ['matched', 'review_1800'],
       });
       const body = intakeBody({
-        key: `agencies/${ctx.agencyId}/reconciliation-rows/${row.rowId}/nba/2026/x.pdf`,
+        key: `agencies/${ctx.agencyId}/serviced-policies/${reconciliationPolicyKey(row.policyNumber)}/nba/2026/x.pdf`,
         filename: 'x.pdf',
         contentType: 'application/pdf',
         size: 1,
@@ -1588,14 +1581,26 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
       expect((await stored(row.rowId))?.outcome?.status).toBe('done');
     });
 
-    it('lets a carried row ask nothing again once the owner clears the call it could not open', async () => {
+    it('keeps a carried call it could not open when the row is taken back, and asks nothing once the owner clears it', async () => {
       const { row, carried } = await carryPending('900877005', [
         'Thu, 15 Oct 2026 09:00:00 GMT',
         'Fri, 16 Oct 2026 09:00:00 GMT',
       ]);
       expect(carried).toMatchObject({ tabs: ['matched'], needsReview: true });
       await withModule(ModuleKey.CrmService, false, async () => {
+        // Taking it back keeps it (PAC-173 review): the household and policy
+        // are saved, and the outcome is their only link.
         await assign(row, null).expect(200);
+        const kept = await stored(row.rowId);
+        expect(kept?.assignment).toBeNull();
+        expect(kept?.outcome).toMatchObject({
+          kind: 'service_intake',
+          step: 'start_onboarding',
+        });
+        expect(kept?.needsReview).toBe(true);
+
+        // The owner reopening it is what clears it.
+        await review(row, { status: 'open' }).expect(200);
       });
       const after = await stored(row.rowId);
       expect(after?.outcome).toBeNull();
@@ -1727,6 +1732,31 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
       expect((await stored(row.rowId))?.outcome).toBeNull();
       // What it created stays — a reopen takes back the decision, not the client.
       expect(await policies.exists({ _id: oid(done.policyId) })).toBeTruthy();
+    });
+
+    it('adopts the policy a reopened row set up, never a second one for the number', async () => {
+      const row = await seedRow();
+      const first = (await setUp(row, 201))
+        .body as ReconciliationServiceIntakeResponse;
+      await review(row, { status: 'open' }).expect(200);
+      expect((await stored(row.rowId))?.outcome).toBeNull();
+
+      // The form again, as the next person would fill it in.
+      const again = (await setUp(row, 201))
+        .body as ReconciliationServiceIntakeResponse;
+      expect(again.policyId).toBe(first.policyId);
+      expect(again.householdId).toBe(first.householdId);
+      expect(
+        await policies.countDocuments({
+          origin: 'carrier_direct',
+          policyNumber: row.policyNumber,
+        }),
+      ).toBe(1);
+      expect((await stored(row.rowId))?.outcome).toMatchObject({
+        kind: 'service_intake',
+        status: 'done',
+        policyId: first.policyId,
+      });
     });
   });
 });

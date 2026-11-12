@@ -51,6 +51,7 @@ docs {
 
   Taking a row back works whatever its state. An outcome still **under way**
   is cleared with the assignment (PAC-173 PR 4) — the next person starts
-  over; this row's outcome is **done** (`Create Sold Deal (Dash Row)`), the
+  over — unless it has booked a sale, which stays for whoever takes the row
+  next; this row's outcome is **done** (`Create Sold Deal (Dash Row)`), the
   record of what was done, so it stays.
 }
