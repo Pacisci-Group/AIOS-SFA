@@ -314,11 +314,12 @@ export class UsersController {
   @RequirePermissions(AgencyPermission.UsersWrite)
   updateDetails(
     @AgencyId() agencyId: string,
+    @Access() access: AccessContext,
     @Param('userId') userId: string,
     @Body(new ZodValidationPipe(updateUserDetailsSchema))
     body: UpdateUserDetailsDto,
   ) {
-    return this.usersService.updateDetails(agencyId, userId, body);
+    return this.usersService.updateDetails(access, agencyId, userId, body);
   }
 
   @Patch(':userId/permissions')

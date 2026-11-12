@@ -240,7 +240,8 @@ temperature/aging that aren't first-class in legacy payloads. See
   Producer identity is two fields on the **user** — `allstateBindId` (who bound
   it) and `allstateSubProducerCode` (who gets credit; `000` means none) —
   entered at invite / accept-invite, editable on the profile and by the owner
-  (`PATCH /users/:userId/details`), unique per agency, normalised by
+  (`PATCH /users/:userId/details`), the Bind ID unique per agency (the
+  sub-producer code is stored but not unique), normalised by
   `@sfa/shared`'s `allstate-codes.ts`. There is no code registry. The engine
   lives in `packages/api/src/common/carrier-reconciliation/` and splits
   matching from classification, so setting someone's code re-classifies a

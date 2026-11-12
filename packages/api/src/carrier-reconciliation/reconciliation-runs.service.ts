@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -33,7 +34,12 @@ import {
 } from '@sfa/shared';
 import { createHash } from 'crypto';
 import type { Response } from 'express';
-import { Types, type FilterQuery, type Model } from 'mongoose';
+import {
+  Types,
+  type ClientSession,
+  type FilterQuery,
+  type Model,
+} from 'mongoose';
 import type { Readable } from 'stream';
 import {
   Carrier,
@@ -41,9 +47,10 @@ import {
 } from '../carriers/schemas/carrier.schema';
 import { clientAgencyId } from '../common/access/client-scope';
 import {
-  carriedReview,
+  carriedFields,
   type PreviousRowReview,
 } from '../common/carrier-reconciliation/carry-forward';
+import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
 import {
   DashFileError,
   parseDashWorkbook,
@@ -72,6 +79,7 @@ import { createExportWriter } from '../common/data-export/writers/export-writer'
 import { displayName, displayNamesFor } from '../common/domain/user-names';
 import { isDuplicateKeyError } from '../common/mongo/duplicate-key';
 import { escapeRegex } from '../common/mongo/escape-regex';
+import { TransactionRunner } from '../common/mongo/transaction.runner';
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
@@ -102,10 +110,22 @@ import {
 } from './schemas/reconciliation-row.schema';
 import {
   ReconciliationRun,
+  runPeriodKey,
   type ReconciliationRunDocument,
 } from './schemas/reconciliation-run.schema';
 
 const INSERT_CHUNK = 1000;
+
+/** Two uploads of one period finished together, and the other one won. */
+const LOST_SUPERSEDE =
+  'Another upload of this report period finished at the same moment. Upload this file again to replace it.';
+
+/** What {@link ReconciliationRunsService.swapIn} reads off a new row to carry onto it. */
+type CarriedRowSource = Pick<LeanRow, '_id' | 'rowKey' | 'match' | 'issues'>;
+
+/** The run's rows were replaced by a re-upload between the read and the write. */
+const ROW_REPLACED =
+  'A newer upload of this report just replaced this row. Open the new run and decide it there.';
 
 /** What "download exceptions" means: every tab that asks someone to act. */
 const EXCEPTION_TABS: ReconciliationTab[] = [
@@ -145,6 +165,7 @@ export class ReconciliationRunsService {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly storage: StorageService,
+    private readonly transactions: TransactionRunner,
   ) {}
 
   private get models(): ReconciliationModels {
@@ -211,9 +232,17 @@ export class ReconciliationRunsService {
     try {
       return await this.reconcileUpload(access, agencyId, dto, stat.size);
     } catch (error) {
-      // A refused or failed upload leaves nothing worth keeping. Safe: the
-      // key passed the ownership check above, so it is this agency's object.
-      await this.storage.deleteObject(dto.storageKey).catch(() => undefined);
+      // A refused or failed upload leaves nothing worth keeping — unless a run
+      // still names the object: a replayed request carries the key of the run
+      // the first one created, and its duplicate-file 409 lands here. A failed
+      // run gives its key up, so only a live run can hold one. Safe otherwise:
+      // the key passed the ownership check above, so it is this agency's.
+      const inUse = await this.runModel
+        .exists({ agencyId, 'file.storageKey': dto.storageKey })
+        .catch(() => true);
+      if (!inUse) {
+        await this.storage.deleteObject(dto.storageKey).catch(() => undefined);
+      }
       throw error;
     }
   }
@@ -296,21 +325,17 @@ export class ReconciliationRunsService {
     try {
       await this.process(run, file, access.timeZone);
     } catch (error) {
-      this.logger.error(
-        `Reconciliation run ${String(run._id)} failed: ${(error as Error).message}`,
-        (error as Error).stack,
-      );
-      await this.rowModel.deleteMany({ agencyId, runId: run._id });
-      await this.runModel.updateOne(
-        { _id: run._id },
-        {
-          $set: {
-            status: 'failed',
-            error: 'Reconciling the report failed. Try the upload again.',
-            fileSha256: null,
-            finishedAt: new Date(),
-          },
-        },
+      if (!(error instanceof HttpException)) {
+        this.logger.error(
+          `Reconciliation run ${String(run._id)} failed: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+      }
+      await this.markFailed(
+        run,
+        error instanceof ConflictException
+          ? LOST_SUPERSEDE
+          : 'Reconciling the report failed. Try the upload again.',
       );
       throw error;
     }
@@ -318,8 +343,39 @@ export class ReconciliationRunsService {
   }
 
   /**
-   * The work behind {@link create}: load the app side, match, classify, carry
-   * reviews forward from the run this one supersedes, and store it all.
+   * Fail a run this request still owns — one still `processing` — and remove
+   * its rows. Conditional, so it never touches a run whose swap committed
+   * (`ready`), or one an upload's stale sweep failed meanwhile. The key goes
+   * too: `create()` then deletes the object, which no run names any more.
+   */
+  private async markFailed(
+    run: ReconciliationRunDocument,
+    message: string,
+  ): Promise<void> {
+    const failed = await this.runModel.updateOne(
+      { _id: run._id, status: 'processing' },
+      {
+        $set: {
+          status: 'failed',
+          error: message,
+          fileSha256: null,
+          currentKey: null,
+          'file.storageKey': null,
+          finishedAt: new Date(),
+        },
+      },
+    );
+    if (failed.matchedCount) {
+      await this.rowModel.deleteMany({
+        agencyId: run.agencyId,
+        runId: run._id,
+      });
+    }
+  }
+
+  /**
+   * The work behind {@link create}: load the app side, match, classify and
+   * store the rows, then make the run current ({@link swapIn}).
    */
   private async process(
     run: ReconciliationRunDocument,
@@ -342,31 +398,11 @@ export class ReconciliationRunsService {
     const index = new ProducerCodeIndex(codes);
     const bases = matchRows({ dashRows: file.rows, appPolicies, window });
 
-    const previous = await this.runModel
-      .findOne({
-        agencyId,
-        _id: { $ne: run._id },
-        status: 'ready',
-        supersededByRunId: null,
-        'fileMeta.agentNumber': run.fileMeta.agentNumber,
-        'window.from': window.from,
-        'window.to': window.to,
-      })
-      .sort({ createdAt: -1 })
-      .lean<LeanRun>();
-    const previousReviews = previous
-      ? await this.previousReviews(agencyId, previous._id)
-      : new Map<string, PreviousRowReview>();
-
     const ids = new Map(
       bases.map((base) => [base.rowKey, new Types.ObjectId()]),
     );
     const rows = bases.map((base) => {
       const derived = deriveRow(base, index);
-      const carried = carriedReview(
-        { rowKey: base.rowKey, match: base.match, issues: derived.issues },
-        previousReviews,
-      );
       return {
         _id: ids.get(base.rowKey)!,
         agencyId,
@@ -384,16 +420,10 @@ export class ReconciliationRunsService {
           rowId: rowKey ? (ids.get(rowKey)?.toString() ?? null) : null,
         })),
         ...derived,
-        review: carried
-          ? ({
-              status: carried.status,
-              resolution: carried.resolution,
-              note: carried.note,
-              reviewedById: carried.reviewedById,
-              reviewedAt: carried.reviewedAt,
-              carriedForwardFromRowId: carried.rowId,
-            } satisfies StoredReview)
-          : openReview(),
+        // What carries from a run this one replaces is written by `swapIn`,
+        // inside the transaction that retires the old rows.
+        review: openReview(),
+        supersededAt: null,
         searchText: searchText(base),
       };
     });
@@ -404,39 +434,144 @@ export class ReconciliationRunsService {
       });
     }
 
-    const { totals, byProducer } = summarize(rows);
+    // Matching data only, so carried decisions cannot change them.
+    const summary = summarize(rows);
+    try {
+      await this.transactions.run((session) =>
+        this.swapIn(run, rows, summary, session),
+      );
+    } catch (error) {
+      // Two first uploads of one period: the other run took `currentKey`.
+      if (isDuplicateKeyError(error)) {
+        throw new ConflictException(LOST_SUPERSEDE);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Make a processed run the current one for its report period, in one
+   * transaction, replacing the run that was:
+   *
+   * 1. the old run is marked superseded — a compare-and-swap, so of two
+   *    uploads racing for it one wins and the other conflicts and retries;
+   * 2. every old row is stamped `supersededAt`, which every row write matches
+   *    unset (`LIVE_ROW`) — from here no write can land on them;
+   * 3. their decisions are read **after** the stamp, inside the transaction,
+   *    and copied to the new rows that still say the same thing;
+   * 4. the new run goes `ready` and takes the period's `currentKey`.
+   *
+   * A write to an old row that commits before step 2 reaches it either way:
+   * before the transaction's snapshot it is read in step 3; after, step 2
+   * conflicts with it and `withTransaction` retries on a fresh snapshot. One
+   * that arrives after step 2 waits for the commit and then matches nothing.
+   *
+   * Idempotent, as `withTransaction` requires: a retry re-reads everything.
+   * Without transactions (an old single-node dev container) a replacement is
+   * refused rather than done in pieces; a first upload has nothing to lose.
+   */
+  private async swapIn(
+    run: ReconciliationRunDocument,
+    rows: readonly CarriedRowSource[],
+    summary: ReturnType<typeof summarize>,
+    session: ClientSession | null,
+  ): Promise<void> {
+    const agencyId = run.agencyId;
+    const window = run.window!;
+    const previous = await this.runModel
+      .findOne({
+        agencyId,
+        _id: { $ne: run._id },
+        status: 'ready',
+        supersededByRunId: null,
+        'fileMeta.agentNumber': run.fileMeta.agentNumber,
+        'window.from': window.from,
+        'window.to': window.to,
+      })
+      .sort({ createdAt: -1 })
+      .session(session)
+      .lean<LeanRun>();
+
+    if (previous) {
+      if (!session) {
+        throw new ConflictException(
+          'This database cannot replace a report safely: it is not running as a replica set. Recreate the mongo container (`docker compose up -d mongo mongo-init`) and upload again.',
+        );
+      }
+      const replaced = await this.runModel.updateOne(
+        { _id: previous._id, agencyId, supersededByRunId: null },
+        { $set: { supersededByRunId: run._id, currentKey: null } },
+        { session },
+      );
+      if (!replaced.matchedCount) throw new ConflictException(LOST_SUPERSEDE);
+
+      await this.rowModel.updateMany(
+        { agencyId, runId: previous._id, ...LIVE_ROW },
+        { $set: { supersededAt: new Date() } },
+        { session, timestamps: false },
+      );
+      const before = await this.previousReviews(
+        agencyId,
+        previous._id,
+        session,
+      );
+      const operations: Parameters<typeof this.rowModel.bulkWrite>[0] = [];
+      for (const row of rows) {
+        const fields = carriedFields(
+          { rowKey: row.rowKey, match: row.match, issues: row.issues },
+          before,
+        );
+        if (!Object.keys(fields).length) continue;
+        operations.push({
+          updateOne: {
+            filter: { _id: row._id, agencyId },
+            // `bulkWrite` skips `authorshipPlugin`; stamp the author here.
+            update: { $set: { ...fields, updatedBy: run.createdBy } },
+          },
+        });
+      }
+      for (let i = 0; i < operations.length; i += INSERT_CHUNK) {
+        await this.rowModel.bulkWrite(operations.slice(i, i + INSERT_CHUNK), {
+          session,
+          ordered: false,
+        });
+      }
+    }
+
     const finishedAt = new Date();
-    await this.runModel.updateOne(
-      { _id: run._id },
+    const ready = await this.runModel.updateOne(
+      { _id: run._id, status: 'processing' },
       {
         $set: {
           status: 'ready',
-          totals,
-          byProducer,
+          totals: summary.totals,
+          byProducer: summary.byProducer,
           supersedesRunId: previous?._id ?? null,
+          currentKey: runPeriodKey(run.fileMeta.agentNumber, window),
           finishedAt,
           durationMs:
             finishedAt.getTime() - (run.startedAt ?? finishedAt).getTime(),
         },
       },
+      { session: session ?? undefined },
     );
-    if (previous) {
-      await this.runModel.updateOne(
-        { _id: previous._id, supersededByRunId: null },
-        { $set: { supersededByRunId: run._id } },
-      );
+    if (!ready.matchedCount) {
+      // An upload's stale sweep failed it while it processed.
+      throw new Error(`Run ${String(run._id)} is no longer processing.`);
     }
   }
 
   private async previousReviews(
     agencyId: string,
     runId: Types.ObjectId,
+    session: ClientSession | null = null,
   ): Promise<Map<string, PreviousRowReview>> {
     const rows = await this.rowModel
       .find(
         { agencyId, runId, 'review.status': { $ne: 'open' } },
         { rowKey: 1, match: 1, issues: 1, review: 1 },
       )
+      .session(session)
       .lean<
         Pick<LeanRow, '_id' | 'rowKey' | 'match' | 'issues' | 'review'>[]
       >();
@@ -478,6 +613,7 @@ export class ReconciliationRunsService {
           status: 'failed',
           error: 'Processing was interrupted.',
           fileSha256: null,
+          'file.storageKey': null,
         },
       },
     );
@@ -598,6 +734,7 @@ export class ReconciliationRunsService {
   ): Promise<ReconciliationRowView> {
     const agencyId = clientAgencyId(access);
     const run = await this.loadRun(agencyId, runId);
+    assertWorkable(run, 'decided');
     const row = await this.rowModel
       .findOne({ _id: new Types.ObjectId(rowId), agencyId, runId: run._id })
       .lean<LeanRow>();
@@ -614,12 +751,13 @@ export class ReconciliationRunsService {
     };
     const updated = await this.rowModel
       .findOneAndUpdate(
-        { _id: row._id, agencyId },
+        { _id: row._id, agencyId, ...LIVE_ROW },
         { $set: { review } },
         { new: true },
       )
       .lean<LeanRow>();
-    const [view] = await this.toRowViews([updated!]);
+    if (!updated) throw new ConflictException(ROW_REPLACED);
+    const [view] = await this.toRowViews([updated]);
     return view;
   }
 
@@ -649,9 +787,7 @@ export class ReconciliationRunsService {
     userId: string,
   ): Promise<number> {
     const run = await this.loadRun(agencyId, runId);
-    if (run.status !== 'ready' || isStale(run)) {
-      throw new ConflictException('Only a finished run can be re-checked.');
-    }
+    assertWorkable(run, 're-checked');
     const index = new ProducerCodeIndex(
       await loadStaffCodes(this.models, agencyId),
     );
@@ -666,7 +802,9 @@ export class ReconciliationRunsService {
       if (classificationKey(row) !== classificationKey(derived)) {
         operations.push({
           updateOne: {
-            filter: { _id: row._id, agencyId },
+            // A row a re-upload replaced meanwhile is left alone: its
+            // decisions were already copied, and the new run is what counts.
+            filter: { _id: row._id, agencyId, ...LIVE_ROW },
             // `bulkWrite` skips `authorshipPlugin`; stamp the author here.
             update: { $set: { ...derived, updatedBy } },
           },
@@ -682,7 +820,7 @@ export class ReconciliationRunsService {
     if (operations.length) {
       const { totals, byProducer } = summarize(next);
       await this.runModel.updateOne(
-        { _id: run._id },
+        { _id: run._id, status: 'ready', supersededByRunId: null },
         { $set: { totals, byProducer } },
       );
     }
@@ -950,6 +1088,22 @@ function openReview(): StoredReview {
     reviewedAt: null,
     carriedForwardFromRowId: null,
   };
+}
+
+/**
+ * Only the current run's rows are worked: a replaced run's decisions were
+ * copied to the run that replaced it, and a run still processing has rows
+ * the swap is about to overwrite.
+ */
+function assertWorkable(run: LeanRun, what: 'decided' | 're-checked'): void {
+  if (run.supersededByRunId) {
+    throw new ConflictException(
+      `A newer upload of this report replaced this run. Its rows are ${what} on that one.`,
+    );
+  }
+  if (run.status !== 'ready' || isStale(run)) {
+    throw new ConflictException(`Only a finished run can be ${what}.`);
+  }
 }
 
 function searchText(base: RowBase): string {

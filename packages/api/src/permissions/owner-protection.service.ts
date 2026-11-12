@@ -137,6 +137,26 @@ export class OwnerProtectionService {
   }
 
   /**
+   * Rule (e): an owner's details — name and Allstate codes (PAC-173) — are
+   * changed by that owner, another owner or a platform admin, never by
+   * someone below them who happens to hold `agency:users:write`. The Bind ID
+   * decides whose Dash lines are whose, so moving the owner's is moving the
+   * owner's credit.
+   */
+  async assertMayEditOwner(
+    actor: ActingUser,
+    agencyId: string,
+    targetUserId: string,
+  ): Promise<void> {
+    if (actor.isPlatformAdmin || actor.userId === targetUserId) return;
+    if (!(await this.isOwner(agencyId, targetUserId))) return;
+    if (await this.isOwner(agencyId, actor.userId)) return;
+    throw new ForbiddenException(
+      'Only an agency owner can change an owner’s details.',
+    );
+  }
+
+  /**
    * Rule (b) + (d): an owner cannot be deactivated, deleted, or have a pending
    * invite revoked by anyone but a platform admin.
    */

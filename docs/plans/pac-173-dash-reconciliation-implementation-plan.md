@@ -14,8 +14,9 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   A person's codes are two fields on the **user** — `allstateBindId` and
 >   `allstateSubProducerCode` — entered at invite / accept-invite / agency
 >   onboarding, edited on the profile page or by the owner
->   (`PATCH /users/:userId/details`), unique per agency (migration
->   `20261027120000-user_allstate_code_indexes`), normalised by
+>   (`PATCH /users/:userId/details`), the Bind ID unique per agency (migration
+>   `20261027120000-user_allstate_code_indexes`; the sub-producer code is not
+>   unique, since nothing reads it), normalised by
 >   `shared/domain/allstate-codes.ts`. The engine reads them with
 >   `loadStaffCodes` (deactivated users included).
 > - **Bind ID statuses are `staff` / `former_staff` / `not_staff` / `blank`.**
@@ -23,9 +24,9 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   employee's — never 1-800 — and gets its own `bind:<Bind ID>` line in the
 >   per-producer summary. Only an **unnamed** Bind ID on no user can be 1-800
 >   (David, 27 Oct). A blank Bind ID is agency business.
-> - Migration `20261027140000-sfa_user_allstate_bind_ids` writes Smith Family
->   Agency's 10 producers' Bind IDs onto their users, cross-referenced from the
->   Jul–Sep export by name (Mike Iles = JAMES ILES).
+> - Smith Family Agency's producers' Bind IDs are entered by the owner on the
+>   Users page after deploy. (A migration that wrote them was dropped in review:
+>   it put staff Allstate logins in the repo and matched users by name.)
 > - Still to come (v2 plan): premium/producer checks on matched rows,
 >   assigning rows to Producers/CSRs, and the Sold / Cancel-rewrite /
 >   Chargeback / Other / 1-800 service outcomes.
