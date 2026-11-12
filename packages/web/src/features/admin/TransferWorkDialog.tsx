@@ -65,7 +65,7 @@ function transferLines(counts: WorkTransferCounts): string[] {
         "Dash Reconciliation row",
       ),
     counts.reconciliationRowsUnassigned &&
-      `${plural(counts.reconciliationRowsUnassigned, "Dash Reconciliation row")} back to the owner, unassigned — the new person cannot work leads`,
+      `${plural(counts.reconciliationRowsUnassigned, "Dash Reconciliation row")} back to the owner, unassigned — the new person cannot take them`,
   ];
   return lines.filter((line): line is string => Boolean(line));
 }
