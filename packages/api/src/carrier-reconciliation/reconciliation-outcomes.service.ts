@@ -15,6 +15,8 @@ import {
   RECONCILIATION_OUTCOME_NOT_ALLOWED,
   RECONCILIATION_OUTCOME_RESOLUTION,
   RECONCILIATION_SALE_OUTCOME_KINDS,
+  RECONCILIATION_SALE_POLICY_UNMATCHED,
+  RECONCILIATION_SALE_WRONG_LEAD,
   RECONCILIATION_TAB_LABELS,
   canRecordReconciliationSale,
   primaryReconciliationTab,
@@ -31,6 +33,10 @@ import {
 import { clientAgencyId } from '../common/access/client-scope';
 import type { RowOutcome } from '../common/carrier-reconciliation/carry-forward';
 import { reconciliationPolicyKey } from '../common/carrier-reconciliation/dash-file-reader';
+import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
+import { isHeldOpen } from '../common/carrier-reconciliation/outcome-state';
+import { asksForDecision } from '../common/carrier-reconciliation/reconcile';
+import { escapeRegex } from '../common/mongo/escape-regex';
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
@@ -165,7 +171,14 @@ export class ReconciliationOutcomesService {
     if (!row.needsReview || row.review.status !== 'open') {
       throw new ConflictException('This row has already been decided.');
     }
-    if (!reconciliationOutcomeKinds(row.tabs).includes(dto.kind)) {
+    // A held-open outcome a re-upload carried to the Dash line's new row is
+    // Continued there, though that row — now matching the sale it booked —
+    // offers its kind no more.
+    const continuing = current?.kind === dto.kind && isHeldOpen(current);
+    if (
+      !continuing &&
+      !reconciliationOutcomeKinds(row.tabs).includes(dto.kind)
+    ) {
       const tab = primaryReconciliationTab(row.tabs);
       throw new BadRequestException({
         code: RECONCILIATION_OUTCOME_NOT_ALLOWED,
@@ -230,7 +243,45 @@ export class ReconciliationOutcomesService {
       dto.kind === 'other' ? finished(started, access.userId, now) : started,
     );
     if (!updated) throw new ConflictException(CHANGED);
-    return this.assignments.assignedDetail(agencyId, updated);
+    // A sale already booked with the Dash line's policy — by a hook that
+    // never ran, or before an owner's reopen cleared the outcome — is adopted
+    // now rather than booked again.
+    return this.assignments.assignedDetail(
+      agencyId,
+      dto.kind === 'other' ? updated : await this.catchUp(access, updated),
+    );
+  }
+
+  /**
+   * `POST /sold-deals` with a `reconciliationRowId`, **before** the sale is
+   * booked: refuse a sale on a lead other than the one the row's sale is
+   * under way on — a tab left open from an earlier attempt, say — so it never
+   * finishes the row against someone else's lead. Anything that would make
+   * the hook a no-op anyway (no such row, replaced, not the caller's, nothing
+   * under way) is let through: the sale itself is never this module's to stop.
+   */
+  async assertSaleFitsRow(
+    access: AccessContext,
+    rowId: string,
+    leadId: string,
+  ): Promise<void> {
+    const row = await this.currentRow(access, rowId);
+    if (typeof row === 'string') return;
+    const outcome = row.outcome;
+    if (
+      row.assignment?.userId === access.userId &&
+      outcome?.status === 'in_progress' &&
+      outcome.step === 'record_sale' &&
+      !outcome.dealId &&
+      outcome.leadId &&
+      outcome.leadId !== leadId
+    ) {
+      throw new ConflictException({
+        code: RECONCILIATION_SALE_WRONG_LEAD,
+        message:
+          'This Dash row’s sale is under way on another lead. Open the row from your list and choose Continue, so the sale is booked on its lead.',
+      });
+    }
   }
 
   /**
@@ -248,36 +299,48 @@ export class ReconciliationOutcomesService {
     leadId: string,
   ): Promise<void> {
     try {
-      const row = await this.currentRow(access, rowId);
-      if (typeof row === 'string') {
-        this.logger.warn(
-          `Dash row ${rowId}: lead ${leadId} not linked — ${row}.`,
+      // Twice at most: a re-upload that replaced the row between the read
+      // and the write moved its outcome to the new copy, which is re-read.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const row = await this.currentRow(access, rowId);
+        if (typeof row === 'string') {
+          this.logger.warn(
+            `Dash row ${rowId}: lead ${leadId} not linked — ${row}.`,
+          );
+          return;
+        }
+        const outcome = row.outcome;
+        // The replacement's own lead, on a cancel rewrite: its sale is what
+        // finishes the row, and the outcome keeps the original sale's lead.
+        if (outcome?.step === 'write_replacement') return;
+        if (outcome?.leadId === leadId) return;
+        // A newer lead made for the row replaces an older one while nothing
+        // is booked on it, so the Sold form opens on the lead just made.
+        const linked = await this.rowModel.updateOne(
+          {
+            _id: row._id,
+            agencyId: row.agencyId,
+            'assignment.userId': access.userId,
+            needsReview: true,
+            'review.status': 'open',
+            'outcome.status': 'in_progress',
+            'outcome.step': 'record_sale',
+            'outcome.dealId': null,
+            'outcome.policyId': null,
+            ...LIVE_ROW,
+          },
+          { $set: { 'outcome.leadId': leadId } },
         );
-        return;
-      }
-      const outcome = row.outcome;
-      // The replacement's own lead, on a cancel rewrite: its sale is what
-      // finishes the row, and the outcome keeps the original sale's lead.
-      if (outcome?.step === 'write_replacement') return;
-      if (outcome?.leadId === leadId) return;
-      const linked = await this.rowModel.updateOne(
-        {
+        if (linked.matchedCount) return;
+        const replaced = await this.rowModel.exists({
           _id: row._id,
-          agencyId: row.agencyId,
-          'assignment.userId': access.userId,
-          needsReview: true,
-          'review.status': 'open',
-          'outcome.status': 'in_progress',
-          'outcome.step': 'record_sale',
-          'outcome.leadId': null,
-        },
-        { $set: { 'outcome.leadId': leadId } },
-      );
-      if (!linked.matchedCount) {
-        this.logger.warn(
-          `Dash row ${rowId}: lead ${leadId} not linked — the row is not the caller's, or has no sale under way waiting for a lead.`,
-        );
+          supersededAt: { $type: 'date' },
+        });
+        if (!replaced) break;
       }
+      this.logger.warn(
+        `Dash row ${rowId}: lead ${leadId} not linked — the row is not the caller's, or has no sale under way that is still waiting for a lead.`,
+      );
     } catch (error) {
       this.logger.warn(
         `Dash row ${rowId}: linking lead ${leadId} failed: ${String(error)}`,
@@ -333,28 +396,45 @@ export class ReconciliationOutcomesService {
     access: AccessContext,
     sale: ReconciliationSale,
   ): Promise<string | null> {
-    const row = await this.currentRow(access, sale.rowId);
-    if (typeof row === 'string') return row;
-    const outcome = row.outcome;
-    if (outcome?.dealId === sale.dealId) return null;
-    if (row.assignment?.userId !== access.userId) {
-      return 'the row is not assigned to the seller';
+    // Twice at most: a re-upload that replaced the row between the read and
+    // the write carried its outcome to the new copy, which is re-read.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const row = await this.currentRow(access, sale.rowId);
+      if (typeof row === 'string') return row;
+      const outcome = row.outcome;
+      if (outcome?.dealId === sale.dealId) return null;
+      if (row.assignment?.userId !== access.userId) {
+        return 'the row is not assigned to the seller';
+      }
+      if (!row.needsReview || row.review.status !== 'open') {
+        return 'the row has been decided';
+      }
+      if (outcome?.status !== 'in_progress' || !outcome.step) {
+        return 'no sale is under way on it';
+      }
+      // The sale must be the one the row's outcome is under way on: its lead
+      // (a cancel rewrite's replacement has a lead of its own, by design).
+      if (
+        outcome.step === 'record_sale' &&
+        outcome.leadId &&
+        outcome.leadId !== sale.leadId
+      ) {
+        return 'the sale is on another lead than the row’s';
+      }
+      const next = await this.afterSale(
+        row,
+        new Types.ObjectId(sale.dealId),
+        access.userId,
+      );
+      if (typeof next === 'string') return next;
+      if (await this.writeOutcome(row, next)) return null;
+      const replaced = await this.rowModel.exists({
+        _id: row._id,
+        supersededAt: { $type: 'date' },
+      });
+      if (!replaced) break;
     }
-    if (!row.needsReview || row.review.status !== 'open') {
-      return 'the row has been decided';
-    }
-    if (outcome?.status !== 'in_progress' || !outcome.step) {
-      return 'no sale is under way on it';
-    }
-    const next = await this.afterSale(
-      row,
-      new Types.ObjectId(sale.dealId),
-      access.userId,
-    );
-    if (typeof next === 'string') return next;
-    return (await this.writeOutcome(row, next))
-      ? null
-      : 'the row changed while the sale was recorded';
+    return 'the row changed while the sale was recorded';
   }
 
   /**
@@ -378,23 +458,41 @@ export class ReconciliationOutcomesService {
       if (!updated) throw new ConflictException(CHANGED);
       resumed = updated;
     }
-    // At most twice: a cancel rewrite whose sale and replacement were both
-    // booked while neither hook ran.
+    return this.catchUp(access, resumed);
+  }
+
+  /**
+   * Move an outcome on by whatever is booked already: the sale (at
+   * `record_sale` — on the linked lead, or anywhere with the Dash line's
+   * policy number) or the replacement (at `write_replacement`). At most twice:
+   * a cancel rewrite whose sale and replacement were both booked while
+   * neither hook ran.
+   *
+   * A sale booked for the row with no policy numbered as the Dash line is
+   * kept on the outcome but goes no further: Continue answers 409
+   * `RECONCILIATION_SALE_POLICY_UNMATCHED` until the number is corrected.
+   */
+  private async catchUp(access: AccessContext, row: LeanRow): Promise<LeanRow> {
+    let at = row;
     for (let pass = 0; pass < 2; pass += 1) {
-      const dealId = await this.bookedSince(resumed);
+      const dealId = await this.bookedSince(at);
       if (!dealId) break;
-      const next = await this.afterSale(resumed, dealId, access.userId);
+      const next = await this.afterSale(at, dealId, access.userId);
       if (typeof next === 'string') {
         this.logger.warn(
           `Dash row ${String(row._id)}: deal ${String(dealId)} not recorded on resume — ${next}.`,
         );
         break;
       }
-      const updated = await this.writeOutcome(resumed, next);
+      if (isUnmatchedSale(next) && at.outcome?.dealId === next.dealId) {
+        throw unmatchedSale(at);
+      }
+      const updated = await this.writeOutcome(at, next);
       if (!updated) throw new ConflictException(CHANGED);
-      resumed = updated;
+      at = updated;
+      if (isUnmatchedSale(next)) break;
     }
-    return resumed;
+    return at;
   }
 
   /** The deal that booked the outcome's current step already, if any. */
@@ -402,18 +500,11 @@ export class ReconciliationOutcomesService {
     const outcome = row.outcome;
     if (outcome?.status !== 'in_progress') return null;
     if (outcome.step === 'record_sale') {
-      if (!outcome.leadId || outcome.dealId) return null;
-      // The lead was made for this row (`POST /leads` skips the address
-      // dedupe when it carries one), so any sale on it is this sale.
-      const deal = await this.dealModel
-        .findOne({
-          agencyId: row.agencyId,
-          leadId: new Types.ObjectId(outcome.leadId),
-        })
-        .sort({ createdAt: -1, _id: -1 })
-        .select('_id')
-        .lean<{ _id: Types.ObjectId }>();
-      return deal?._id ?? null;
+      // Held on its policy number: the same sale, checked again.
+      if (outcome.dealId) return new Types.ObjectId(outcome.dealId);
+      return (
+        (await this.saleOnLead(row)) ?? (await this.saleWithDashPolicy(row))
+      );
     }
     if (!outcome.policyId) return null;
     const original = await this.policyModel
@@ -432,12 +523,88 @@ export class ReconciliationOutcomesService {
   }
 
   /**
+   * The sale on the outcome's lead: the one with a policy numbered as the
+   * Dash line, else the newest one booked since the outcome started. An older
+   * sale is not this row's — the lead may be a returning customer's.
+   */
+  private async saleOnLead(row: LeanRow): Promise<Types.ObjectId | null> {
+    const outcome = row.outcome!;
+    if (!outcome.leadId) return null;
+    const deals = await this.dealModel
+      .find({
+        agencyId: row.agencyId,
+        leadId: new Types.ObjectId(outcome.leadId),
+        isTestRecord: { $ne: true },
+      })
+      .sort({ createdAt: -1, _id: -1 })
+      .select('_id createdAt')
+      .lean<{ _id: Types.ObjectId; createdAt?: Date }[]>();
+    if (!deals.length) return null;
+    const keyed = await this.dashPolicies(row, {
+      dealId: { $in: deals.map((deal) => deal._id) },
+    });
+    if (keyed[0]?.dealId) return keyed[0].dealId;
+    const since = deals.find(
+      (deal) => deal.createdAt && deal.createdAt >= outcome.startedAt,
+    );
+    return since?._id ?? null;
+  }
+
+  /**
+   * A sale anywhere in the agency that holds a policy numbered as the Dash
+   * line — what a reopened row, or a hook that never ran, left booked. The
+   * number is the proof it is this line's sale, so it is adopted instead of
+   * booked a second time.
+   */
+  private async saleWithDashPolicy(
+    row: LeanRow,
+  ): Promise<Types.ObjectId | null> {
+    const [policy] = await this.dashPolicies(row, { dealId: { $ne: null } });
+    return policy?.dealId ?? null;
+  }
+
+  /**
+   * The agency's live policies numbered as the row's Dash line, newest first.
+   * `policyNumberKey` keeps a National General term suffix that the Dash key
+   * drops, so the indexed lookup is by prefix and the key is checked here.
+   */
+  private async dashPolicies(
+    row: LeanRow,
+    where: Record<string, unknown>,
+  ): Promise<{ _id: Types.ObjectId; dealId: Types.ObjectId | null }[]> {
+    const dashKey = dashKeyOf(row);
+    if (!dashKey) return [];
+    const policies = await this.policyModel
+      .find({
+        agencyId: row.agencyId,
+        isTestRecord: { $ne: true },
+        policyNumberKey: { $regex: `^${escapeRegex(dashKey)}` },
+        ...where,
+      })
+      .select('policyNumber dealId')
+      .sort({ _id: -1 })
+      .lean<
+        {
+          _id: Types.ObjectId;
+          policyNumber?: string;
+          dealId: Types.ObjectId | null;
+        }[]
+      >();
+    return policies.filter(
+      (policy) => reconciliationPolicyKey(policy.policyNumber) === dashKey,
+    );
+  }
+
+  /**
    * What a booked deal makes of the row's outcome — the next outcome, or why
    * it makes nothing of it.
    *
    * The policy that is the Dash line is the deal's policy whose number keys
-   * the same as Dash's (`reconciliationPolicyKey`), else its first: a deal
-   * entered for a Dash row may carry other lines sold on the same visit.
+   * the same as Dash's (`reconciliationPolicyKey`): a deal entered for a Dash
+   * row may carry other lines sold on the same visit. With none, the sale is
+   * stamped on the outcome but goes no further (`isUnmatchedSale`) until the
+   * number is corrected — a guess would link, and later cancel, the wrong
+   * policy. Only a Dash line with no number at all takes the first policy.
    */
   private async afterSale(
     row: LeanRow,
@@ -447,7 +614,11 @@ export class ReconciliationOutcomesService {
     const outcome = row.outcome!;
     const [deal, policies] = await Promise.all([
       this.dealModel
-        .findOne({ _id: dealId, agencyId: row.agencyId })
+        .findOne({
+          _id: dealId,
+          agencyId: row.agencyId,
+          isTestRecord: { $ne: true },
+        })
         .select('leadId householdId')
         .lean<{
           _id: Types.ObjectId;
@@ -470,15 +641,13 @@ export class ReconciliationOutcomesService {
     const now = new Date();
 
     if (outcome.step === 'record_sale') {
-      const dashKey =
-        row.dash?.policyKey || reconciliationPolicyKey(row.dash?.policyNumber);
-      const dashPolicy =
-        (dashKey &&
-          policies.find(
+      const dashKey = dashKeyOf(row);
+      const dashPolicy = dashKey
+        ? policies.find(
             (policy) =>
               reconciliationPolicyKey(policy.policyNumber) === dashKey,
-          )) ||
-        policies[0];
+          )
+        : policies[0];
       const linked: RowOutcome = {
         ...outcome,
         leadId: deal.leadId ? String(deal.leadId) : outcome.leadId,
@@ -486,6 +655,7 @@ export class ReconciliationOutcomesService {
         policyId: dashPolicy ? String(dashPolicy._id) : null,
         householdId: deal.householdId ? String(deal.householdId) : null,
       };
+      if (!dashPolicy) return linked;
       return outcome.kind === 'cancel_rewrite'
         ? { ...linked, step: 'write_replacement' }
         : finished(linked, by, now);
@@ -529,17 +699,23 @@ export class ReconciliationOutcomesService {
     row: LeanRow,
     next: RowOutcome,
   ): Promise<LeanRow | null> {
-    const resolved: StoredReview | null =
-      next.status === 'done'
-        ? {
-            status: 'resolved',
-            resolution: RECONCILIATION_OUTCOME_RESOLUTION[next.kind],
-            note: next.note,
-            reviewedById: next.completedById,
-            reviewedAt: next.completedAt,
-            carriedForwardFromRowId: null,
-          }
-        : null;
+    // An outcome a re-upload carried to a row whose own tabs no longer offer
+    // its kind (the row now matches the sale it booked): finishing it answers
+    // the Dash line, but not a question the new row asks of its own — a
+    // premium the app and Dash disagree on stays open for the owner.
+    const carried = !reconciliationOutcomeKinds(row.tabs).includes(next.kind);
+    const resolves =
+      next.status === 'done' && !(carried && asksForDecision(row.tabs));
+    const resolved: StoredReview | null = resolves
+      ? {
+          status: 'resolved',
+          resolution: RECONCILIATION_OUTCOME_RESOLUTION[next.kind],
+          note: next.note,
+          reviewedById: next.completedById,
+          reviewedAt: next.completedAt,
+          carriedForwardFromRowId: null,
+        }
+      : null;
     return this.rowModel
       .findOneAndUpdate(
         {
@@ -549,6 +725,8 @@ export class ReconciliationOutcomesService {
           needsReview: true,
           'review.status': 'open',
           ...outcomeAsRead(row.outcome),
+          // A row a re-upload replaced meanwhile was copied as it stood.
+          ...LIVE_ROW,
         },
         {
           $set: resolved
@@ -617,4 +795,33 @@ function finished(outcome: RowOutcome, by: string, at: Date): RowOutcome {
     completedById: by,
     completedAt: at,
   };
+}
+
+/** The row's Dash policy key, as matching computes it; `null` for a line with no number. */
+function dashKeyOf(row: LeanRow): string | null {
+  return (
+    row.dash?.policyKey ||
+    reconciliationPolicyKey(row.dash?.policyNumber) ||
+    null
+  );
+}
+
+/** A sale booked for the row, held at `record_sale` because none of its policies is the Dash line's number. */
+function isUnmatchedSale(outcome: RowOutcome): boolean {
+  return (
+    outcome.status === 'in_progress' &&
+    outcome.step === 'record_sale' &&
+    !!outcome.dealId &&
+    !outcome.policyId
+  );
+}
+
+/** 409: Continue on a sale whose policy number is still not the Dash line's. */
+function unmatchedSale(row: LeanRow): ConflictException {
+  const number =
+    row.dash?.policyNumber ?? row.dash?.policyKey ?? 'the Dash line';
+  return new ConflictException({
+    code: RECONCILIATION_SALE_POLICY_UNMATCHED,
+    message: `None of the policies on the sale is numbered ${number}, as the Dash line is, so the row cannot be finished with it. Correct the policy number on the sale, then Continue.`,
+  });
 }

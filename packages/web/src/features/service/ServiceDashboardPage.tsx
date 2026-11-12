@@ -11,6 +11,7 @@ import {
   type ServiceTicketScope,
 } from "@sfa/shared";
 import { CreateTicketDialog } from "./components/CreateTicketDialog";
+import { DashFollowUpsPanel } from "@/features/producer/components/DashFollowUpsPanel";
 import { ScorecardRow } from "./components/ScorecardRow";
 import {
   PriorityTicketQueue,
@@ -269,6 +270,10 @@ export default function App() {
           <div className="flex-shrink-0">
             <ScorecardRow stats={scorecardStats} />
           </div>
+
+          {/* Dash Reconciliation rows assigned to this person (PAC-173) —
+              a CSR's standing way in. Renders nothing when none are. */}
+          <DashFollowUpsPanel className="flex-shrink-0" />
 
           {/* Row 2: 60/40 Workspace. `flex-1` fills a tall screen; the explicit
               minimum is what keeps it from being squeezed on a short one

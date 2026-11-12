@@ -87,4 +87,6 @@ docs {
   - `404` — no such run or row in the agency
   - `409` — the assignee recorded something on the row at the same moment;
     reload and decide again
+  - `409` — the run is still processing, failed, or was replaced by a
+    re-upload (also when the replacement lands between the read and the write)
 }

@@ -8,6 +8,7 @@ import {
   type ReconciliationReviewStatus,
   type StoredReconciliationResolution,
 } from '@sfa/shared';
+import { isHeldOpen } from './outcome-state';
 
 /**
  * Who a row was handed to. Ids are strings, like the review's: it is a
@@ -70,6 +71,81 @@ export interface PreviousRowReview {
   outcome: RowOutcome | null;
 }
 
+/** What carry-forward compares: the row's key, match and issues. */
+export interface CarriedRow {
+  rowKey: string;
+  match: ReconciliationMatch | null;
+  issues: readonly ReconciliationIssue[];
+  /** Whether the new row asks for a decision by its own tabs. */
+  needsReview?: boolean;
+}
+
+/** A carried decision, as the new row stores it (`StoredReview`). */
+export interface CarriedReviewFields {
+  status: ReconciliationReviewStatus;
+  resolution: PreviousRowReview['resolution'];
+  note: string | null;
+  reviewedById: string | null;
+  reviewedAt: Date | null;
+  carriedForwardFromRowId: string;
+}
+
+/**
+ * What a new row takes from the row it replaces: the fields to `$set` on it,
+ * none when nothing carries. The one place the upload asks what carries, so a
+ * new kind of carried state is added here and nowhere else.
+ */
+export interface CarriedFields {
+  review?: CarriedReviewFields;
+  assignment?: RowAssignment;
+  outcome?: RowOutcome;
+  /** Set when a carried outcome holds a row open that would not otherwise ask. */
+  needsReview?: true;
+}
+
+/** What the upload knows about the people rows may be carried to. */
+export interface CarryContext {
+  /**
+   * Whether this person can still be handed a row — active and in the
+   * assignee pool. A row whose assignee left or lost the permission since
+   * starts with nobody on it rather than with someone who cannot open it.
+   */
+  canTakeRows(userId: string): boolean;
+}
+
+export function carriedFields(
+  row: CarriedRow,
+  previous: ReadonlyMap<string, PreviousRowReview>,
+  context: CarryContext,
+): CarriedFields {
+  const fields: CarriedFields = {};
+  // An outcome held open — under way, with a sale already booked — carries to
+  // the Dash line's new row whatever it now says: booking the Dash policy is
+  // what turned the row `matched`, and the outcome is the only link to that
+  // sale. It brings its assignee, and keeps the row asking until it is done.
+  const before = previous.get(row.rowKey);
+  const held = before && isHeldOpen(before.outcome) ? before : null;
+  const source = held ?? sameRowBefore(row, previous);
+  const assignment = source?.assignment ?? null;
+  if (assignment && context.canTakeRows(assignment.userId)) {
+    fields.assignment = assignment;
+  }
+  if (source?.outcome) fields.outcome = source.outcome;
+  if (held && !row.needsReview) fields.needsReview = true;
+  const review = carriedReview(row, previous);
+  if (review) {
+    fields.review = {
+      status: review.status,
+      resolution: review.resolution,
+      note: review.note,
+      reviewedById: review.reviewedById,
+      reviewedAt: review.reviewedAt,
+      carriedForwardFromRowId: review.rowId,
+    };
+  }
+  return fields;
+}
+
 /**
  * A decision made on a run carries to the run that replaces it — the same
  * report uploaded again after a fix — **only if the row still says the same
@@ -82,11 +158,7 @@ export interface PreviousRowReview {
  * asks for now.
  */
 export function carriedReview(
-  row: {
-    rowKey: string;
-    match: ReconciliationMatch | null;
-    issues: readonly ReconciliationIssue[];
-  },
+  row: CarriedRow,
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): PreviousRowReview | null {
   const before = sameRowBefore(row, previous);
@@ -102,11 +174,7 @@ export function carriedReview(
  * same hand-off, so nobody is notified again.
  */
 export function carriedAssignment(
-  row: {
-    rowKey: string;
-    match: ReconciliationMatch | null;
-    issues: readonly ReconciliationIssue[];
-  },
+  row: CarriedRow,
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): RowAssignment | null {
   return sameRowBefore(row, previous)?.assignment ?? null;
@@ -118,28 +186,20 @@ export function carriedAssignment(
  * were; a done one travels with the decision it resolved the row with, and
  * still names what it created.
  *
- * Booking the Dash policy makes the row match next upload, so a sale recorded
- * between two uploads changes the row and nothing carries — by design: the row
- * no longer asks the question. An unfinished cancel rewrite across such a
- * re-upload therefore starts over on the new row, and its sale hook no-ops.
+ * Booking the Dash policy makes the row match next upload, so a finished sale
+ * recorded between two uploads changes the row and nothing carries — by
+ * design: the row no longer asks the question. One still under way is the
+ * exception ({@link carriedFields}, `isHeldOpen`): it carries anyway.
  */
 export function carriedOutcome(
-  row: {
-    rowKey: string;
-    match: ReconciliationMatch | null;
-    issues: readonly ReconciliationIssue[];
-  },
+  row: CarriedRow,
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): RowOutcome | null {
   return sameRowBefore(row, previous)?.outcome ?? null;
 }
 
 function sameRowBefore(
-  row: {
-    rowKey: string;
-    match: ReconciliationMatch | null;
-    issues: readonly ReconciliationIssue[];
-  },
+  row: CarriedRow,
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): PreviousRowReview | null {
   const before = previous.get(row.rowKey);

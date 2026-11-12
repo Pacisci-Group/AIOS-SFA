@@ -145,6 +145,15 @@ export class ReconciliationRow {
   @Prop({ default: '' })
   searchText: string;
 
+  /**
+   * When a re-upload of the same period replaced this row's run. Stamped in
+   * the same transaction that copies the row's decisions forward, and every
+   * write to a row matches it unset (`LIVE_ROW`), so nothing is written to a
+   * row after its decisions were copied.
+   */
+  @Prop({ type: Date, default: null })
+  supersededAt: Date | null;
+
   /** Opts this schema into `authorshipPlugin`; see `TenantRecord`. */
   @Prop({ type: ObjectIdType, ref: 'User', default: null })
   createdBy: Types.ObjectId | null;

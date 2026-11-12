@@ -6,8 +6,8 @@ import {
   ChargebackSchema,
 } from '../chargebacks/schemas/chargeback.schema';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
-import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import { PermissionsModule } from '../permissions/permissions.module';
+import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import {
   UserRole,
   UserRoleSchema,

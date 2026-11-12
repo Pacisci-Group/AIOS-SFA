@@ -18,6 +18,7 @@ import {
   currentRunIds,
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
+import { HELD_OPEN_OUTCOME } from '../common/carrier-reconciliation/outcome-state';
 import { currentUserObjectId } from '../common/context/request-context';
 import {
   CrmRotation,
@@ -224,9 +225,23 @@ export class UserWorkReleaseService {
       // outcome they had under way goes too (PAC-173 PR 4): its lead just went
       // back to the pool above, so whoever takes the row next starts over.
       // Open rows hold no finished outcome — finishing one decides the row.
-      this.reconciliationRowModel.updateMany(f.reconciliationRows, {
-        $set: { assignment: null, outcome: null },
-      }),
+      //
+      // Except one that has booked a sale (`HELD_OPEN_OUTCOME`, PAC-173
+      // review): it is the only link to that sale, so it stays for whoever
+      // the owner hands the row to next, who continues it.
+      (async () => {
+        const [cleared, kept] = await Promise.all([
+          this.reconciliationRowModel.updateMany(
+            { ...f.reconciliationRows, $nor: [HELD_OPEN_OUTCOME] },
+            { $set: { assignment: null, outcome: null } },
+          ),
+          this.reconciliationRowModel.updateMany(
+            { ...f.reconciliationRows, ...HELD_OPEN_OUTCOME },
+            { $set: { assignment: null } },
+          ),
+        ]);
+        return { modifiedCount: cleared.modifiedCount + kept.modifiedCount };
+      })(),
     ]);
 
     await this.recordLeadActivities(leadIds, userId);

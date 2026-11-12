@@ -9,7 +9,7 @@ import {
   JwtPayload,
   resolvePermissionSet,
 } from '@sfa/shared';
-import { Model, Types } from 'mongoose';
+import { Model, Types, type FilterQuery } from 'mongoose';
 import {
   DEFAULT_AGENCY_TIME_ZONE,
   isIanaTimeZone,
@@ -42,6 +42,25 @@ interface AccessData {
   roles: ResolvedRole[];
   grants: string[];
   revokes: string[];
+}
+
+/** What resolving needs of a user: who, and which agency. */
+interface AccessUser {
+  _id: Types.ObjectId;
+  agencyId?: Types.ObjectId | null;
+  isPlatformAdmin?: boolean;
+}
+
+/** Someone {@link PermissionsService.activeUsersHolding} found. */
+export interface PermissionHolder {
+  _id: Types.ObjectId;
+  firstName?: string;
+  lastName?: string;
+  email: string;
+  /** Their effective permissions, for any further check the caller makes. */
+  permissions: string[];
+  /** Display only — never an access decision. */
+  roleNames: string[];
 }
 
 const EMPTY: AccessData = {
@@ -91,7 +110,17 @@ export class PermissionsService {
   ) {}
 
   /**
-   * The single read behind every resolve* method below.
+   * The single read behind every resolve* method below — for one user, the
+   * many-user read with a list of one.
+   */
+  private async loadAccessData(user: AccessUser): Promise<AccessData> {
+    return (await this.loadAccessDataMany([user])).get(String(user._id))!;
+  }
+
+  /**
+   * Every user's roles, permission keys, overrides and agency in three reads
+   * per agency, however many users are asked about — what an assignee picker
+   * needs, where a resolve per person is a read storm.
    *
    * `$lookup` accepts `localField`/`foreignField` alongside a `pipeline` from
    * MongoDB 5.0; the deployed clusters are 7.x. The inner pipelines project
@@ -101,105 +130,139 @@ export class PermissionsService {
    * itself proof that the role belongs to the user's tenant, and a stale row
    * pointing at another agency's role must contribute nothing.
    */
-  private async loadAccessData(user: UserDocument): Promise<AccessData> {
-    if (!user.agencyId) {
-      return EMPTY;
+  private async loadAccessDataMany(
+    users: readonly AccessUser[],
+  ): Promise<Map<string, AccessData>> {
+    const result = new Map<string, AccessData>();
+    const byAgency = new Map<string, AccessUser[]>();
+    for (const user of users) {
+      if (!user.agencyId) {
+        result.set(String(user._id), EMPTY);
+        continue;
+      }
+      const key = String(user.agencyId);
+      byAgency.set(key, [...(byAgency.get(key) ?? []), user]);
     }
 
-    const [row] = await this.userRoleModel.aggregate<{
-      roles: {
-        _id: Types.ObjectId;
-        name: string;
-        slug: string;
-        dataScope: DataScope;
-        grantsAllEnabledModules: boolean;
-        permissionKeys: string[];
-      }[];
-    }>([
-      { $match: { userId: user._id } },
-      {
-        $lookup: {
-          from: 'roles',
-          localField: 'roleId',
-          foreignField: '_id',
-          as: 'role',
-          pipeline: [
-            { $match: { agencyId: user.agencyId } },
-            {
-              $project: {
-                name: 1,
-                slug: 1,
-                dataScope: 1,
-                grantsAllEnabledModules: 1,
-              },
-            },
-          ],
-        },
-      },
-      { $unwind: '$role' },
-      {
-        $lookup: {
-          from: 'rolePermissions',
-          localField: 'roleId',
-          foreignField: 'roleId',
-          as: 'permissions',
-          pipeline: [{ $project: { permissionKey: 1, _id: 0 } }],
-        },
-      },
-      {
-        $group: {
-          _id: null,
+    for (const members of byAgency.values()) {
+      const agencyId = members[0].agencyId!;
+      const userIds = members.map((user) => user._id);
+      const [roleRows, agency, overrides] = await Promise.all([
+        this.userRoleModel.aggregate<{
+          _id: Types.ObjectId;
           roles: {
-            $push: {
-              _id: '$role._id',
-              name: '$role.name',
-              slug: '$role.slug',
-              dataScope: '$role.dataScope',
-              grantsAllEnabledModules: '$role.grantsAllEnabledModules',
-              permissionKeys: '$permissions.permissionKey',
+            _id: Types.ObjectId;
+            name: string;
+            slug: string;
+            dataScope: DataScope;
+            grantsAllEnabledModules: boolean;
+            permissionKeys: string[];
+          }[];
+        }>([
+          { $match: { userId: { $in: userIds } } },
+          {
+            $lookup: {
+              from: 'roles',
+              localField: 'roleId',
+              foreignField: '_id',
+              as: 'role',
+              pipeline: [
+                { $match: { agencyId } },
+                {
+                  $project: {
+                    name: 1,
+                    slug: 1,
+                    dataScope: 1,
+                    grantsAllEnabledModules: 1,
+                  },
+                },
+              ],
             },
           },
-        },
-      },
-    ]);
+          { $unwind: '$role' },
+          {
+            $lookup: {
+              from: 'rolePermissions',
+              localField: 'roleId',
+              foreignField: 'roleId',
+              as: 'permissions',
+              pipeline: [{ $project: { permissionKey: 1, _id: 0 } }],
+            },
+          },
+          {
+            $group: {
+              _id: '$userId',
+              roles: {
+                $push: {
+                  _id: '$role._id',
+                  name: '$role.name',
+                  slug: '$role.slug',
+                  dataScope: '$role.dataScope',
+                  grantsAllEnabledModules: '$role.grantsAllEnabledModules',
+                  permissionKeys: '$permissions.permissionKey',
+                },
+              },
+            },
+          },
+        ]),
+        this.agencyModel
+          .findById(agencyId)
+          .select({ modules: 1, timezone: 1 })
+          .lean(),
+        this.userPermissionModel
+          .find({ userId: { $in: userIds } })
+          .select({ userId: 1, permissionKey: 1, effect: 1 })
+          .lean(),
+      ]);
 
-    const [agency, overrides] = await Promise.all([
-      this.agencyModel
-        .findById(user.agencyId)
-        .select({ modules: 1, timezone: 1 })
-        .lean(),
-      this.userPermissionModel
-        .find({ userId: user._id })
-        .select({ permissionKey: 1, effect: 1 })
-        .lean(),
-    ]);
-
-    return {
-      enabledModules: Object.entries(agency?.modules ?? {})
+      const enabledModules = Object.entries(agency?.modules ?? {})
         .filter(([, entry]) => entry.enabled)
-        .map(([key]) => key),
+        .map(([key]) => key);
       // Validated, not just defaulted: a zone the runtime cannot resolve would
       // otherwise surface as a 500 in the first date helper of every request.
       // The schema validator and the write paths make this unreachable; the
       // check is for a row edited by hand.
-      timeZone: isIanaTimeZone(agency?.timezone)
+      const timeZone = isIanaTimeZone(agency?.timezone)
         ? agency.timezone
-        : DEFAULT_AGENCY_TIME_ZONE,
-      roles: (row?.roles ?? []).map((role) => ({
-        roleId: role._id.toString(),
-        name: role.name,
-        slug: role.slug,
-        dataScope: role.dataScope,
-        grantsAllEnabledModules: role.grantsAllEnabledModules,
-        permissionKeys: role.permissionKeys ?? [],
-      })),
-      grants: overrides
-        .filter((o) => o.effect === 'grant')
-        .map((o) => o.permissionKey),
-      revokes: overrides
-        .filter((o) => o.effect === 'revoke')
-        .map((o) => o.permissionKey),
-    };
+        : DEFAULT_AGENCY_TIME_ZONE;
+      const rolesByUser = new Map(
+        roleRows.map((row) => [String(row._id), row.roles]),
+      );
+      for (const user of members) {
+        const id = String(user._id);
+        const own = overrides.filter((o) => String(o.userId) === id);
+        result.set(id, {
+          enabledModules,
+          timeZone,
+          roles: (rolesByUser.get(id) ?? []).map((role) => ({
+            roleId: role._id.toString(),
+            name: role.name,
+            slug: role.slug,
+            dataScope: role.dataScope,
+            grantsAllEnabledModules: role.grantsAllEnabledModules,
+            permissionKeys: role.permissionKeys ?? [],
+          })),
+          grants: own
+            .filter((o) => o.effect === 'grant')
+            .map((o) => o.permissionKey),
+          revokes: own
+            .filter((o) => o.effect === 'revoke')
+            .map((o) => o.permissionKey),
+        });
+      }
+    }
+    return result;
+  }
+
+  /** The effective set {@link resolveForUser} computes, from loaded data. */
+  private static effective(data: AccessData): string[] {
+    return resolvePermissionSet({
+      rolePermissions: PermissionsService.rolePermissions(data),
+      grants: data.grants,
+      revokes: data.revokes,
+      enabledModules: data.enabledModules,
+      grantsAllEnabledModules: PermissionsService.grantsAll(data),
+    });
   }
 
   private static rolePermissions(data: AccessData): string[] {
@@ -252,13 +315,52 @@ export class PermissionsService {
     if (!user.agencyId) {
       return [];
     }
-    const data = await this.loadAccessData(user);
-    return resolvePermissionSet({
-      rolePermissions: PermissionsService.rolePermissions(data),
-      grants: data.grants,
-      revokes: data.revokes,
-      enabledModules: data.enabledModules,
-      grantsAllEnabledModules: PermissionsService.grantsAll(data),
+    return PermissionsService.effective(await this.loadAccessData(user));
+  }
+
+  /**
+   * The agency's **active** users whose effective permissions include
+   * `permission`, by first then last name, each with that set and their role
+   * names (display only). Active leaves out pending invites and deactivated
+   * accounts; platform admins never count. `where` narrows the users — a
+   * branch, or the one person a write names — and never widens the agency.
+   *
+   * The "who can be handed X" question asked by permission, never by role
+   * name, so a custom role that carries the permission qualifies and someone
+   * whose permission was revoked does not.
+   */
+  async activeUsersHolding(
+    agencyId: string,
+    permission: string,
+    where: FilterQuery<UserDocument> = {},
+  ): Promise<PermissionHolder[]> {
+    const base: FilterQuery<UserDocument> = {
+      agencyId: new Types.ObjectId(agencyId),
+      isPlatformAdmin: { $ne: true },
+      isActive: { $ne: false },
+    };
+    const users = await this.userModel
+      .find(Object.keys(where).length ? { $and: [base, where] } : base)
+      .select('firstName lastName email agencyId isPlatformAdmin')
+      .sort({ firstName: 1, lastName: 1 })
+      .lean<
+        (AccessUser & Omit<PermissionHolder, 'permissions' | 'roleNames'>)[]
+      >();
+    const access = await this.loadAccessDataMany(users);
+    return users.flatMap((user) => {
+      const data = access.get(String(user._id)) ?? EMPTY;
+      const permissions = PermissionsService.effective(data);
+      if (!permissions.includes(permission)) return [];
+      return [
+        {
+          _id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          permissions,
+          roleNames: data.roles.map((role) => role.name),
+        },
+      ];
     });
   }
 

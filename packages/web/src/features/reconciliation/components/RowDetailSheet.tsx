@@ -343,7 +343,7 @@ function RowDetail({
               <p className="text-sm text-muted-foreground">
                 {row.tabs.includes("missing_from_app")
                   ? "Not assigned. Hand it to someone who can book the sale"
-                  : "Not assigned. Hand it to a Producer or CSR"}{" "}
+                  : "Not assigned. Hand it to someone who works leads"}{" "}
                 — they are notified and see it on their own page.
               </p>
             )}
@@ -707,7 +707,7 @@ function AssignmentForm({
                 assignees.isError
                   ? "Could not load who can be assigned. Close the row and open it again to retry."
                   : assignees.isSuccess && people.length === 0
-                    ? "The agency has no active Producers or CSRs to assign to."
+                    ? "Nobody active in the agency can work leads, so there is no one to assign to."
                     : needsSeller
                       ? "A line missing from the app goes to someone who can book the sale."
                       : undefined

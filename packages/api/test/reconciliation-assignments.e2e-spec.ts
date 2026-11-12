@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import {
+  DataScope,
   ModuleKey,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRow,
@@ -16,7 +17,9 @@ import { ReconciliationRow } from '../src/carrier-reconciliation/schemas/reconci
 import { ReconciliationRun } from '../src/carrier-reconciliation/schemas/reconciliation-run.schema';
 import { InngestService } from '../src/inngest/inngest.service';
 import { AccessResolverService } from '../src/permissions/access-resolver.service';
+import { RoleAssignmentsService } from '../src/permissions/role-assignments.service';
 import { Agency } from '../src/platform/schemas/agency.schema';
+import { AgencyRole } from '../src/roles/schemas/agency-role.schema';
 import { User } from '../src/users/schemas/user.schema';
 import { authHeader, login } from './helpers/auth.helper';
 import {
@@ -219,7 +222,7 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
   });
 
   describe('options', () => {
-    it('lists the agency’s Producers and CSRs, and nobody else', async () => {
+    it('lists the agency’s active users who can work leads, and nobody else', async () => {
       const res = await api()
         .get(`${base}/options`)
         .set(authHeader(ownerToken))
@@ -234,24 +237,86 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
             id: producerId,
             name: 'Test Producer',
             email: ctx.producerEmail,
-            roles: ['producer'],
+            roles: ['Producer'],
             canRecordSale: true,
           },
           {
             id: csrId,
             name: 'Test Csr',
             email: ctx.csrEmail,
-            roles: ['csr'],
+            roles: ['CSR'],
             canRecordSale: false,
           },
         ]),
       );
       const ids = assignees.map((a) => a.id);
-      // The owner assigns; they are not on the list. Nor is a role that
-      // only reads, or a Producer in someone else's agency.
-      expect(ids).not.toContain(ownerId);
+      // By permission, not role (PAC-173 review): the owner can work leads,
+      // so is on the list. A role that only reads is not, nor is a Producer
+      // in someone else's agency.
+      expect(ids).toContain(ownerId);
       expect(ids).not.toContain(ctx.readOnlyUserId);
       expect(ids).not.toContain(ctx.otherAgencyUserId);
+    });
+
+    it('goes by permission: a custom role that can work leads qualifies, a revoked Producer does not', async () => {
+      const roleAssignments = app.get(RoleAssignmentsService);
+      const roleModel = app.get<Model<AgencyRole>>(
+        getModelToken(AgencyRole.name),
+      );
+      const custom = await roleModel.create({
+        agencyId: new Types.ObjectId(ctx.agencyId),
+        name: 'Senior Producer',
+        slug: 'senior_producer_pac173',
+        dataScope: DataScope.Own,
+        isSystemTemplate: false,
+      });
+      // A row missing from the app also needs someone who can book a sale.
+      await roleAssignments.setRolePermissions(ctx.agencyId, custom._id, [
+        'leads:read',
+        'leads:write',
+        'deal_audits:read',
+        'deal_audits:write',
+      ]);
+      await roleAssignments.setUserRoles(
+        { userId: ownerId, isPlatformAdmin: true },
+        ctx.agencyId,
+        ctx.readOnlyUserId,
+        [custom._id],
+      );
+      await roleAssignments.setUserOverrides(
+        ctx.agencyId,
+        producerId,
+        [],
+        ['leads:write'],
+      );
+      try {
+        const res = await api()
+          .get(`${base}/options`)
+          .set(authHeader(ownerToken))
+          .expect(200);
+        const { assignees } = res.body as ReconciliationOptionsResponse;
+        const custom = assignees.find((a) => a.id === ctx.readOnlyUserId);
+        expect(custom?.roles).toEqual(['Senior Producer']);
+        expect(assignees.map((a) => a.id)).not.toContain(producerId);
+
+        const row = await seedRow();
+        await assign(row, { userId: producerId }).expect(400);
+        await assign(row, { userId: ctx.readOnlyUserId }).expect(200);
+      } finally {
+        await roleAssignments.setUserOverrides(
+          ctx.agencyId,
+          producerId,
+          [],
+          [],
+        );
+        await roleAssignments.setUserRoles(
+          { userId: ownerId, isPlatformAdmin: true },
+          ctx.agencyId,
+          ctx.readOnlyUserId,
+          [ctx.readOnlyRoleId],
+        );
+        await roleModel.deleteOne({ _id: custom._id });
+      }
     });
   });
 
@@ -313,8 +378,7 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
     });
 
     it.each([
-      ['the owner', () => ownerId],
-      ['someone whose role is neither', () => ctx.readOnlyUserId],
+      ['someone who cannot work leads', () => ctx.readOnlyUserId],
       ['a Producer in another agency', () => ctx.otherAgencyUserId],
       ['nobody at all', () => new Types.ObjectId().toHexString()],
     ])('refuses %s with a 400', async (_label, userId) => {

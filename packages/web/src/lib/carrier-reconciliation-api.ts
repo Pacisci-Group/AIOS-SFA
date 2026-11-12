@@ -63,9 +63,17 @@ export const reconciliationAssignedRowKey = (rowId: string) =>
 
 const BASE = "/carrier-reconciliation";
 
-export function getReconciliationRuns(includeSuperseded = false) {
+/** The API's largest page; the picker loads more on request. */
+export const RECONCILIATION_RUNS_PAGE_SIZE = 50;
+
+export function getReconciliationRuns(page = 1, includeSuperseded = false) {
+  const search = new URLSearchParams({
+    page: String(page),
+    pageSize: String(RECONCILIATION_RUNS_PAGE_SIZE),
+    includeSuperseded: String(includeSuperseded),
+  });
   return apiFetch<ReconciliationRunListResponse>(
-    `${BASE}/runs?pageSize=50&includeSuperseded=${includeSuperseded}`,
+    `${BASE}/runs?${search.toString()}`,
   );
 }
 
@@ -270,8 +278,9 @@ export async function downloadReconciliationExport(
 }
 
 /**
- * Who a row can be assigned to: the agency's active Producers and CSRs, each
- * marked `canRecordSale` — only they can take a `missing_from_app` row.
+ * Who a row can be assigned to: the agency's active users who can work
+ * leads, each marked `canRecordSale` — only they can take a
+ * `missing_from_app` row.
  */
 export function getReconciliationOptions() {
   return apiFetch<ReconciliationOptionsResponse>(`${BASE}/options`);

@@ -81,6 +81,8 @@ export interface WorkTransferCounts {
   rotationsTakenOver: number;
   rotationsDeactivated: number;
   reconciliationRows: number;
+  /** Of those, the rows the successor cannot work, sent back to the owner. */
+  reconciliationRowsUnassigned: number;
 }
 
 export interface WorkTransferResult extends WorkTransferCounts {

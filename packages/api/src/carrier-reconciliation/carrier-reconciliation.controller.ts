@@ -76,7 +76,7 @@ export class CarrierReconciliationController {
     private readonly assignments: ReconciliationAssignmentsService,
   ) {}
 
-  /** The assignee picker: the agency's active Producers and CSRs. */
+  /** The assignee picker: the agency's active users who can work leads. */
   @Get('options')
   options(
     @Access() access: AccessContext,
@@ -170,7 +170,7 @@ export class CarrierReconciliationController {
   }
 
   /**
-   * Hand a row to a Producer or CSR, change its note, or take it back
+   * Hand a row to someone who can work leads, change its note, or take it back
    * (`userId: null`); the new assignee is notified. 400 for someone who is
    * not an active Producer/CSR here; 409 for a row already decided, an
    * unfinished run, a run a re-upload replaced (taking a row back there

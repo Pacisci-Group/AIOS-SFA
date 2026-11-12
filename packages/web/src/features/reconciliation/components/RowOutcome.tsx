@@ -303,6 +303,9 @@ function OutcomeActions({
         return;
       }
       if (next.step === "record_sale") {
+        // Booked already, on a policy numbered differently: the drawer says
+        // so, and the sale is corrected where it lives.
+        if (next.dealId) return;
         const params = new URLSearchParams({ reconciliationRowId: row.id });
         if (next.leadId) params.set("leadId", next.leadId);
         const form = next.leadId ? "/sold/new" : "/leads/new";
@@ -383,9 +386,11 @@ function OutcomeActions({
       ) : (
         <>
           <p className="text-sm text-muted-foreground">
-            {underWay.leadId
-              ? "The lead is in — the sale is next."
-              : "Next: who it was sold to, then the policy."}
+            {underWay.dealId
+              ? `The sale is booked, but none of its policies is numbered ${row.dash?.policyNumber ?? "as the Dash line"}, so it is not linked yet. Open the sale, correct the policy number, then Continue.`
+              : underWay.leadId
+                ? "The lead is in — the sale is next."
+                : "Next: who it was sold to, then the policy."}
           </p>
           <Button
             size="sm"

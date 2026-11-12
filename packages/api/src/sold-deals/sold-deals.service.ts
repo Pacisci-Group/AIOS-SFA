@@ -347,6 +347,16 @@ export class SoldDealsService {
       branchId,
       dto.leadId,
     );
+    // A Dash row's sale on another lead than the one it is under way on is
+    // refused before anything is booked (PAC-173 review), so an old tab can
+    // never finish the row against someone else.
+    if (dto.reconciliationRowId) {
+      await this.reconciliationOutcomes.assertSaleFitsRow(
+        access,
+        dto.reconciliationRowId,
+        lead._id.toString(),
+      );
+    }
     const household = await this.leadAccess.resolveHousehold(lead, access);
 
     await this.submissions.assertPolicyNumberFormats(dto, tenant.agencyId);
