@@ -26,12 +26,12 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("a chargeback under way, starting with the sale", function () {
+  test("adopts the sale the Sold chain booked, and waits on the cancel", function () {
     const outcome = res.getBody().outcome;
     expect(outcome.kind).to.equal("chargeback");
     expect(outcome.status).to.equal("in_progress");
-    expect(outcome.step).to.equal("record_sale");
-    expect(outcome.dealId).to.equal(null);
+    expect(outcome.step).to.equal("cancel_policy");
+    expect(outcome.dealId).to.equal(bru.getVar("reconDealId"));
     expect(outcome.chargebackId).to.equal(null);
     expect(outcome.startedBy.id).to.equal(bru.getVar("currentUserId"));
   });
@@ -49,10 +49,14 @@ docs {
   cancelled it**: the assignee enters it, cancels it, and the chargeback is
   recorded. Two steps:
 
-  1. `record_sale` — exactly as **Sold**: `Create Lead (Chargeback Row)`, then
-     `Create Sold Deal (Chargeback Row)`, both carrying `reconciliationRowId`.
-     The sale moves the outcome to `cancel_policy`, linking the lead, the deal,
-     its household and the deal's policy that is the Dash line.
+  1. `record_sale` — exactly as **Sold**: the New Lead and Sold forms, both
+     carrying `reconciliationRowId` (`Create Lead (Dash Row)`, `Create Sold
+     Deal (Dash Row)`). The sale moves the outcome to `cancel_policy`, linking
+     the lead, the deal, its household and the deal's policy numbered as the
+     Dash line. **A sale already booked with that number is adopted** instead
+     (PAC-173 review) — as here: the row was finished as Sold and reopened, so
+     starting the Chargeback links that sale and goes straight to
+     `cancel_policy`. Nothing is booked twice.
   2. `cancel_policy` — `Cancel Row Policy`: the household page's Cancel dialog,
      **Record a chargeback** ticked and locked, with the carrier's cancellation
      date. That cancels the policy, writes the chargeback and finishes the row
