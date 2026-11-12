@@ -1,3 +1,7 @@
+import {
+  businessDateInstant,
+  businessDay,
+} from '../common/dates/business-dates';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
@@ -159,11 +163,18 @@ export class PolicyRewritesService {
        * only one value: this flow no longer has a separate `cancelledAt` field
        * the way `POST /policies/:id/rewrite` did.
        */
-      const cancelledAt = this.resolveCancelledAt(soldDate, originalDeal);
+      const timeZone = deps.ctx.timeZone;
+      const cancelledAt = this.resolveCancelledAt(
+        soldDate,
+        originalDeal,
+        timeZone,
+      );
+      // The window is judged on agency days (PAC-173 review): the original
+      // sale's, and the replacement's.
       const outcome = rewriteFinancialOutcome(
         cancelled.premium,
-        originalDeal?.soldDate ?? null,
-        cancelledAt,
+        businessDay(originalDeal?.soldDate, timeZone),
+        businessDay(cancelledAt, timeZone),
       );
 
       /*
@@ -274,7 +285,12 @@ export class PolicyRewritesService {
      * on a page load.
      */
     const chargebacks = await this.chargebackModel
-      .find({ agencyId, policyId: { $in: chain.map((p) => p._id) } })
+      // A voided row was taken back (PAC-173 review): it cost nothing.
+      .find({
+        agencyId,
+        policyId: { $in: chain.map((p) => p._id) },
+        voidedAt: null,
+      })
       .select('policyId amount withinClawbackWindow reason occurredAt')
       // Oldest first by when each was WRITTEN, so the maps below keep each
       // policy's newest: a policy reinstated and cancelled again with a
@@ -374,8 +390,13 @@ export class PolicyRewritesService {
   private resolveCancelledAt(
     raw: string,
     originalDeal: DealDocument | null,
+    timeZone: string,
   ): Date {
-    const parsed = new Date(`${raw}T00:00:00.000Z`);
+    // A business date: the agency's midnight that day, never UTC midnight,
+    // which a US calendar reads as the evening before (PAC-159).
+    const parsed = /^\d{4}-\d{2}-\d{2}/.test(raw)
+      ? businessDateInstant(raw, timeZone)
+      : new Date(Number.NaN);
     const now = new Date();
     let resolved = Number.isNaN(parsed.getTime()) ? now : parsed;
 

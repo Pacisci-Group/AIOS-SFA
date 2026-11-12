@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,11 +9,13 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import {
   DataScope,
+  ModuleKey,
   carrierPolicyNumberMatches,
   carrierSlug,
   isActivePolicyStatus,
   isFlowOnlyPolicyStatus,
   isTerminalPolicyStatus,
+  modulePermission,
   nextRenewalDate,
   normalizeCarrier,
   normalizePolicyStatus,
@@ -73,7 +76,15 @@ import {
 import { sessionOptions } from '../sold-deals/intake/sold-intake.types';
 import { StorageService } from '../storage/storage.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
-import { chargedProducerName, writeChargeback } from './chargeback-ledger';
+import {
+  chargedProducerName,
+  voidCancellationChargebacks,
+  writeChargeback,
+} from './chargeback-ledger';
+import {
+  businessDateInstant,
+  businessDay,
+} from '../common/dates/business-dates';
 import { CancelPolicyDto } from './dto/cancel-policy.dto';
 import { CheckPolicyDto } from './dto/check-policy.dto';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
@@ -566,6 +577,7 @@ export class PoliciesService {
      *    this is a null check and not a boolean.
      */
     const wasActive = policy.active;
+    let voidsChargeback = false;
     if (dto.status !== undefined) {
       /*
        * 3. **Only a move *to* a flow-only status is refused.** Re-sending the
@@ -597,9 +609,20 @@ export class PoliciesService {
       if (changing && isActivePolicyStatus(dto.status)) {
         policy.cancellation = undefined;
       }
+      /*
+       * Back on the books, or back to Pending: it is not cancelled any more,
+       * so a chargeback its cancellation wrote no longer stands (PAC-173
+       * review). Otherwise reinstating — the only way to correct a wrong
+       * carrier date — then cancelling again would charge the producer twice.
+       */
+      voidsChargeback =
+        changing &&
+        (isActivePolicyStatus(dto.status) ||
+          normalizePolicyStatus(dto.status) === 'Pending');
     }
 
     await policy.save();
+    if (voidsChargeback) await this.voidChargebacksOf(access, policy);
     if (policy.active !== wasActive) {
       await this.recountHouseholdPolicies(policy);
     }
@@ -718,6 +741,19 @@ export class PoliciesService {
 
     let chargeback: ChargebackDocument | null = null;
     let cancelledOn: Date | undefined;
+    // Charging premium back to a producer is a sales call, not a service one:
+    // it takes the permission to book sales and audit them, which a CSR who
+    // can cancel a policy does not hold (PAC-173 review).
+    if (
+      dto.chargeback &&
+      !access.permissions.includes(
+        modulePermission(ModuleKey.DealAudits, 'write'),
+      )
+    ) {
+      throw new ForbiddenException(
+        'Recording a chargeback needs permission to record sales (Deal Audits).',
+      );
+    }
     if (dto.chargeback) {
       const day = dto.chargeback.cancelledOn;
       const originalDeal = policy.dealId
@@ -734,8 +770,26 @@ export class PoliciesService {
         'the sale',
         access.timeZone,
       );
+      // The carrier's date as a calendar date, shown on the policy as typed —
+      // and as a business date for the ledger: the agency's midnight that
+      // day, so a report bucketing chargebacks by month puts one dated the
+      // 1st in that month (PAC-159, PAC-173 review).
       cancelledOn = parseFormDate(day);
+      const occurredAt = businessDateInstant(day, access.timeZone);
       const producerId = originalDeal?.producerId ?? null;
+      // One live cancellation chargeback per policy: a row a reinstatement
+      // failed to void, or one left by a status edit, is taken back first.
+      await voidCancellationChargebacks(
+        { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
+        {
+          session,
+          agencyId: target.agencyId,
+          policyId: policy._id,
+          by: Types.ObjectId.isValid(access.userId)
+            ? new Types.ObjectId(access.userId)
+            : null,
+        },
+      );
       chargeback = await writeChargeback(
         { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
         {
@@ -744,17 +798,19 @@ export class PoliciesService {
           originalDeal,
           reason: 'cancellation',
           replacementPolicyId: null,
+          // The window is judged on agency days: the sale's and the carrier's.
           outcome: rewriteFinancialOutcome(
             policy.premium,
-            originalDeal?.soldDate ?? null,
-            cancelledOn,
+            businessDay(originalDeal?.soldDate, access.timeZone),
+            day,
           ),
-          occurredAt: cancelledOn,
+          occurredAt,
           producerId,
           producerName: await chargedProducerName(this.userModel, producerId),
           fallbackBranchId: await this.chargebackBranch(
             policy,
             originalDeal?.branchId,
+            producerId,
             access,
             session,
           ),
@@ -799,6 +855,37 @@ export class PoliciesService {
   }
 
   /**
+   * {@link applyUpdate}'s void, after the save and in its own transaction
+   * (the row and the deal's reversal together). A failure is logged, not
+   * thrown: the policy edit has landed, and the next cancellation with a
+   * chargeback voids whatever is left before it writes its own.
+   */
+  private async voidChargebacksOf(
+    access: AccessContext,
+    policy: PolicyDocument,
+  ): Promise<void> {
+    try {
+      await this.transactions.run((session) =>
+        voidCancellationChargebacks(
+          { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
+          {
+            session,
+            agencyId: String(policy.agencyId),
+            policyId: policy._id,
+            by: Types.ObjectId.isValid(access.userId)
+              ? new Types.ObjectId(access.userId)
+              : null,
+          },
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Policy ${String(policy._id)} reinstated, but voiding its chargeback failed — the next cancellation voids it: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
    * The branch a chargeback row takes when the policy has none (migrated ones
    * can lack it; `TenantRecord.branchId` is required): the deal's, the
    * caller's, else the household's.
@@ -806,19 +893,36 @@ export class PoliciesService {
   private async chargebackBranch(
     policy: PolicyDocument,
     dealBranchId: string | undefined,
+    producerId: Types.ObjectId | null,
     access: AccessContext,
     session: ClientSession | null,
   ): Promise<string> {
     if (policy.branchId) return policy.branchId;
     if (dealBranchId) return dealBranchId;
     if (access.branchId) return access.branchId;
-    if (!policy.householdId) return '';
-    const household = await this.householdModel
-      .findOne({ _id: policy.householdId, agencyId: policy.agencyId })
-      .select('branchId')
-      .session(session)
-      .lean<{ branchId?: string }>();
-    return household?.branchId ?? '';
+    if (policy.householdId) {
+      const household = await this.householdModel
+        .findOne({ _id: policy.householdId, agencyId: policy.agencyId })
+        .select('branchId')
+        .session(session)
+        .lean<{ branchId?: string }>();
+      if (household?.branchId) return household.branchId;
+    }
+    // The producer the chargeback is charged to works in a branch even when
+    // nothing about the policy names one (PAC-173 review).
+    if (producerId) {
+      const producer = await this.userModel
+        .findOne({ _id: producerId })
+        .select('branchId')
+        .session(session)
+        .lean<{ branchId?: Types.ObjectId | string | null }>();
+      if (producer?.branchId) return String(producer.branchId);
+    }
+    // A ledger row needs a branch (`TenantRecord`): say so, rather than
+    // failing the whole cancel with a 500 inside its transaction.
+    throw new ConflictException(
+      'This policy, its sale, its household and its producer name no branch, so its chargeback cannot be recorded. Set the policy’s branch, then cancel it again.',
+    );
   }
 
   /**

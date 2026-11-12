@@ -1441,8 +1441,9 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
       // Charged to the producer credited on the deal — here, the assignee.
       expect(String(chargeback!.producerId)).toBe(producerId);
       expect(chargeback!.producerName).toBeTruthy();
+      // A business date: the agency's midnight (Chicago, CDT), never UTC's.
       expect(chargeback!.occurredAt.toISOString()).toBe(
-        `${CANCELLED_INSIDE}T00:00:00.000Z`,
+        `${CANCELLED_INSIDE}T05:00:00.000Z`,
       );
 
       expect(answer.policy).toMatchObject({
@@ -1645,7 +1646,7 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
       ).toBe(0);
     });
 
-    it('writes one chargeback when two cancels race', async () => {
+    it('writes one chargeback when two cancels race, and answers both with the finished row', async () => {
       const row = await seedRow();
       const { policyId } = await bookChargebackSale(row);
       const body = { reason: 'sold', cancelledOn: CANCELLED_INSIDE };
@@ -1654,8 +1655,8 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
         await Promise.all([cancelPolicy(row, body), cancelPolicy(row, body)])
       ).map((res) => res.status);
 
-      expect(statuses).toContain(201);
-      for (const status of statuses) expect([201, 409]).toContain(status);
+      // A double click: the second request answers what the first did.
+      expect(statuses).toEqual([201, 201]);
       expect(
         await chargebacks.countDocuments({ policyId: oid(policyId) }),
       ).toBe(1);

@@ -3990,6 +3990,13 @@ describe('SFA API (e2e)', () => {
       request(app.getHttpServer())
         .post(`/api/v1/households/${householdId}/policies/${policyId}/cancel`)
         .set(authHeader(token));
+    /** A status edit, as the policy's edit dialog sends it. */
+    const setStatus = (householdId: string, policyId: string, status: string) =>
+      request(app.getHttpServer())
+        .patch(`/api/v1/households/${householdId}/policies/${policyId}`)
+        .set(authHeader(ownerToken))
+        .send({ status })
+        .expect(200);
 
     beforeAll(async () => {
       policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
@@ -4170,7 +4177,7 @@ describe('SFA API (e2e)', () => {
       const dealId = await makeDeal('2026-09-02');
       const policyId = await makePolicy(householdId, { dealId, premium: 940 });
 
-      const res = await cancel(csrToken, householdId, policyId)
+      const res = await cancel(ownerToken, householdId, policyId)
         .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
         .expect(201);
 
@@ -4184,9 +4191,10 @@ describe('SFA API (e2e)', () => {
         replacementPolicyId: null,
       });
       expect(String(row.dealId)).toBe(String(dealId));
-      // Charged to the producer credited on the deal, not the CSR recording it.
+      // Charged to the producer credited on the deal, not whoever records it.
       expect(String(row.producerId)).toBe(String(producerObjectId));
-      expect(row.occurredAt.toISOString()).toBe('2026-09-20T00:00:00.000Z');
+      // A business date: the agency's midnight (Chicago, CDT), never UTC's.
+      expect(row.occurredAt.toISOString()).toBe('2026-09-20T05:00:00.000Z');
       expect(
         (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
       ).toBe(-940);
@@ -4281,7 +4289,7 @@ describe('SFA API (e2e)', () => {
       },
     );
 
-    it('a policy reinstated and cancelled again is charged back again', async () => {
+    it('a policy reinstated and cancelled again is charged back once, on the corrected date', async () => {
       const householdId = await makeHousehold();
       const dealId = await makeDeal('2026-09-02');
       const policyId = await makePolicy(householdId, { dealId, premium: 100 });
@@ -4289,13 +4297,10 @@ describe('SFA API (e2e)', () => {
       await cancel(ownerToken, householdId, policyId)
         .send({ reason: 'sold', chargeback: { cancelledOn: '2026-10-15' } })
         .expect(201);
-      await policyModel.updateOne(
-        { _id: new Types.ObjectId(policyId) },
-        {
-          $set: { policyStatus: 'Active', active: true },
-          $unset: { cancellation: 1 },
-        },
-      );
+      // ...reinstated — the only way to correct it — which voids that one...
+      await setStatus(householdId, policyId, 'Active');
+      const [voided] = await ledgerFor(policyId);
+      expect(voided.voidedAt).toBeInstanceOf(Date);
 
       // ...then again with the right, EARLIER date, inside it.
       const res = await cancel(ownerToken, householdId, policyId)
@@ -4303,14 +4308,16 @@ describe('SFA API (e2e)', () => {
         .expect(201);
       const current = (res.body as PolicySummary).cancellation?.chargebackId;
 
-      expect(await ledgerFor(policyId)).toHaveLength(2);
+      const ledger = await ledgerFor(policyId);
+      expect(ledger).toHaveLength(2);
+      expect(ledger.filter((row) => !row.voidedAt)).toHaveLength(1);
       // Only the second fell inside the month: one $inc, by its row.
       expect(
         (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
       ).toBe(-100);
 
-      // The history reports the row written last — the policy's current
-      // cancellation — not the one with the later carrier date; it totals both.
+      // The history reports the live row — the policy's current cancellation —
+      // and totals only what still stands.
       const history = await request(app.getHttpServer())
         .get(`/api/v1/policies/${policyId}/history`)
         .set(authHeader(ownerToken))
@@ -4326,7 +4333,63 @@ describe('SFA API (e2e)', () => {
         chargebackReason: 'cancellation',
         withinClawbackWindow: true,
       });
-      expect(chain.totalChargeback).toBe(200);
+      expect(chain.totalChargeback).toBe(100);
+    });
+
+    it('reverses the sold credit when a charged-back policy is reinstated, so a re-cancel never doubles it', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 1200 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-1200);
+
+      await setStatus(householdId, policyId, 'Active');
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-22' } })
+        .expect(201);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-1200);
+    });
+
+    it('voids a charged-back policy set back to Pending, so cancelling it again charges once', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 300 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      await setStatus(householdId, policyId, 'Pending');
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-21' } })
+        .expect(201);
+      expect(
+        (await ledgerFor(policyId)).filter((row) => !row.voidedAt),
+      ).toHaveLength(1);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-300);
+    });
+
+    it('lets a CSR cancel, but not charge premium back to a producer', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId });
+      await cancel(csrToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(403);
+      expect(await ledgerFor(policyId)).toHaveLength(0);
+      await cancel(csrToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(201);
     });
 
     it('never puts an old cancellation chargeback on a later transfer', async () => {
@@ -15250,21 +15313,19 @@ describe('SFA API (e2e)', () => {
           const policyId = (await getDeal(producerToken, created.id))
             .policies[0].id;
           const setAudit = (set: Record<string, unknown>) =>
-            app
-              .get<Model<DealAudit>>(getModelToken(DealAudit.name))
-              .updateOne(
-                { agencyId: seed.agencyId, dealId: dealRef(created.id) },
-                {
-                  $set: set,
-                  $setOnInsert: {
-                    branchId: seed.branchId,
-                    title: 'Locked audit',
-                    auditDate: new Date(),
-                    isTestRecord: false,
-                  },
+            app.get<Model<DealAudit>>(getModelToken(DealAudit.name)).updateOne(
+              { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+              {
+                $set: set,
+                $setOnInsert: {
+                  branchId: seed.branchId,
+                  title: 'Locked audit',
+                  auditDate: new Date(),
+                  isTestRecord: false,
                 },
-                { upsert: true },
-              );
+              },
+              { upsert: true },
+            );
           const patchPolicy = (expected: number) =>
             request(app.getHttpServer())
               .patch(`/api/v1/policies/${policyId}`)
@@ -15291,9 +15352,9 @@ describe('SFA API (e2e)', () => {
             { auditStatus: 'Pending', submittedById: sale!.producerId },
           ]) {
             await setAudit(locked);
-            expect(
-              (await getDeal(producerToken, created.id)).auditLocked,
-            ).toBe(true);
+            expect((await getDeal(producerToken, created.id)).auditLocked).toBe(
+              true,
+            );
             expect((await leadDeal())?.auditLocked).toBe(true);
 
             const refused = await patchSoldDate(

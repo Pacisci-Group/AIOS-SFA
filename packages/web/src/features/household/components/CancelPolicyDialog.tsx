@@ -5,6 +5,8 @@ import type {
   PolicyView,
 } from "@sfa/shared";
 import {
+  ModuleKey,
+  modulePermission,
   POLICY_CANCELLATION_NOTE_MAX,
   POLICY_CANCELLATION_REASONS,
   POLICY_CANCELLATION_REASON_LABELS,
@@ -26,6 +28,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useAppForm } from "@/hooks/form";
+import { usePermissions } from "@/hooks/usePermissions";
 import { getStoredUser } from "@/lib/api-client";
 import { agencyTodayYmd } from "@/lib/dates";
 import { cancelHouseholdPolicy } from "@/lib/policies-api";
@@ -153,6 +156,11 @@ export function CancelPolicyDialog({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const chargebackRequired = chargebackMode === "required";
+  // Charging premium back to a producer takes the permission to record sales
+  // (PAC-173 review): a CSR who can cancel a policy is not offered the box.
+  const { can } = usePermissions();
+  const offersChargeback =
+    chargebackRequired || can(modulePermission(ModuleKey.DealAudits, "write"));
   // Re-read on every open: a page left open overnight must offer today.
   const [today, setToday] = useState(() =>
     agencyTodayYmd(getStoredUser()?.timeZone),
@@ -292,15 +300,17 @@ export function CancelPolicyDialog({
               </form.AppField>
             )}
 
-            <form.AppField name="chargeback">
-              {(f) => (
-                <f.CheckboxField
-                  label="Record a chargeback"
-                  hint="The premium is charged back to the producer who sold it. Inside a month of the sale, their sold credit is reversed too."
-                  disabled={chargebackRequired}
-                />
-              )}
-            </form.AppField>
+            {offersChargeback && (
+              <form.AppField name="chargeback">
+                {(f) => (
+                  <f.CheckboxField
+                    label="Record a chargeback"
+                    hint="The premium is charged back to the producer who sold it. Inside a month of the sale, their sold credit is reversed too."
+                    disabled={chargebackRequired}
+                  />
+                )}
+              </form.AppField>
+            )}
 
             {withChargeback && (
               <form.AppField name="cancelledOn">

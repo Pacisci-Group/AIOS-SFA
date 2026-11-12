@@ -99,7 +99,9 @@ docs {
   charges money back. Correcting the number on the sale and retrying (or
   Continue) links it.
 
-  A row already finished as a chargeback answers `201` unchanged. A policy
+  A row already finished as a chargeback answers `201` unchanged — so does a
+  second request racing the first (a double click), once the first has
+  finished it (PAC-173 review). A policy
   already cancelled **with** a cancellation chargeback (from the household
   page) finishes the row with that one.
 

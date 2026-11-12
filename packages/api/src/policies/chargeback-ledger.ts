@@ -117,6 +117,60 @@ export async function writeChargeback(
 }
 
 /**
+ * Take back a policy's live **cancellation** chargebacks (PAC-173 review):
+ * the cancellation they charged for no longer stands — the policy was
+ * reinstated, or is being cancelled again with another date. Each row is
+ * stamped `voidedAt`, never deleted (the ledger keeps what was charged and
+ * undone), and the deal adjustment it made is reversed with the opposite
+ * `$inc` in the same session. Rewrite chargebacks are not touched: a rewrite
+ * is undone by its own flow.
+ *
+ * A compare-and-swap per row on `voidedAt: null`, so two callers racing — or
+ * a transaction retry — reverse an adjustment once. Returns how many it
+ * voided.
+ */
+export async function voidCancellationChargebacks(
+  models: ChargebackLedgerModels,
+  args: {
+    session: ClientSession | null;
+    agencyId: string;
+    policyId: Types.ObjectId;
+    by: Types.ObjectId | null;
+  },
+): Promise<number> {
+  const { session, agencyId, policyId, by } = args;
+  const live = await models.chargebackModel
+    .find({ agencyId, policyId, reason: 'cancellation', voidedAt: null })
+    .select('_id dealId soldAdjustment')
+    .session(session)
+    .lean<
+      {
+        _id: Types.ObjectId;
+        dealId: Types.ObjectId | null;
+        soldAdjustment: number;
+      }[]
+    >();
+  let voided = 0;
+  for (const row of live) {
+    const done = await models.chargebackModel.updateOne(
+      { _id: row._id, agencyId, voidedAt: null },
+      { $set: { voidedAt: new Date(), voidedBy: by } },
+      sessionOptions(session),
+    );
+    if (!done.modifiedCount) continue;
+    voided += 1;
+    if (row.dealId && row.soldAdjustment) {
+      await models.dealModel.updateOne(
+        { _id: row.dealId, agencyId },
+        { $inc: { chargebackAdjustment: -row.soldAdjustment } },
+        sessionOptions(session),
+      );
+    }
+  }
+  return voided;
+}
+
+/**
  * The producer a chargeback is charged to, by name — '' when there is none,
  * and never a throw on a deactivated account. Denormalised onto the row
  * because a producer can be deactivated later.

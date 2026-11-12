@@ -57,11 +57,20 @@ docs {
   The Cancel dialog with **Record a chargeback** ticked (PAC-173 PR 6): the
   policy is cancelled and a `chargebacks` row is written in the same
   transaction, charged to the producer on the policy's deal and dated on the
-  carrier's day. The premium is charged back; whether the producer's sold
-  credit is reversed too depends on whether the demo sale is less than a
-  month old.
+  carrier's day — stored as the agency's midnight that day (`occurredAt`, a
+  business date), and judged against the sale on agency days. The premium is
+  charged back; whether the producer's sold credit is reversed too depends on
+  whether the demo sale is less than a month old.
+
+  Recording one takes **`deal_audits:write`** besides the cancel's own
+  permission (PAC-173 review): charging premium back to a producer is a
+  sales call, so a CSR who can cancel gets a `403` with `chargeback` sent
+  (and the dialog does not offer the box). A policy, sale, household and
+  producer that all name no branch is a `409` — the ledger row needs one.
 
   Each run adds a ledger row for this policy: the ledger is append-only, and
-  `Reinstate After Chargeback`, next, does not remove it. See
-  `Cancel Household Policy` for the endpoint.
+  `Reinstate After Chargeback`, next, voids it rather than removing it. A
+  cancellation with a chargeback first voids any live one the policy still
+  has, so only one ever stands. See `Cancel Household Policy` for the
+  endpoint.
 }

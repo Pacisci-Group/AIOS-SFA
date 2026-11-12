@@ -557,6 +557,7 @@ export class ReconciliationOutcomesService {
         _id: chargebackId,
         agencyId: row.agencyId,
         reason: 'cancellation',
+        voidedAt: null,
       })
       .select('_id')
       .lean<{ _id: Types.ObjectId }>();
@@ -1499,6 +1500,7 @@ export class ReconciliationOutcomesService {
         agencyId: row.agencyId,
         policyId: new Types.ObjectId(replaced),
         reason: 'cancel_rewrite',
+        voidedAt: null,
       })
       .select('_id')
       .lean<{ _id: Types.ObjectId }>();

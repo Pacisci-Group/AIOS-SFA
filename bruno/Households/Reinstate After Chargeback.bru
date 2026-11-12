@@ -37,7 +37,10 @@ docs {
   # PATCH /households/:id/policies/:policyId — put the policy back
 
   Leaves the household as the folder found it, as `Reinstate Cancelled
-  Policy` does. The chargeback stays in the ledger: reversing one is a
-  reversal row, which nothing writes yet (PAC-123). See `Update Household
-  Policy` for the endpoint.
+  Policy` does. The cancellation's chargeback no longer stands, so it is
+  **voided** (PAC-173 review): the ledger row stays, stamped `voidedAt`, and
+  the sold-credit reversal it made on the deal is undone in the same
+  transaction. A later cancellation with a chargeback is then the only live
+  one — re-cancelling never charges twice. A status set back to `Pending`
+  voids it the same way. See `Update Household Policy` for the endpoint.
 }
