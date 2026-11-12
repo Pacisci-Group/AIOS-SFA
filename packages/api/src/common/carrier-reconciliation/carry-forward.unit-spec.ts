@@ -1,5 +1,6 @@
 import {
   carriedAssignment,
+  carriedFields,
   carriedOutcome,
   carriedReview,
   type CarriedRow,
@@ -298,5 +299,82 @@ describe('carriedOutcome', () => {
       // Nothing was decided: the new row asks again.
       expect(carriedReview(matchedNow, waiting)).toBeNull();
     });
+  });
+});
+
+describe('carriedFields — an outcome held open (PAC-173 review)', () => {
+  const everyone = { canTakeRows: () => true };
+  const heldRewrite: RowOutcome = {
+    kind: 'cancel_rewrite',
+    status: 'in_progress',
+    step: 'write_replacement',
+    note: null,
+    leadId: 'lead-1',
+    dealId: 'deal-1',
+    policyId: 'policy-1',
+    householdId: 'hh-1',
+    replacementPolicyId: null,
+    chargebackId: null,
+    startedById: 'u-producer',
+    startedAt: new Date('2026-10-03T12:00:00Z'),
+    completedById: null,
+    completedAt: null,
+  };
+  const assignment = {
+    userId: 'u-producer',
+    assignedById: 'u-owner',
+    assignedAt: new Date('2026-10-02T12:00:00Z'),
+    note: null,
+  };
+  const open = {
+    status: 'open' as const,
+    resolution: null,
+    reviewedById: null,
+    reviewedAt: null,
+  };
+  // Booking the Dash policy turned the row `matched`, and it asks nothing.
+  const nowMatched = {
+    rowKey: row.rowKey,
+    match: 'matched' as const,
+    issues: [],
+    needsReview: false,
+  };
+
+  it('carries to the row that now matches the sale it booked, with its assignee, and keeps it asking', () => {
+    const fields = carriedFields(
+      nowMatched,
+      previous({ ...open, assignment, outcome: heldRewrite }),
+      everyone,
+    );
+    expect(fields.outcome).toEqual(heldRewrite);
+    expect(fields.assignment).toEqual(assignment);
+    expect(fields.needsReview).toBe(true);
+    // The decision itself does not carry: the row says something else now.
+    expect(fields.review).toBeUndefined();
+  });
+
+  it('still carries the outcome when its assignee can no longer take rows', () => {
+    const fields = carriedFields(
+      nowMatched,
+      previous({ ...open, assignment, outcome: heldRewrite }),
+      { canTakeRows: () => false },
+    );
+    expect(fields.outcome).toEqual(heldRewrite);
+    expect(fields.assignment).toBeUndefined();
+  });
+
+  it('does not carry an unbooked outcome to a row that changed', () => {
+    const unbooked: RowOutcome = {
+      ...heldRewrite,
+      step: 'record_sale',
+      dealId: null,
+      policyId: null,
+    };
+    const fields = carriedFields(
+      nowMatched,
+      previous({ ...open, assignment, outcome: unbooked }),
+      everyone,
+    );
+    expect(fields).toEqual({});
   });
 });

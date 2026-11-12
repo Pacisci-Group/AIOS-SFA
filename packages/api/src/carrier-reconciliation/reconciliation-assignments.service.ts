@@ -11,7 +11,8 @@ import {
   ModuleKey,
   RECONCILIATION_ASSIGNEE_CANNOT_SELL,
   RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
-  RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
+  RECONCILIATION_ASSIGNEE_PERMISSION,
+  RECONCILIATION_SALE_OUTCOME_KINDS,
   RECONCILIATION_TAB_LABELS,
   canRecordReconciliationSale,
   canSetUpReconciliationService,
@@ -23,6 +24,7 @@ import {
   type ReconciliationAssignedRow,
   type ReconciliationAssignedRowDetail,
   type ReconciliationOptionsResponse,
+  type ReconciliationOutcomeKind,
   type ReconciliationRowView,
 } from '@sfa/shared';
 import { Types, type Model } from 'mongoose';
@@ -35,31 +37,23 @@ import {
   currentRunIds,
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
-import {
-  isPendingServiceIntake,
-  type RowAssignment,
-} from '../common/carrier-reconciliation/carry-forward';
-import { asksForDecision } from '../common/carrier-reconciliation/reconcile';
+import type { RowAssignment } from '../common/carrier-reconciliation/carry-forward';
+import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
+import { isHeldOpen } from '../common/carrier-reconciliation/outcome-state';
 import { displayName, displayNamesFor } from '../common/domain/user-names';
 import { notificationRequested } from '../inngest/events';
 import { InngestService } from '../inngest/inngest.service';
-import { PermissionsService } from '../permissions/permissions.service';
 import {
-  activeRoleHolders,
-  type RoleHolderModels,
-} from '../permissions/role-holders';
-import { UserRole } from '../permissions/schemas/user-role.schema';
-import {
-  AgencyRole,
-  type AgencyRoleDocument,
-} from '../roles/schemas/agency-role.schema';
+  PermissionsService,
+  type PermissionHolder,
+} from '../permissions/permissions.service';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   AssignedQueryDto,
   AssignRowDto,
 } from './dto/carrier-reconciliation.dto';
-import { noLiveHandOffClaim, outcomeAsRead } from './outcome-filters';
+import { outcomeAsRead } from './outcome-filters';
 import {
   isStale,
   reconciliationPrefill,
@@ -80,8 +74,9 @@ const READ = modulePermission(ModuleKey.CarrierReconciliation, 'read');
 
 /**
  * Handing Dash rows to people (PAC-173): the owner assigns a row that needs
- * a decision to one of the agency's **Producers or CSRs**, who is notified
- * and works it from their own page.
+ * a decision to someone in the agency who can work leads
+ * (`RECONCILIATION_ASSIGNEE_PERMISSION` — by permission, not role), who is
+ * notified and works it from their own page.
  *
  * The assignment is its own field on the row (`assignment`), never part of
  * `review`: saving a decision replaces `review` whole and must not drop who
@@ -118,48 +113,39 @@ export class ReconciliationAssignmentsService {
     private readonly rowModel: Model<ReconciliationRowDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
-    @InjectModel(AgencyRole.name)
-    private readonly roleModel: Model<AgencyRoleDocument>,
-    @InjectModel(UserRole.name)
-    private readonly userRoleModel: Model<UserRole>,
     @InjectModel(Carrier.name)
     private readonly carrierModel: Model<CarrierDocument>,
     @InjectModel(Agency.name)
     private readonly agencyModel: Model<AgencyDocument>,
     private readonly inngest: InngestService,
     /**
-     * Effective permissions, for who may be given a row: a `missing_from_app`
-     * one needs someone who can book a sale, a 1-800 one someone who can set
-     * it up for service.
+     * Who may be given a row — the pool, and who of it can book a sale or
+     * set a 1-800 policy up for service — is decided by effective
+     * permission, never by role name.
      */
     private readonly permissions: PermissionsService,
   ) {}
 
   /**
-   * The assignee picker: the agency's active Producers and CSRs, by name,
-   * each marked with whether they can book a sale — only they can be given a
-   * row missing from the app — and whether they can set a 1-800 policy up for
-   * service, which a Dash-only 1-800 row needs.
+   * The assignee picker: the agency's active users who can work leads, by
+   * name, with their role names for display, each marked with whether they
+   * can book a sale — only they can be given a row missing from the app —
+   * and whether they can set a 1-800 policy up for service, which a
+   * Dash-only 1-800 row needs.
    */
   async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
-    const agencyId = clientAgencyId(access);
-    const holders = await activeRoleHolders(
-      this.roleHolderModels(),
-      agencyId,
-      RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
-    );
-    const can = await this.whoCan(
-      agencyId,
-      holders.map((user) => user._id),
+    const holders = await this.permissions.activeUsersHolding(
+      clientAgencyId(access),
+      RECONCILIATION_ASSIGNEE_PERMISSION,
     );
     return {
       assignees: holders.map((user) => ({
         id: String(user._id),
         name: displayName(user),
         email: user.email ?? '',
-        roles: user.roles,
-        canRecordSale: can.get(String(user._id))?.sell ?? false,
-        canSetUpService: can.get(String(user._id))?.service ?? false,
+        roles: user.roleNames,
+        canRecordSale: canRecordReconciliationSale(user.permissions),
+        canSetUpService: canSetUpReconciliationService(user.permissions),
       })),
     };
   }
@@ -220,12 +206,22 @@ export class ReconciliationAssignmentsService {
           note: dto.note === undefined ? current.note : dto.note || null,
         };
       } else {
-        await this.assertAssignable(agencyId, dto.userId);
-        if (row.tabs.includes('missing_from_app')) {
-          await this.assertCanRecordSale(agencyId, dto.userId);
+        const holder = await this.assertAssignable(agencyId, dto.userId);
+        // A row missing from the app is booked as a sale, and so is one whose
+        // sale is under way and kept for them (`isHeldOpen`).
+        if (
+          row.tabs.includes('missing_from_app') ||
+          (isHeldOpen(row.outcome) && isSaleKind(row.outcome!.kind))
+        ) {
+          assertCanRecordSale(holder.permissions);
         }
-        if (reconciliationOutcomeKinds(row).includes('service_intake')) {
-          await this.assertCanSetUpService(agencyId, dto.userId);
+        // A 1-800 row that offers a service intake — or one whose intake is
+        // under way and kept for them — needs someone who can set it up.
+        if (
+          reconciliationOutcomeKinds(row).includes('service_intake') ||
+          (isHeldOpen(row.outcome) && row.outcome!.kind === 'service_intake')
+        ) {
+          assertCanSetUpService(holder.permissions);
         }
         next = {
           userId: dto.userId,
@@ -238,13 +234,13 @@ export class ReconciliationAssignmentsService {
 
     // The person changes (or nobody has it now): an outcome they had under
     // way goes with them. Their lead stays theirs; the next person starts
-    // over. A finished outcome is the record of what was done — it stays.
+    // over. A finished outcome is the record of what was done — it stays —
+    // and so does one that has booked a sale (`isHeldOpen`): it is the only
+    // link to that sale, and whoever takes the row next continues it.
     const clearsOutcome =
-      next?.userId !== current?.userId && row.outcome?.status === 'in_progress';
-    // A 1-800 service intake still waiting on its welcome call (PAC-173 PR 5)
-    // goes only while nobody is opening the call, and the row then asks what
-    // its own tabs do.
-    const clearsPending = clearsOutcome && isPendingServiceIntake(row.outcome);
+      next?.userId !== current?.userId &&
+      row.outcome?.status === 'in_progress' &&
+      !isHeldOpen(row.outcome);
 
     // Compare-and-swap on the assignment just read: two people assigning the
     // same row at once must not both believe they won, or the loser's
@@ -263,17 +259,13 @@ export class ReconciliationAssignmentsService {
               }
             : { assignment: null }),
           ...outcomeAsRead(row.outcome),
-          ...(clearsPending ? noLiveHandOffClaim() : {}),
+          // A re-upload that replaced the run meanwhile copied the row's
+          // assignment as it stood; a write here now would be lost.
+          ...LIVE_ROW,
         },
         {
           $set: clearsOutcome
-            ? {
-                assignment: next,
-                outcome: null,
-                ...(clearsPending
-                  ? { needsReview: asksForDecision(row.tabs) }
-                  : {}),
-              }
+            ? { assignment: next, outcome: null }
             : { assignment: next },
         },
         { new: true },
@@ -281,7 +273,7 @@ export class ReconciliationAssignmentsService {
       .lean<LeanRow>();
     if (!updated) {
       throw new ConflictException(
-        'Someone else changed who this row is with, or what is recorded on it. Reload it and try again.',
+        'Someone else changed who this row is with or what is recorded on it, or a newer upload of this report just replaced it. Reload it and try again.',
       );
     }
 
@@ -444,93 +436,25 @@ export class ReconciliationAssignmentsService {
   // Helpers
   // -------------------------------------------------------------------------
 
-  private roleHolderModels(): RoleHolderModels {
-    return {
-      roleModel: this.roleModel,
-      userRoleModel: this.userRoleModel,
-      userModel: this.userModel,
-    };
-  }
-
-  /** 400 unless `userId` is an active Producer or CSR of this agency. */
+  /**
+   * The person, if they can be given a row — an active user of this agency
+   * who can work leads — with their effective permissions; else a 400.
+   */
   private async assertAssignable(
     agencyId: string,
     userId: string,
-  ): Promise<void> {
-    const [holder] = await activeRoleHolders(
-      this.roleHolderModels(),
+  ): Promise<PermissionHolder> {
+    const [holder] = await this.permissions.activeUsersHolding(
       agencyId,
-      RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
+      RECONCILIATION_ASSIGNEE_PERMISSION,
       { _id: new Types.ObjectId(userId) },
     );
     if (!holder) {
       throw new BadRequestException(
-        'A row can be assigned only to an active Producer or CSR of this agency.',
+        'A row can be assigned only to an active user of this agency who can work leads.',
       );
     }
-  }
-
-  /** 400 unless `userId` can book a sale — a `missing_from_app` row's rule. */
-  private async assertCanRecordSale(
-    agencyId: string,
-    userId: string,
-  ): Promise<void> {
-    const can = await this.whoCan(agencyId, [new Types.ObjectId(userId)]);
-    if (!can.get(userId)?.sell) {
-      throw new BadRequestException({
-        code: RECONCILIATION_ASSIGNEE_CANNOT_SELL,
-        message:
-          'A Dash sale missing from the app can be given only to someone who can book a sale (create leads and record sales).',
-      });
-    }
-  }
-
-  /** 400 unless `userId` can set a 1-800 policy up for service — a Dash-only 1-800 row's rule. */
-  private async assertCanSetUpService(
-    agencyId: string,
-    userId: string,
-  ): Promise<void> {
-    const can = await this.whoCan(agencyId, [new Types.ObjectId(userId)]);
-    if (!can.get(userId)?.service) {
-      throw new BadRequestException({
-        code: RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
-        message:
-          'A 1-800 policy the app does not have can be given only to someone who can set it up for service (create leads).',
-      });
-    }
-  }
-
-  /**
-   * What each of these users can do with a row — book a sale, set a 1-800
-   * policy up for service — by their **effective** permissions: role defaults
-   * plus their own grants, less revokes, within the agency's enabled modules;
-   * never by role name. One resolve per person: the picker lists a handful of
-   * Producers and CSRs.
-   */
-  private async whoCan(
-    agencyId: string,
-    userIds: readonly Types.ObjectId[],
-  ): Promise<Map<string, { sell: boolean; service: boolean }>> {
-    if (!userIds.length) return new Map();
-    const users = await this.userModel
-      .find({
-        _id: { $in: [...userIds] },
-        agencyId: new Types.ObjectId(agencyId),
-      })
-      .select('agencyId isPlatformAdmin');
-    const verdicts = await Promise.all(
-      users.map(async (user) => {
-        const permissions = await this.permissions.resolveForUser(user);
-        return [
-          String(user._id),
-          {
-            sell: canRecordReconciliationSale(permissions),
-            service: canSetUpReconciliationService(permissions),
-          },
-        ] as const;
-      }),
-    );
-    return new Map(verdicts);
+    return holder;
   }
 
   /** The catalog name of the carrier a run was uploaded for. */
@@ -620,4 +544,32 @@ export class ReconciliationAssignmentsService {
       );
     }
   }
+}
+
+/** 400 unless these permissions can book a sale — a sale row's rule. */
+function assertCanRecordSale(permissions: readonly string[]): void {
+  if (!canRecordReconciliationSale(permissions)) {
+    throw new BadRequestException({
+      code: RECONCILIATION_ASSIGNEE_CANNOT_SELL,
+      message:
+        'A Dash sale can be given only to someone who can book a sale (create leads and record sales).',
+    });
+  }
+}
+
+/** 400 unless these permissions can set a 1-800 policy up for service. */
+function assertCanSetUpService(permissions: readonly string[]): void {
+  if (!canSetUpReconciliationService(permissions)) {
+    throw new BadRequestException({
+      code: RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
+      message:
+        'A 1-800 policy the app does not have can be given only to someone who can set it up for service (create leads).',
+    });
+  }
+}
+
+function isSaleKind(kind: ReconciliationOutcomeKind): boolean {
+  return (RECONCILIATION_SALE_OUTCOME_KINDS as readonly string[]).includes(
+    kind,
+  );
 }

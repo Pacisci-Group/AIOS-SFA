@@ -9,6 +9,8 @@ import {
   RECONCILIATION_OUTCOME_LOCKED,
   RECONCILIATION_OUTCOME_NOT_ALLOWED,
   RECONCILIATION_OUTCOME_RESOLUTIONS,
+  RECONCILIATION_SALE_POLICY_UNMATCHED,
+  RECONCILIATION_SALE_WRONG_LEAD,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRowDetail,
   type ReconciliationOptionsResponse,
@@ -1390,6 +1392,111 @@ describe('Dash Reconciliation row outcomes (e2e)', () => {
         kind: 'sold',
         status: 'in_progress',
       });
+    });
+  });
+
+  /**
+   * PAC-173 review: a row's sale is the sale on its lead holding a policy
+   * numbered as the Dash line — never a guess — and once booked it is never
+   * forgotten: kept when the row changes hands, adopted again after a reopen.
+   */
+  describe('a sale is the row’s', () => {
+    it('holds a sale whose policy is numbered differently, and links it once the number is corrected', async () => {
+      const row = await seedRow();
+      const prefill = await start(row, 'sold');
+      const leadId = await createLead(leadBody(row, prefill));
+      const dashNumber = prefill.policy.policyNumber!;
+      const wrong = `${dashNumber.slice(0, -1)}9`;
+      const body = await saleBody(row, leadId, prefill);
+      body.policies[0].policyNumber = wrong;
+      const sale = (await sell(body).expect(201)).body as { id: string };
+
+      expect((await stored(row.rowId))?.outcome).toMatchObject({
+        status: 'in_progress',
+        step: 'record_sale',
+        dealId: sale.id,
+        policyId: null,
+      });
+      const refused = await record(row, { kind: 'sold' }).expect(409);
+      expect((refused.body as { code: string }).code).toBe(
+        RECONCILIATION_SALE_POLICY_UNMATCHED,
+      );
+
+      const policy = await policies.findOne({ dealId: oid(sale.id) }).lean();
+      await policies.updateOne(
+        { _id: policy!._id },
+        {
+          $set: {
+            policyNumber: dashNumber,
+            policyNumberKey: reconciliationPolicyKey(dashNumber),
+          },
+        },
+      );
+      const done = (await record(row, { kind: 'sold' }).expect(200))
+        .body as ReconciliationAssignedRowDetail;
+      expect(done.outcome).toMatchObject({
+        status: 'done',
+        dealId: sale.id,
+        policyId: String(policy!._id),
+      });
+    });
+
+    it('refuses, before booking, a sale on another lead than the row’s', async () => {
+      const row = await seedRow();
+      const prefill = await start(row, 'sold');
+      await createLead(leadBody(row, prefill));
+      const otherLead = await createLead(
+        leadBody(row, prefill, { reconciliationRowId: undefined }),
+      );
+
+      const res = await sell(await saleBody(row, otherLead, prefill)).expect(
+        409,
+      );
+      expect((res.body as { code: string }).code).toBe(
+        RECONCILIATION_SALE_WRONG_LEAD,
+      );
+      expect(await deals.countDocuments({ leadId: oid(otherLead) })).toBe(0);
+    });
+
+    it('keeps a booked outcome when the row is handed on, for the next person to finish', async () => {
+      const row = await seedRow();
+      const prefill = await start(row, 'cancel_rewrite');
+      const leadId = await createLead(leadBody(row, prefill));
+      const sale = (
+        await sell(await saleBody(row, leadId, prefill)).expect(201)
+      ).body as { id: string };
+      expect((await stored(row.rowId))?.outcome).toMatchObject({
+        step: 'write_replacement',
+        dealId: sale.id,
+      });
+
+      await assign(row, { userId: secondId }).expect(200);
+      const kept = await stored(row.rowId);
+      expect(kept?.assignment?.userId).toBe(secondId);
+      expect(kept?.outcome).toMatchObject({
+        status: 'in_progress',
+        step: 'write_replacement',
+        dealId: sale.id,
+      });
+      // Taking it back keeps it too, for whoever has the row next.
+      await assign(row, { userId: null }).expect(200);
+      expect((await stored(row.rowId))?.outcome?.dealId).toBe(sale.id);
+    });
+
+    it('adopts the sale a reopened row had booked, instead of asking for it again', async () => {
+      const row = await seedRow();
+      const prefill = await start(row, 'sold');
+      const leadId = await createLead(leadBody(row, prefill));
+      const sale = (
+        await sell(await saleBody(row, leadId, prefill)).expect(201)
+      ).body as { id: string };
+      await review(row, { status: 'open' }).expect(200);
+      expect((await stored(row.rowId))?.outcome).toBeNull();
+
+      const again = (await record(row, { kind: 'sold' }).expect(200))
+        .body as ReconciliationAssignedRowDetail;
+      expect(again.outcome).toMatchObject({ status: 'done', dealId: sale.id });
+      expect(await deals.countDocuments({ leadId: oid(leadId) })).toBe(1);
     });
   });
 

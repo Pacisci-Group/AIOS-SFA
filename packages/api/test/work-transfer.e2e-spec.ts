@@ -654,6 +654,50 @@ describe('Work transfer (e2e)', () => {
         const res = await transfer().expect(201);
         expect(res.body).toMatchObject({ reconciliationRows: 2 });
       });
+
+      /**
+       * The successor could not have been given the row through `assign()` —
+       * they cannot work leads — so it goes back to the owner unassigned
+       * instead of moving (PAC-173 review).
+       */
+      it('sends a row back to the owner when the successor cannot work leads', async () => {
+        const open = await seedRow(await seedRun());
+        await roleAssignments.setUserOverrides(
+          ctx.agencyId,
+          toId,
+          [],
+          ['leads:write'],
+        );
+        try {
+          const preview = await api()
+            .get(`/api/v1/users/${fromId}/work-transfer/preview`)
+            .query({ toUserId: toId })
+            .set(authHeader(ownerToken))
+            .expect(200);
+          expect(preview.body).toMatchObject({
+            reconciliationRows: 1,
+            reconciliationRowsUnassigned: 1,
+          });
+
+          const res = await transfer().expect(201);
+          expect(res.body).toMatchObject({
+            reconciliationRows: 1,
+            reconciliationRowsUnassigned: 1,
+          });
+          expect(
+            (await reconciliationRows.findById(open).lean())?.assignment,
+          ).toBeNull();
+          const record = await transfers
+            .findOne({ fromUserId: oid(fromId) })
+            .sort({ createdAt: -1 })
+            .lean();
+          expect(
+            record?.touched.reconciliationRowsReleased.map(String),
+          ).toEqual([open.toString()]);
+        } finally {
+          await roleAssignments.setUserOverrides(ctx.agencyId, toId, [], []);
+        }
+      });
     });
 
     it('records what it touched', async () => {

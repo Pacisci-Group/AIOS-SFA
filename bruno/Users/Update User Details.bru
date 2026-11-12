@@ -83,6 +83,9 @@ docs {
     **Update User Details (000 Sub-producer)**)
   - `403` — caller lacks `agency:users:write`
   - `404` — no such user in this agency
-  - `409` `ALLSTATE_CODE_DUPLICATE` — another user holds the code (see
-    **Update User Details (Duplicate Code)**)
+  - `403` — the user is an agency owner and the caller is not (an owner's
+    details are changed by the owner themself or another owner)
+  - `409` `ALLSTATE_CODE_DUPLICATE` — another user holds the Bind ID (see
+    **Update User Details (Duplicate Code)**). The sub-producer code is not
+    unique.
 }

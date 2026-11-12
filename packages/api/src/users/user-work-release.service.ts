@@ -18,6 +18,7 @@ import {
   currentRunIds,
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
+import { HELD_OPEN_OUTCOME } from '../common/carrier-reconciliation/outcome-state';
 import { currentUserObjectId } from '../common/context/request-context';
 import {
   CrmRotation,
@@ -226,23 +227,21 @@ export class UserWorkReleaseService {
       // Rows on a person's list hold no finished outcome (`openAssignmentsFilter`
       // leaves those out), so nothing finished is cleared here.
       //
-      // Except a 1-800 service intake waiting on its welcome call (PR 5): its
-      // household and policy are saved, so the outcome stays as their only
-      // link. The owner deciding or handing the row on opens the call, as does
-      // a re-upload of the same period; the call then re-checks its CSR, so it
-      // never goes to the person just removed.
+      // Except one held open (`HELD_OPEN_OUTCOME`, PAC-173 review) — a sale
+      // already booked, or a 1-800 service intake waiting on its welcome call
+      // (PR 5), whose household and policy are saved: the outcome is their
+      // only link, so it stays for whoever the owner hands the row to next.
+      // The owner deciding or handing on a pending intake opens the call, as
+      // does a re-upload of the same period; the call then re-checks its CSR,
+      // so it never goes to the person just removed.
       (async () => {
-        const pendingIntake = {
-          'outcome.kind': 'service_intake',
-          'outcome.step': 'start_onboarding',
-        };
         const [cleared, kept] = await Promise.all([
           this.reconciliationRowModel.updateMany(
-            { ...f.reconciliationRows, $nor: [pendingIntake] },
+            { ...f.reconciliationRows, $nor: [HELD_OPEN_OUTCOME] },
             { $set: { assignment: null, outcome: null } },
           ),
           this.reconciliationRowModel.updateMany(
-            { ...f.reconciliationRows, ...pendingIntake },
+            { ...f.reconciliationRows, ...HELD_OPEN_OUTCOME },
             { $set: { assignment: null } },
           ),
         ]);
