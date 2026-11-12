@@ -1121,6 +1121,7 @@ export class UsersService {
    * leaver's Bind ID still names who bound their old sales.
    */
   async updateDetails(
+    actor: ActingUser,
     agencyId: string,
     userId: string,
     dto: UpdateUserDetailsDto,
@@ -1133,6 +1134,7 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    await this.ownerProtection.assertMayEditOwner(actor, agencyId, userId);
 
     if (dto.firstName !== undefined)
       user.firstName = dto.firstName ?? undefined;

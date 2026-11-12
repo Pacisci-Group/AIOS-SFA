@@ -1,0 +1,42 @@
+meta {
+  name: Assign Row (Outside the Pool)
+  type: http
+  seq: 28
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "000000000000000000000000"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # PATCH …/assignment — someone outside the pool (400)
+
+  A row can be assigned only to an **active user of this agency who can work
+  leads** — effective permissions that include `leads:write`, decided by
+  permission and never by role name. Anyone else is a 400: here an id that
+  names nobody; the same check refuses someone whose role (or a revoke)
+  leaves them without `leads:write` — the demo's Data Team user — a user of
+  another agency, a pending invite and a deactivated account.
+}

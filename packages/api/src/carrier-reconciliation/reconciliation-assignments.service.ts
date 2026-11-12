@@ -9,7 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import {
   ModuleKey,
-  RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
+  RECONCILIATION_ASSIGNEE_PERMISSION,
   RECONCILIATION_TAB_LABELS,
   modulePermission,
   primaryReconciliationTab,
@@ -26,18 +26,11 @@ import {
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
 import type { RowAssignment } from '../common/carrier-reconciliation/carry-forward';
+import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
 import { displayName, displayNamesFor } from '../common/domain/user-names';
 import { notificationRequested } from '../inngest/events';
 import { InngestService } from '../inngest/inngest.service';
-import {
-  activeRoleHolders,
-  type RoleHolderModels,
-} from '../permissions/role-holders';
-import { UserRole } from '../permissions/schemas/user-role.schema';
-import {
-  AgencyRole,
-  type AgencyRoleDocument,
-} from '../roles/schemas/agency-role.schema';
+import { PermissionsService } from '../permissions/permissions.service';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   AssignedQueryDto,
@@ -62,8 +55,9 @@ const READ = modulePermission(ModuleKey.CarrierReconciliation, 'read');
 
 /**
  * Handing Dash rows to people (PAC-173): the owner assigns a row that needs
- * a decision to one of the agency's **Producers or CSRs**, who is notified
- * and works it from their own page.
+ * a decision to someone in the agency who can work leads
+ * (`RECONCILIATION_ASSIGNEE_PERMISSION` — by permission, not role), who is
+ * notified and works it from their own page.
  *
  * The assignment is its own field on the row (`assignment`), never part of
  * `review`: saving a decision replaces `review` whole and must not drop who
@@ -85,26 +79,29 @@ export class ReconciliationAssignmentsService {
     private readonly rowModel: Model<ReconciliationRowDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
-    @InjectModel(AgencyRole.name)
-    private readonly roleModel: Model<AgencyRoleDocument>,
-    @InjectModel(UserRole.name)
-    private readonly userRoleModel: Model<UserRole>,
     private readonly inngest: InngestService,
+    /**
+     * Who may be given a row is decided by effective permission
+     * (`RECONCILIATION_ASSIGNEE_PERMISSION`), never by role name.
+     */
+    private readonly permissions: PermissionsService,
   ) {}
 
-  /** The assignee picker: the agency's active Producers and CSRs, by name. */
+  /**
+   * The assignee picker: the agency's active users who can work leads, by
+   * name, with their role names for display.
+   */
   async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
-    const holders = await activeRoleHolders(
-      this.roleHolderModels(),
+    const holders = await this.permissions.activeUsersHolding(
       clientAgencyId(access),
-      RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
+      RECONCILIATION_ASSIGNEE_PERMISSION,
     );
     return {
       assignees: holders.map((user) => ({
         id: String(user._id),
         name: displayName(user),
         email: user.email ?? '',
-        roles: user.roles,
+        roles: user.roleNames,
       })),
     };
   }
@@ -185,6 +182,9 @@ export class ReconciliationAssignmentsService {
                 'assignment.assignedAt': current.assignedAt,
               }
             : { assignment: null }),
+          // A re-upload that replaced the run meanwhile copied the row's
+          // assignment as it stood; a write here now would be lost.
+          ...LIVE_ROW,
         },
         { $set: { assignment: next } },
         { new: true },
@@ -192,7 +192,7 @@ export class ReconciliationAssignmentsService {
       .lean<LeanRow>();
     if (!updated) {
       throw new ConflictException(
-        'Someone else changed who this row is with. Reload it and try again.',
+        'Someone else changed who this row is with, or a newer upload of this report just replaced it. Reload it and try again.',
       );
     }
 
@@ -282,14 +282,6 @@ export class ReconciliationAssignmentsService {
   // Helpers
   // -------------------------------------------------------------------------
 
-  private roleHolderModels(): RoleHolderModels {
-    return {
-      roleModel: this.roleModel,
-      userRoleModel: this.userRoleModel,
-      userModel: this.userModel,
-    };
-  }
-
   /**
    * The row as the agency's current run of the same report has it: `row`
    * itself unless a re-upload replaced its run (perhaps more than once), then
@@ -314,20 +306,19 @@ export class ReconciliationAssignmentsService {
       .lean<LeanRow>();
   }
 
-  /** 400 unless `userId` is an active Producer or CSR of this agency. */
+  /** 400 unless `userId` is an active user of this agency who can work leads. */
   private async assertAssignable(
     agencyId: string,
     userId: string,
   ): Promise<void> {
-    const [holder] = await activeRoleHolders(
-      this.roleHolderModels(),
+    const [holder] = await this.permissions.activeUsersHolding(
       agencyId,
-      RECONCILIATION_ASSIGNEE_ROLE_SLUGS,
+      RECONCILIATION_ASSIGNEE_PERMISSION,
       { _id: new Types.ObjectId(userId) },
     );
     if (!holder) {
       throw new BadRequestException(
-        'A row can be assigned only to an active Producer or CSR of this agency.',
+        'A row can be assigned only to an active user of this agency who can work leads.',
       );
     }
   }

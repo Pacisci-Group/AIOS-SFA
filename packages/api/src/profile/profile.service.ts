@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { ALLSTATE_CODE_FIELDS } from '@sfa/shared';
 import type { Response } from 'express';
 import { Model } from 'mongoose';
 import { AuthService } from '../auth/auth.service';
@@ -50,6 +51,16 @@ export class ProfileService {
     }
     if (dto.lastName !== undefined) {
       user.lastName = dto.lastName ?? undefined;
+    }
+    // Allstate codes say whose Dash lines are whose inside one agency
+    // (PAC-173). A platform admin belongs to none, so has none to set.
+    if (
+      (user.isPlatformAdmin || !user.agencyId) &&
+      ALLSTATE_CODE_FIELDS.some((field) => dto[field] !== undefined)
+    ) {
+      throw new BadRequestException(
+        'Allstate codes belong to agency staff. A platform administrator has none.',
+      );
     }
     applyAllstateCodes(user, dto);
     try {

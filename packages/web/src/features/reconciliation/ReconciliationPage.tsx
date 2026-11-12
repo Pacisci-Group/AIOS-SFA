@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { AlertCircle, FileCheck2, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -89,16 +89,28 @@ export default function ReconciliationPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [openRow, setOpenRow] = useState<ReconciliationRowView | null>(null);
 
-  const runs = useQuery({
+  // Newest first, a page at a time: an agency uploads a report a month, so
+  // the first page covers years, and older ones load on request.
+  const runs = useInfiniteQuery({
     queryKey: reconciliationRunsKey,
-    queryFn: () => getReconciliationRuns(),
+    queryFn: ({ pageParam }) => getReconciliationRuns(pageParam),
+    initialPageParam: 1,
+    getNextPageParam: (last) =>
+      last.page < last.totalPages ? last.page + 1 : undefined,
   });
-  const runId = values.run || runs.data?.items[0]?.id || "";
+  const loadedRuns = runs.data?.pages.flatMap((page) => page.items) ?? [];
+  const runId = values.run || loadedRuns[0]?.id || "";
   const run = useQuery({
     queryKey: reconciliationRunKey(runId),
     queryFn: () => getReconciliationRun(runId),
     enabled: !!runId,
   });
+  // A run opened by link that is not on a loaded page (older, or replaced by
+  // a re-upload) still needs an entry, or the picker would show it blank.
+  const runOptions =
+    run.data && !loadedRuns.some((item) => item.id === run.data.id)
+      ? [...loadedRuns, run.data]
+      : loadedRuns;
 
   const recheck = useMutation({
     mutationFn: () => reclassifyRun(runId),
@@ -164,7 +176,7 @@ export default function ReconciliationPage() {
             <PageError message="Could not load the reports." onRetry={() => void runs.refetch()} />
           ) : runs.isPending ? (
             <Skeleton className="h-40 w-full rounded-xl" />
-          ) : !runs.data.items.length ? (
+          ) : !loadedRuns.length ? (
             <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border bg-card px-5 py-16 text-center">
               <FileCheck2 aria-hidden className="size-5 text-muted-foreground" />
               <p className="max-w-md text-sm text-muted-foreground">
@@ -191,14 +203,25 @@ export default function ReconciliationPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {runs.data.items.map((item) => (
+                    {runOptions.map((item) => (
                       <SelectItem key={item.id} value={item.id}>
                         {formatPeriod(item)} · uploaded {formatInstant(item.createdAt)}
                         {item.status === "failed" ? " · failed" : ""}
+                        {item.supersededByRunId ? " · replaced" : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {runs.hasNextPage && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={runs.isFetchingNextPage}
+                    onClick={() => void runs.fetchNextPage()}
+                  >
+                    {runs.isFetchingNextPage ? "Loading…" : "Show older reports"}
+                  </Button>
+                )}
                 {run.data && (
                   <p className="text-sm text-muted-foreground">
                     {run.data.filename}

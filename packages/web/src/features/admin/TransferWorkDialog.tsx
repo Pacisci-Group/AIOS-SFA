@@ -59,8 +59,13 @@ function transferLines(counts: WorkTransferCounts): string[] {
       plural(counts.rotationsTakenOver, "round-robin slot"),
     counts.rotationsDeactivated &&
       `${plural(counts.rotationsDeactivated, "duplicate round-robin slot")} switched off`,
-    counts.reconciliationRows &&
-      plural(counts.reconciliationRows, "Dash Reconciliation row"),
+    counts.reconciliationRows - counts.reconciliationRowsUnassigned &&
+      plural(
+        counts.reconciliationRows - counts.reconciliationRowsUnassigned,
+        "Dash Reconciliation row",
+      ),
+    counts.reconciliationRowsUnassigned &&
+      `${plural(counts.reconciliationRowsUnassigned, "Dash Reconciliation row")} back to the owner, unassigned — the new person cannot work leads`,
   ];
   return lines.filter((line): line is string => Boolean(line));
 }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Carrier, CarrierSchema } from '../carriers/schemas/carrier.schema';
 import { Deal, DealSchema } from '../deals/schemas/deal.schema';
+import { PermissionsModule } from '../permissions/permissions.module';
 import { Agency, AgencySchema } from '../platform/schemas/agency.schema';
 import {
   UserRole,
@@ -45,6 +46,9 @@ import {
       { name: AgencyRole.name, schema: AgencyRoleSchema },
       { name: UserRole.name, schema: UserRoleSchema },
     ]),
+    // Who may be given a row is decided by effective permission
+    // (`PermissionsService.activeUsersHolding`). It imports nothing but Redis.
+    PermissionsModule,
   ],
   controllers: [
     CarrierReconciliationController,

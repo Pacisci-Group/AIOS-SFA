@@ -39,6 +39,9 @@
  * binder on nearly every sale anyway.
  */
 
+import { ModuleKey } from '../enums/module-key.enum';
+import { modulePermission } from '../permissions/permission.constants';
+
 export const RECONCILIATION_RUN_STATUSES = [
   'processing',
   'ready',
@@ -279,11 +282,17 @@ export function primaryReconciliationTab(
 }
 
 /**
- * Who a row can be assigned to: the agency's active **Producers and CSRs** —
- * users holding a role with one of these slugs (David, 27 Oct 2026). The
- * owner assigns; the assignee works the row from their own page.
+ * Who a row can be assigned to: the agency's active users who can work leads
+ * — effective permissions that include `leads:write` (12 Nov 2026), which the
+ * Producer and CSR templates carry. Decided by permission, never by role
+ * name, so a custom role that carries it qualifies and someone it was revoked
+ * from does not. The owner assigns; the assignee works the row from their own
+ * page.
  */
-export const RECONCILIATION_ASSIGNEE_ROLE_SLUGS = ['producer', 'csr'] as const;
+export const RECONCILIATION_ASSIGNEE_PERMISSION = modulePermission(
+  ModuleKey.Leads,
+  'write',
+);
 
 /**
  * The rows endpoint's `assignee` filter: a user id, `me`, or `unassigned`.
@@ -518,7 +527,10 @@ export interface ReconciliationRowListResponse {
   totalPages: number;
 }
 
-/** Someone a row can be assigned to. `roles` are the role slugs that qualify them. */
+/**
+ * Someone a row can be assigned to. `roles` are their role names, display
+ * only: who qualifies is decided by `RECONCILIATION_ASSIGNEE_PERMISSION`.
+ */
 export interface ReconciliationAssignee {
   id: string;
   name: string;
@@ -527,7 +539,7 @@ export interface ReconciliationAssignee {
 }
 
 export interface ReconciliationOptionsResponse {
-  /** The agency's active Producers and CSRs, by name. */
+  /** The agency's active users who can work leads, by name. */
   assignees: ReconciliationAssignee[];
 }
 

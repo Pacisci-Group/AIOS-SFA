@@ -10,9 +10,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import {
   DataScope,
+  RECONCILIATION_ASSIGNEE_PERMISSION,
   SERVICE_TICKET_TERMINAL_STATUSES,
   terminalLeadStatusValues,
   type AccessContext,
+  type ReconciliationTab,
 } from '@sfa/shared';
 import { Activity } from '../activities/schemas/activity.schema';
 import { ReconciliationRow } from '../carrier-reconciliation/schemas/reconciliation-row.schema';
@@ -21,8 +23,10 @@ import {
   currentRunIds,
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
+import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
 import { currentUserObjectId } from '../common/context/request-context';
 import { TransactionRunner } from '../common/mongo/transaction.runner';
+import { PermissionsService } from '../permissions/permissions.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { CrmRotation } from '../crm-rotations/schemas/crm-rotation.schema';
 import { Onboarding } from '../crm/schemas/onboarding.schema';
@@ -70,6 +74,11 @@ export interface WorkTransferCounts {
   rotationsDeactivated: number;
   /** Dash Reconciliation rows assigned to them that still wait on a decision. */
   reconciliationRows: number;
+  /**
+   * Of those, the rows the successor cannot be given (they cannot work leads)
+   * — sent back to the owner unassigned rather than moved.
+   */
+  reconciliationRowsUnassigned: number;
 }
 
 export interface WorkTransferResult extends WorkTransferCounts {
@@ -94,6 +103,12 @@ interface Parties {
   toName: string;
   /** For the ticket timeline note's `author`. */
   actorName: string;
+  /**
+   * The successor's effective permissions if they can be handed Dash rows
+   * (`RECONCILIATION_ASSIGNEE_PERMISSION`), else `null`. Resolved once, with
+   * the parties, so a transaction retry does not resolve it again.
+   */
+  successorRowPermissions: string[] | null;
 }
 
 /** The slice of a rotation row the split needs. */
@@ -134,7 +149,9 @@ type Plan = WorkTransferTouched;
  *   the name — `resolvedById` records who actually cleared them.
  * - `reconciliationRows.assignment` on Dash rows still waiting on a decision,
  *   on current runs (PAC-173). The hand-over stamps `assignedById` /
- *   `assignedAt`; a decided row keeps the name of whoever worked it.
+ *   `assignedAt`; a decided row keeps the name of whoever worked it. A row
+ *   the successor could not be given through `assign()` — they cannot work
+ *   leads — goes back to the owner unassigned instead (PAC-173 review).
  *
  * **Seeds** — not tasks themselves, but the fields the system reads when it
  * mints the *next* task. Moving the tickets without these undoes itself: the
@@ -196,6 +213,7 @@ export class WorkTransferService {
     private readonly reconciliationRowModel: Model<ReconciliationRow>,
     private readonly transactions: TransactionRunner,
     private readonly roleAssignments: RoleAssignmentsService,
+    private readonly permissions: PermissionsService,
   ) {}
 
   /**
@@ -361,12 +379,19 @@ export class WorkTransferService {
           .lean<{ firstName?: string; lastName?: string; email?: string }>()
       : null;
 
+    const [rowHolder] = await this.permissions.activeUsersHolding(
+      agencyId,
+      RECONCILIATION_ASSIGNEE_PERMISSION,
+      { _id: to._id },
+    );
+
     return {
       from,
       to,
       fromName: displayName(from),
       toName: displayName(to),
       actorName: actor ? displayName(actor) : 'System',
+      successorRowPermissions: rowHolder?.permissions ?? null,
     };
   }
 
@@ -414,7 +439,7 @@ export class WorkTransferService {
    */
   private async plan(
     agencyId: string,
-    { from, to }: Parties,
+    { from, to, successorRowPermissions }: Parties,
     session: ClientSession | null,
   ): Promise<Plan> {
     const agencyOid = new Types.ObjectId(agencyId);
@@ -505,15 +530,24 @@ export class WorkTransferService {
           .lean<RotationRow[]>(),
       // `assignment.userId` is a string on these rows, never the ObjectId.
       async () =>
-        idsOf(
-          this.reconciliationRowModel,
-          openAssignmentsFilter(
-            agencyId,
-            fromId.toString(),
-            await currentRunIds(this.reconciliationRunModel, agencyId, session),
-          ),
-        ),
+        this.reconciliationRowModel
+          .find(
+            openAssignmentsFilter(
+              agencyId,
+              fromId.toString(),
+              await currentRunIds(
+                this.reconciliationRunModel,
+                agencyId,
+                session,
+              ),
+            ),
+          )
+          .select('_id tabs')
+          .session(session)
+          .lean<OpenReconciliationRow[]>(),
     ]);
+    const successorTakes = (row: OpenReconciliationRow) =>
+      successorCanTake(successorRowPermissions, row);
 
     const { rotationsTakenOver, rotationsDeactivated } =
       await this.planRotations(agencyId, to._id, rotations, session);
@@ -543,7 +577,12 @@ export class WorkTransferService {
       shareLinks,
       rotationsTakenOver,
       rotationsDeactivated,
-      reconciliationRows,
+      reconciliationRows: reconciliationRows
+        .filter(successorTakes)
+        .map((row) => row._id),
+      reconciliationRowsReleased: reconciliationRows
+        .filter((row) => !successorTakes(row))
+        .map((row) => row._id),
     };
   }
 
@@ -721,12 +760,15 @@ export class WorkTransferService {
           { $set: { activeForProducer: false } },
           opts,
         ),
+      // `LIVE_ROW`: a row a re-upload replaced since the plan was read was
+      // copied as it stood, and the copy is on the new run.
       () =>
         plan.reconciliationRows.length &&
         this.reconciliationRowModel.updateMany(
           {
             ...byIds(plan.reconciliationRows),
             'assignment.userId': fromId.toString(),
+            ...LIVE_ROW,
           },
           {
             $set: {
@@ -736,6 +778,17 @@ export class WorkTransferService {
               'assignment.assignedAt': now,
             },
           },
+          opts,
+        ),
+      () =>
+        plan.reconciliationRowsReleased.length &&
+        this.reconciliationRowModel.updateMany(
+          {
+            ...byIds(plan.reconciliationRowsReleased),
+            'assignment.userId': fromId.toString(),
+            ...LIVE_ROW,
+          },
+          { $set: { assignment: null } },
           opts,
         ),
     ]);
@@ -806,9 +859,29 @@ export class WorkTransferService {
       shareLinks: plan.shareLinks.length,
       rotationsTakenOver: plan.rotationsTakenOver.length,
       rotationsDeactivated: plan.rotationsDeactivated.length,
-      reconciliationRows: plan.reconciliationRows.length,
+      reconciliationRows:
+        plan.reconciliationRows.length + plan.reconciliationRowsReleased.length,
+      reconciliationRowsUnassigned: plan.reconciliationRowsReleased.length,
     };
   }
+}
+
+/** What the transfer reads of an open Dash row to decide where it goes. */
+interface OpenReconciliationRow {
+  _id: Types.ObjectId;
+  tabs: ReconciliationTab[];
+}
+
+/**
+ * Whether the successor could be given this row through `assign()`: they can
+ * be handed rows at all (`RECONCILIATION_ASSIGNEE_PERMISSION`).
+ */
+function successorCanTake(
+  permissions: readonly string[] | null,
+  row: OpenReconciliationRow,
+): boolean {
+  void row;
+  return permissions !== null;
 }
 
 /**

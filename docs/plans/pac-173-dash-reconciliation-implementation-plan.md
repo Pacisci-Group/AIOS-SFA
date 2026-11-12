@@ -14,8 +14,9 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   A person's codes are two fields on the **user** — `allstateBindId` and
 >   `allstateSubProducerCode` — entered at invite / accept-invite / agency
 >   onboarding, edited on the profile page or by the owner
->   (`PATCH /users/:userId/details`), unique per agency (migration
->   `20261027120000-user_allstate_code_indexes`), normalised by
+>   (`PATCH /users/:userId/details`), the Bind ID unique per agency (migration
+>   `20261027120000-user_allstate_code_indexes`; the sub-producer code is not
+>   unique, since nothing reads it), normalised by
 >   `shared/domain/allstate-codes.ts`. The engine reads them with
 >   `loadStaffCodes` (deactivated users included).
 > - **Bind ID statuses are `staff` / `former_staff` / `not_staff` / `blank`.**
@@ -23,9 +24,9 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   employee's — never 1-800 — and gets its own `bind:<Bind ID>` line in the
 >   per-producer summary. Only an **unnamed** Bind ID on no user can be 1-800
 >   (David, 27 Oct). A blank Bind ID is agency business.
-> - Migration `20261027140000-sfa_user_allstate_bind_ids` writes Smith Family
->   Agency's 10 producers' Bind IDs onto their users, cross-referenced from the
->   Jul–Sep export by name (Mike Iles = JAMES ILES).
+> - Smith Family Agency's producers' Bind IDs are entered by the owner on the
+>   Users page after deploy. (A migration that wrote them was dropped in review:
+>   it put staff Allstate logins in the repo and matched users by name.)
 > - **Matched rows are checked against the app (PR 2).** The app is the source
 >   of truth. A matched policy whose app premium is not Dash's written premium
 >   **to the cent** lands in a new **Premium differs** tab
@@ -58,12 +59,21 @@ Paths are relative to the AIOS-SFA repo root; `api/` = `packages/api/src/`,
 >   median app/Dash 1.014), $9,340.69 apart in all. The 1-800 tab is still
 >   the same 7 rows, and the September subset still reproduces
 >   108 / 96 / 12 / 6 and $19,231.51.
-> - **Rows are assigned to Producers and CSRs (PR 3).**
+> - **Rows are assigned to people who can work leads (PR 3).**
 >   - The owner hands a row still waiting on a decision to an active user
->     holding the `producer` or `csr` role, with an optional note:
->     `PATCH runs/:id/rows/:rowId/assignment`. `GET options` now returns that
->     pool, through `permissions/role-holders.ts`, which the ticket picker
->     shares.
+>     whose effective permissions include `leads:write`
+>     (`RECONCILIATION_ASSIGNEE_PERMISSION`), with an optional note:
+>     `PATCH runs/:id/rows/:rowId/assignment`. `GET options` returns that
+>     pool through `PermissionsService.activeUsersHolding`, which resolves
+>     everyone's permissions in one batch. By permission, never role name
+>     (review, 12 Nov 2026): a custom role carrying `leads:write` qualifies,
+>     and the owner is in the pool. `roles` on an assignee are role names,
+>     for display.
+>   - A re-upload drops a carried assignment whose assignee is no longer in
+>     the pool. A work transfer sends rows the successor cannot take back to
+>     the owner unassigned (`reconciliationRowsUnassigned`).
+>   - The follow-ups panel is on the Service Dashboard too, so a CSR has a
+>     way in besides the notification.
 >   - The assignment is its own field on the row (`assignment`, string ids),
 >     so saving a decision never drops it. A decided row keeps its assignee
 >     but leaves their list.

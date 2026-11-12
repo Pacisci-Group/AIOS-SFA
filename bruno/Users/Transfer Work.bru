@@ -74,6 +74,9 @@ docs {
   - Dash Reconciliation rows assigned to them that still wait on a decision, on
     current runs (`assignment.userId`; `assignedById` / `assignedAt` become the
     transfer's). A decided row keeps the name of whoever worked it (PAC-173).
+    A row the successor could not be given — they cannot work leads
+    (`leads:write`) — goes back to the owner unassigned instead, counted in
+    `reconciliationRowsUnassigned` (also part of `reconciliationRows`).
 
   ## What never moves
   Attribution — `deals/quoteRecaps.producerId`, **resolved** audit items, `createdBy*`,

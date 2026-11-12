@@ -317,7 +317,7 @@ function RowDetail({
               <AssignmentSummary assignment={row.assignment} />
             ) : (
               <p className="text-sm text-muted-foreground">
-                Not assigned. Hand it to a Producer or CSR — they are notified
+                Not assigned. Hand it to someone who works leads — they are notified
                 and see it on their own page.
               </p>
             )}
@@ -544,7 +544,7 @@ function AssignmentForm({
                 assignees.isError
                   ? "Could not load who can be assigned. Close the row and open it again to retry."
                   : assignees.isSuccess && people.length === 0
-                    ? "The agency has no active Producers or CSRs to assign to."
+                    ? "Nobody active in the agency can work leads, so there is no one to assign to."
                     : undefined
               }
             />
