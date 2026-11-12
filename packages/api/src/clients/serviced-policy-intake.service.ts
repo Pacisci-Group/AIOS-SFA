@@ -49,7 +49,10 @@ import { AmbiguousHouseholdException } from '../leads/intake/ambiguous-household
 import { ResolveContactStep } from '../leads/intake/resolve-contact.step';
 import { ResolveHouseholdStep } from '../leads/intake/resolve-household.step';
 import { normalizePolicyNumber } from '../policies/policy-number';
-import { activeRoleHolders } from '../permissions/role-holders';
+import {
+  activeRoleHolders,
+  TICKET_ASSIGNEE_ROLE_SLUGS,
+} from '../permissions/role-holders';
 import { UserRole } from '../permissions/schemas/user-role.schema';
 import { Policy, PolicyDocument } from '../policies/schemas/policy.schema';
 import {
@@ -338,6 +341,7 @@ export class ServicedPolicyIntakeService {
 
     await recountHouseholdPolicies(
       { policy: this.policyModel, household: this.householdModel },
+      tenant.agencyId,
       result.householdId,
       this.logger,
     );
@@ -399,7 +403,7 @@ export class ServicedPolicyIntakeService {
       },
       agencyId,
       // `ServiceTicketsService.listAssignees`' pool.
-      ['csr', 'crm'],
+      TICKET_ASSIGNEE_ROLE_SLUGS,
       { _id: new Types.ObjectId(userId) },
     );
     return holders.length > 0;
@@ -532,7 +536,7 @@ export class ServicedPolicyIntakeService {
     deps: StepDeps,
   ): Promise<{ branchId: string | null }> {
     const household = await this.householdModel
-      .findOne({ _id: householdId })
+      .findOne({ _id: householdId, agencyId: deps.ctx.agencyId })
       .select('agencyId branchId primaryContactId')
       .session(deps.session);
     if (!household) throw new NotFoundException('Household not found');
@@ -579,7 +583,7 @@ export class ServicedPolicyIntakeService {
       (householdIsNew || !household.primaryContactId)
     ) {
       await this.householdModel.updateOne(
-        { _id: householdId },
+        { _id: householdId, agencyId: deps.ctx.agencyId },
         { $set: { primaryContactId: contactId } },
         sessionOptions(deps.session),
       );

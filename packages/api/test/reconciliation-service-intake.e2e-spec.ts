@@ -488,12 +488,12 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
       });
     });
 
-    it('presigns the application under the row, PDF only, for its assignee only', async () => {
+    it('presigns the application under the Dash policy, PDF only, for its assignee only', async () => {
       const row = await seedRow();
 
       const res = await presign(row).expect(201);
       expect((res.body as ReconciliationPresignResponse).key).toContain(
-        `agencies/${ctx.agencyId}/reconciliation-rows/${row.rowId}/nba/`,
+        `agencies/${ctx.agencyId}/serviced-policies/${reconciliationPolicyKey(row.policyNumber)}/nba/`,
       );
       await presign(row, { contentType: 'image/png' }).expect(400);
       await presign(row, { size: 11 * 1024 * 1024 }).expect(400);
@@ -597,7 +597,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
         '2026-09-15T00:00:00.000Z',
       );
       expect(policy!.newBusinessApplication?.key).toContain(
-        `/reconciliation-rows/${row.rowId}/nba/`,
+        `/serviced-policies/${reconciliationPolicyKey(row.policyNumber)}/nba/`,
       );
       expect(await deals.countDocuments({})).toBe(dealsBefore);
       expect(await leads.countDocuments({})).toBe(leadsBefore);
@@ -741,7 +741,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
   });
 
   describe('what it refuses, before writing anything', () => {
-    it('an application that never reached storage, or was presigned for another row', async () => {
+    it('an application that never reached storage, or was presigned for another policy', async () => {
       const row = await seedRow();
       const other = await seedRow();
       const missing = {
@@ -775,7 +775,7 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
         tabs: ['matched', 'review_1800'],
       });
       const body = intakeBody({
-        key: `agencies/${ctx.agencyId}/reconciliation-rows/${row.rowId}/nba/2026/x.pdf`,
+        key: `agencies/${ctx.agencyId}/serviced-policies/${reconciliationPolicyKey(row.policyNumber)}/nba/2026/x.pdf`,
         filename: 'x.pdf',
         contentType: 'application/pdf',
         size: 1,
@@ -1732,6 +1732,31 @@ describe('Dash Reconciliation 1-800 service intake (e2e)', () => {
       expect((await stored(row.rowId))?.outcome).toBeNull();
       // What it created stays — a reopen takes back the decision, not the client.
       expect(await policies.exists({ _id: oid(done.policyId) })).toBeTruthy();
+    });
+
+    it('adopts the policy a reopened row set up, never a second one for the number', async () => {
+      const row = await seedRow();
+      const first = (await setUp(row, 201))
+        .body as ReconciliationServiceIntakeResponse;
+      await review(row, { status: 'open' }).expect(200);
+      expect((await stored(row.rowId))?.outcome).toBeNull();
+
+      // The form again, as the next person would fill it in.
+      const again = (await setUp(row, 201))
+        .body as ReconciliationServiceIntakeResponse;
+      expect(again.policyId).toBe(first.policyId);
+      expect(again.householdId).toBe(first.householdId);
+      expect(
+        await policies.countDocuments({
+          origin: 'carrier_direct',
+          policyNumber: row.policyNumber,
+        }),
+      ).toBe(1);
+      expect((await stored(row.rowId))?.outcome).toMatchObject({
+        kind: 'service_intake',
+        status: 'done',
+        policyId: first.policyId,
+      });
     });
   });
 });

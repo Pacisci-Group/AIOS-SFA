@@ -358,7 +358,7 @@ export class ReconciliationOutcomesService {
     assertCanSetUpService(access);
     const key = this.storage.buildObjectKey({
       agencyId,
-      purpose: reconciliationDocumentPurpose(String(row._id)),
+      purpose: documentPurposeOf(row),
       filename: dto.filename,
     });
     return this.storage.createPresignedUpload(key, dto.contentType);
@@ -465,16 +465,25 @@ export class ReconciliationOutcomesService {
         );
       }
     }
-    await this.validator.assertPolicyNumberFormat(agencyId, {
-      carrier,
-      policyNumber: dto.policy.policyNumber,
+    // Set up already — an earlier intake on this line that the owner's
+    // reopen cleared (PAC-173 review): the policy is adopted and its welcome
+    // call opened, never a second policy for the same number.
+    const [serviced] = await this.dashPolicies(row, {
+      origin: 'carrier_direct',
+      dealId: null,
     });
     const application = { ...dto.policy.newBusinessApplication };
-    await this.validator.verifyDocument(application, {
-      agencyId,
-      purpose: reconciliationDocumentPurpose(String(row._id)),
-      kind: 'new_business_application',
-    });
+    if (!serviced) {
+      await this.validator.assertPolicyNumberFormat(agencyId, {
+        carrier,
+        policyNumber: dto.policy.policyNumber,
+      });
+      await this.validator.verifyDocument(application, {
+        agencyId,
+        purpose: documentPurposeOf(row),
+        kind: 'new_business_application',
+      });
+    }
     const csr = (await this.intake.assignableCsrs(access)).find(
       (person) => person.id === dto.assignedCsrId,
     );
@@ -482,6 +491,37 @@ export class ReconciliationOutcomesService {
       throw new BadRequestException(
         'The welcome call can go only to an active CSR or CRM you can assign tickets to.',
       );
+    }
+    if (serviced?.householdId) {
+      const adopted = await this.writeOutcome(row, {
+        kind: 'service_intake',
+        status: 'in_progress',
+        step: 'start_onboarding',
+        note: openingNoteFor(row, dto.openingNote) || null,
+        leadId: null,
+        dealId: null,
+        policyId: String(serviced._id),
+        householdId: String(serviced.householdId),
+        replacementPolicyId: null,
+        chargebackId: null,
+        csrId: csr.id,
+        onboardingId: null,
+        ticketId: null,
+        startedById: access.userId,
+        startedAt: new Date(),
+        completedById: null,
+        completedAt: null,
+      });
+      if (!adopted) throw new ConflictException(CHANGED);
+      const { row: handedOff, handed } = await this.finishHandOff(
+        access.userId,
+        adopted,
+      );
+      return this.intakeResponse(agencyId, handedOff, {
+        householdId: String(serviced.householdId),
+        policyId: String(serviced._id),
+        handed,
+      });
     }
 
     let saved: LeanRow | null = null;
@@ -1093,7 +1133,13 @@ export class ReconciliationOutcomesService {
   private async dashPolicies(
     row: LeanRow,
     where: Record<string, unknown>,
-  ): Promise<{ _id: Types.ObjectId; dealId: Types.ObjectId | null }[]> {
+  ): Promise<
+    {
+      _id: Types.ObjectId;
+      dealId: Types.ObjectId | null;
+      householdId?: Types.ObjectId;
+    }[]
+  > {
     const dashKey = dashKeyOf(row);
     if (!dashKey) return [];
     const policies = await this.policyModel
@@ -1103,13 +1149,14 @@ export class ReconciliationOutcomesService {
         policyNumberKey: { $regex: `^${escapeRegex(dashKey)}` },
         ...where,
       })
-      .select('policyNumber dealId')
+      .select('policyNumber dealId householdId')
       .sort({ _id: -1 })
       .lean<
         {
           _id: Types.ObjectId;
           policyNumber?: string;
           dealId: Types.ObjectId | null;
+          householdId?: Types.ObjectId;
         }[]
       >();
     return policies.filter(
@@ -1401,4 +1448,15 @@ function unmatchedSale(row: LeanRow): ConflictException {
     code: RECONCILIATION_SALE_POLICY_UNMATCHED,
     message: `None of the policies on the sale is numbered ${number}, as the Dash line is, so the row cannot be finished with it. Correct the policy number on the sale, then Continue.`,
   });
+}
+
+/**
+ * Where a row's signed application is uploaded: under its Dash policy, so
+ * the file belongs to the policy — the row's id changes with every
+ * re-upload of the report, the policy number does not (PAC-173 review).
+ */
+function documentPurposeOf(row: LeanRow): string {
+  return reconciliationDocumentPurpose(
+    dashKeyOf(row) ?? `row-${String(row._id)}`,
+  );
 }

@@ -196,6 +196,7 @@ export class SoldDealIntakeService {
   ): Promise<{ leadStatus: string | null }> {
     await recountHouseholdPolicies(
       { policy: this.policyModel, household: this.householdModel },
+      ctx.agencyId,
       ctx.householdId,
       this.logger,
     );

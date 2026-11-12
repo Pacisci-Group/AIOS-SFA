@@ -14,8 +14,11 @@ import {
   RECONCILIATION_SALE_OUTCOME_KINDS,
   SERVICE_TICKET_TERMINAL_STATUSES,
   canRecordReconciliationSale,
+  canSetUpReconciliationService,
+  reconciliationOutcomeKinds,
   terminalLeadStatusValues,
   type AccessContext,
+  type ReconciliationMatch,
   type ReconciliationOutcomeKind,
   type ReconciliationTab,
 } from '@sfa/shared';
@@ -554,7 +557,7 @@ export class WorkTransferService {
               ),
             ),
           )
-          .select('_id tabs outcome')
+          .select('_id tabs match outcome')
           .session(session)
           .lean<OpenReconciliationRow[]>(),
     ]);
@@ -897,14 +900,16 @@ export class WorkTransferService {
 interface OpenReconciliationRow {
   _id: Types.ObjectId;
   tabs: ReconciliationTab[];
+  match: ReconciliationMatch | null;
   outcome?: { kind: ReconciliationOutcomeKind } | null;
 }
 
 /**
  * Whether the successor could be given this row through `assign()`: they can
- * be handed rows at all (`RECONCILIATION_ASSIGNEE_PERMISSION`), and can book
- * a sale when the row is one — missing from the app, or a sale already under
- * way on it, which they would be the one to finish.
+ * be handed rows at all (`RECONCILIATION_ASSIGNEE_PERMISSION`), can book a
+ * sale when the row is one — missing from the app, or a sale already under
+ * way on it, which they would be the one to finish — and can set a 1-800
+ * policy up for service when the row offers that, or has one under way.
  */
 function successorCanTake(
   permissions: readonly string[] | null,
@@ -917,7 +922,11 @@ function successorCanTake(
       (RECONCILIATION_SALE_OUTCOME_KINDS as readonly string[]).includes(
         row.outcome.kind,
       ));
-  return !sale || canRecordReconciliationSale(permissions);
+  if (sale && !canRecordReconciliationSale(permissions)) return false;
+  const service =
+    reconciliationOutcomeKinds(row).includes('service_intake') ||
+    row.outcome?.kind === 'service_intake';
+  return !service || canSetUpReconciliationService(permissions);
 }
 
 /**

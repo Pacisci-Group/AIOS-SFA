@@ -19,16 +19,21 @@ import type { Model, Types } from 'mongoose';
  */
 export async function recountHouseholdPolicies(
   models: { policy: Model<any>; household: Model<any> },
+  agencyId: string,
   householdId: Types.ObjectId,
   logger: Pick<Logger, 'warn'>,
 ): Promise<void> {
   try {
+    // Agency-scoped, like every read of a tenant's records (PAC-173 review),
+    // and test records left out, as `PoliciesService` counts them.
     const active = await models.policy.countDocuments({
+      agencyId,
       householdId,
       active: true,
+      isTestRecord: { $ne: true },
     });
     await models.household.updateOne(
-      { _id: householdId },
+      { _id: householdId, agencyId },
       { $set: { totalActivePolicies: active } },
     );
   } catch (error) {
