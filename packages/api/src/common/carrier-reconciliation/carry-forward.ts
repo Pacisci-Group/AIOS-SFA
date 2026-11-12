@@ -19,6 +19,51 @@ export interface PreviousRowReview {
   reviewedAt: Date | null;
 }
 
+/** What carry-forward compares: the row's key, match and issues. */
+export interface CarriedRow {
+  rowKey: string;
+  match: ReconciliationMatch | null;
+  issues: readonly ReconciliationIssue[];
+}
+
+/** A carried decision, as the new row stores it (`StoredReview`). */
+export interface CarriedReviewFields {
+  status: ReconciliationReviewStatus;
+  resolution: PreviousRowReview['resolution'];
+  note: string | null;
+  reviewedById: string | null;
+  reviewedAt: Date | null;
+  carriedForwardFromRowId: string;
+}
+
+/**
+ * What a new row takes from the row it replaces: the fields to `$set` on it,
+ * none when nothing carries. The one place the upload asks what carries, so a
+ * new kind of carried state is added here and nowhere else.
+ */
+export interface CarriedFields {
+  review?: CarriedReviewFields;
+}
+
+export function carriedFields(
+  row: CarriedRow,
+  previous: ReadonlyMap<string, PreviousRowReview>,
+): CarriedFields {
+  const fields: CarriedFields = {};
+  const review = carriedReview(row, previous);
+  if (review) {
+    fields.review = {
+      status: review.status,
+      resolution: review.resolution,
+      note: review.note,
+      reviewedById: review.reviewedById,
+      reviewedAt: review.reviewedAt,
+      carriedForwardFromRowId: review.rowId,
+    };
+  }
+  return fields;
+}
+
 /**
  * A decision made on a run carries to the run that replaces it — the same
  * report uploaded again after a fix — **only if the row still says the same
@@ -31,11 +76,7 @@ export interface PreviousRowReview {
  * asks for now.
  */
 export function carriedReview(
-  row: {
-    rowKey: string;
-    match: ReconciliationMatch | null;
-    issues: readonly ReconciliationIssue[];
-  },
+  row: CarriedRow,
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): PreviousRowReview | null {
   const before = previous.get(row.rowKey);

@@ -38,9 +38,17 @@ export const reconciliationRowsKey = (runId: string, params: RowsParams) =>
 
 const BASE = "/carrier-reconciliation";
 
-export function getReconciliationRuns(includeSuperseded = false) {
+/** The API's largest page; the picker loads more on request. */
+export const RECONCILIATION_RUNS_PAGE_SIZE = 50;
+
+export function getReconciliationRuns(page = 1, includeSuperseded = false) {
+  const search = new URLSearchParams({
+    page: String(page),
+    pageSize: String(RECONCILIATION_RUNS_PAGE_SIZE),
+    includeSuperseded: String(includeSuperseded),
+  });
   return apiFetch<ReconciliationRunListResponse>(
-    `${BASE}/runs?pageSize=50&includeSuperseded=${includeSuperseded}`,
+    `${BASE}/runs?${search.toString()}`,
   );
 }
 

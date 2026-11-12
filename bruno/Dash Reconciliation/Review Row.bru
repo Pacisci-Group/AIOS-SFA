@@ -70,4 +70,6 @@ docs {
   ## Errors
   - `400` — validation, or `resolved` without a `resolution`
   - `404` — no such run or row in the agency
+  - `409` — the run is still processing, failed, or was replaced by a
+    re-upload (also when the replacement lands between the read and the write)
 }
