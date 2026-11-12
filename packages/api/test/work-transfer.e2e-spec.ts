@@ -698,6 +698,28 @@ describe('Work transfer (e2e)', () => {
           await roleAssignments.setUserOverrides(ctx.agencyId, toId, [], []);
         }
       });
+
+      it('sends a sale back to the owner when the successor cannot book one', async () => {
+        const missing = await seedRow(await seedRun(), {
+          tabs: ['missing_from_app'],
+        });
+        // Still works leads, but cannot record a sale.
+        await roleAssignments.setUserOverrides(
+          ctx.agencyId,
+          toId,
+          [],
+          ['deal_audits:write'],
+        );
+        try {
+          const res = await transfer().expect(201);
+          expect(res.body).toMatchObject({ reconciliationRowsUnassigned: 1 });
+          expect(
+            (await reconciliationRows.findById(missing).lean())?.assignment,
+          ).toBeNull();
+        } finally {
+          await roleAssignments.setUserOverrides(ctx.agencyId, toId, [], []);
+        }
+      });
     });
 
     it('records what it touched', async () => {

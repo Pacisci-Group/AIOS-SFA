@@ -53,8 +53,9 @@ export class WorkTransferTouched {
   reconciliationRows: Types.ObjectId[];
 
   /**
-   * Dash rows the successor cannot be given — they cannot work leads — sent
-   * back to the owner unassigned instead of moved (PAC-173 review).
+   * Dash rows the successor cannot be given — they cannot work leads, or the
+   * row is a sale they cannot book — sent back to the owner unassigned
+   * instead of moved (PAC-173 review).
    */
   @Prop({ type: [ObjectIdType], default: [] })
   reconciliationRowsReleased: Types.ObjectId[];
