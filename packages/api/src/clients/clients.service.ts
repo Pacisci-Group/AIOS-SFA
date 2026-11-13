@@ -1349,8 +1349,9 @@ export class ClientsService {
       householdId,
       policyId,
     );
-    await this.policies.applyUpdate(access, policy, dto);
-    return toPolicySummary(policy);
+    return toPolicySummary(
+      await this.policies.applyUpdate(access, policy, dto),
+    );
   }
 
   /**

@@ -117,17 +117,14 @@ export async function writeChargeback(
 }
 
 /**
- * Take back a policy's live **cancellation** chargebacks (PAC-173 review):
- * the cancellation they charged for no longer stands — the policy was
- * reinstated, or is being cancelled again with another date. Each row is
- * stamped `voidedAt`, never deleted (the ledger keeps what was charged and
- * undone), and the deal adjustment it made is reversed with the opposite
- * `$inc` in the same session. Rewrite chargebacks are not touched: a rewrite
- * is undone by its own flow.
+ * Take back **every** live cancellation chargeback on a policy, before a new
+ * cancellation writes its own — the guard in
+ * `PoliciesService.applyCancellation`, which holds the policy document in the
+ * same transaction, so nothing can be charged to it between this and the new
+ * row.
  *
- * A compare-and-swap per row on `voidedAt: null`, so two callers racing — or
- * a transaction retry — reverse an adjustment once. Returns how many it
- * voided.
+ * A reinstatement must **not** use this: it takes back one row, the one its
+ * cancellation raised — see {@link voidCancellationChargeback}.
  */
 export async function voidCancellationChargebacks(
   models: ChargebackLedgerModels,
@@ -138,9 +135,64 @@ export async function voidCancellationChargebacks(
     by: Types.ObjectId | null;
   },
 ): Promise<number> {
-  const { session, agencyId, policyId, by } = args;
+  return voidLive(models, args);
+}
+
+/**
+ * Take back the **one** cancellation chargeback a reinstated cancellation
+ * raised (`Policy.cancellation.chargebackId`) — the policy is back on the
+ * books, so the cancellation it charged for no longer stands.
+ *
+ * By id, never "every live row on the policy" (PAC-173 review): a row the
+ * policy holds *now* may belong to a later cancellation the reinstating
+ * request never saw. Without transactions (`TransactionRunner`'s fallback), a
+ * cancel-with-chargeback can land between the reinstatement's save and this
+ * void; selecting by policy would then void the new row and leave the policy
+ * cancelled with nothing charged back.
+ */
+export async function voidCancellationChargeback(
+  models: ChargebackLedgerModels,
+  args: {
+    session: ClientSession | null;
+    agencyId: string;
+    policyId: Types.ObjectId;
+    chargebackId: Types.ObjectId;
+    by: Types.ObjectId | null;
+  },
+): Promise<number> {
+  return voidLive(models, args);
+}
+
+/**
+ * The void itself (PAC-173 review). Each row is stamped `voidedAt`, never
+ * deleted (the ledger keeps what was charged and undone), and the deal
+ * adjustment it made is reversed with the opposite `$inc` in the same session.
+ * Only `cancellation` rows: a rewrite chargeback is undone by its own flow.
+ *
+ * A compare-and-swap per row on `voidedAt: null`, so two callers racing — or
+ * a transaction retry — reverse an adjustment once. Returns how many it
+ * voided.
+ */
+async function voidLive(
+  models: ChargebackLedgerModels,
+  args: {
+    session: ClientSession | null;
+    agencyId: string;
+    policyId: Types.ObjectId;
+    /** Just this row; every live one on the policy when absent. */
+    chargebackId?: Types.ObjectId;
+    by: Types.ObjectId | null;
+  },
+): Promise<number> {
+  const { session, agencyId, policyId, chargebackId, by } = args;
   const live = await models.chargebackModel
-    .find({ agencyId, policyId, reason: 'cancellation', voidedAt: null })
+    .find({
+      agencyId,
+      policyId,
+      reason: 'cancellation',
+      voidedAt: null,
+      ...(chargebackId ? { _id: chargebackId } : {}),
+    })
     .select('_id dealId soldAdjustment')
     .session(session)
     .lean<

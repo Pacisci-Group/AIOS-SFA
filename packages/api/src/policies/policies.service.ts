@@ -78,6 +78,7 @@ import { StorageService } from '../storage/storage.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   chargedProducerName,
+  voidCancellationChargeback,
   voidCancellationChargebacks,
   writeChargeback,
 } from './chargeback-ledger';
@@ -90,7 +91,11 @@ import { CheckPolicyDto } from './dto/check-policy.dto';
 import { UpdatePolicyDto } from './dto/update-policy.dto';
 import { normalizePolicyNumber, policyNumberKey } from './policy-number';
 import { toLeadDetailPolicy } from './policy-view';
-import { Policy, PolicyDocument } from './schemas/policy.schema';
+import {
+  Policy,
+  type PolicyCancellation,
+  PolicyDocument,
+} from './schemas/policy.schema';
 
 /**
  * A producer only needs to recognise the policy, not page through candidates.
@@ -233,6 +238,28 @@ function isCancellable(policy: PolicyDocument): boolean {
     policy.active ||
     isActivePolicyStatus(policy.policyStatus) ||
     normalizePolicyStatus(policy.policyStatus) === 'Pending'
+  );
+}
+
+/**
+ * The cancellation a reinstating request read — enough to tell it from a later
+ * one: `cancelledAt` is server time, stamped afresh by every cancel, and
+ * `chargebackId` is the row a reinstatement voids.
+ */
+type ReadCancellation = Pick<
+  PolicyCancellation,
+  'cancelledAt' | 'chargebackId'
+>;
+
+/** Is `held` the cancellation that was `read`? See `saveReinstatement`. */
+function isSameCancellation(
+  held: ReadCancellation,
+  read: ReadCancellation | null,
+): boolean {
+  if (!read) return false;
+  return (
+    held.cancelledAt?.getTime() === read.cancelledAt?.getTime() &&
+    String(held.chargebackId ?? '') === String(read.chargebackId ?? '')
   );
 }
 
@@ -450,8 +477,9 @@ export class PoliciesService {
       throw new ConflictException(AUDIT_LOCKED_MESSAGE);
     }
 
-    await this.applyUpdate(access, policy, dto, leadId);
-    return toLeadDetailPolicy(policy);
+    return toLeadDetailPolicy(
+      await this.applyUpdate(access, policy, dto, leadId),
+    );
   }
 
   /**
@@ -471,7 +499,10 @@ export class PoliciesService {
    * snapshot — which has to be taken *before* the assignments and written
    * *after* the save.
    *
-   * ⚠ Mutates and saves `policy` in place; callers render from the same document.
+   * ⚠ Mutates `policy` and **returns the saved document — render from that**.
+   * It is `policy` itself, except for a reinstatement that voids a chargeback,
+   * which saves a copy re-read inside its transaction
+   * ({@link saveReinstatement}).
    *
    * `leadId` is the edit log's link to the Lead Detail timeline. Pass it when
    * the deal is already in hand — {@link update} loads it for the scope check
@@ -577,6 +608,14 @@ export class PoliciesService {
      *    this is a null check and not a boolean.
      */
     const wasActive = policy.active;
+    // The cancellation as read, before the block below clears it: what a
+    // reinstatement is undoing ({@link saveReinstatement}).
+    const readCancellation: ReadCancellation | null = policy.cancellation
+      ? {
+          cancelledAt: policy.cancellation.cancelledAt,
+          chargebackId: policy.cancellation.chargebackId,
+        }
+      : null;
     let voidsChargeback = false;
     if (dto.status !== undefined) {
       /*
@@ -621,19 +660,20 @@ export class PoliciesService {
           normalizePolicyStatus(dto.status) === 'Pending');
     }
 
-    await policy.save();
-    if (voidsChargeback) await this.voidChargebacksOf(access, policy);
-    if (policy.active !== wasActive) {
-      await this.recountHouseholdPolicies(policy);
+    const saved = voidsChargeback
+      ? await this.saveReinstatement(access, policy, readCancellation)
+      : await policy.save();
+    if (saved.active !== wasActive) {
+      await this.recountHouseholdPolicies(saved);
     }
-    await this.recomputeDealTotals(policy);
+    await this.recomputeDealTotals(saved);
     await this.recordFieldChanges(
       access,
-      policy,
-      leadId === undefined ? await this.leadIdForPolicy(policy) : leadId,
+      saved,
+      leadId === undefined ? await this.leadIdForPolicy(saved) : leadId,
       before,
     );
-    return policy;
+    return saved;
   }
 
   /**
@@ -777,8 +817,9 @@ export class PoliciesService {
       cancelledOn = parseFormDate(day);
       const occurredAt = businessDateInstant(day, access.timeZone);
       const producerId = originalDeal?.producerId ?? null;
-      // One live cancellation chargeback per policy: a row a reinstatement
-      // failed to void, or one left by a status edit, is taken back first.
+      // One live cancellation chargeback per policy. A reinstatement voids its
+      // row in the same transaction, so this normally finds nothing; it is the
+      // guard that any row still live is taken back before a new one is written.
       await voidCancellationChargebacks(
         { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
         {
@@ -855,34 +896,78 @@ export class PoliciesService {
   }
 
   /**
-   * {@link applyUpdate}'s void, after the save and in its own transaction
-   * (the row and the deal's reversal together). A failure is logged, not
-   * thrown: the policy edit has landed, and the next cancellation with a
-   * chargeback voids whatever is left before it writes its own.
+   * {@link applyUpdate}'s save when the edit reinstates a cancelled policy:
+   * the policy write and the void of its cancellation chargeback commit in
+   * **one transaction**, or neither does (PAC-173 review).
+   *
+   * Money, so the argument {@link cancel} makes for writing a chargeback runs
+   * the other way for taking one back. Saved first and voided after, a failed
+   * void left an active policy whose deal still carried the negative
+   * adjustment and whose ledger row still counted — and nothing repaired it
+   * unless the policy was later cancelled again *with* a chargeback. Now a
+   * failure fails the request with the policy still cancelled, and a retry
+   * starts clean.
+   *
+   * **Re-reads the policy under the session on every attempt**, as
+   * {@link applyCancellation} does, and writes the edit onto that copy. Saving
+   * the caller's document here would be wrong on a retry: `TransactionRunner`
+   * uses the driver's `withTransaction`, which re-runs the callback after a
+   * transient error but does not restore Mongoose's change tracking, so the
+   * second attempt's `save()` would find nothing modified and commit the void
+   * without the reinstatement. The edit is captured once, before the
+   * transaction, as exactly the paths `policy.save()` would have written.
+   *
+   * **Undoes only the cancellation the request read** (`read`, PAC-173
+   * review). Whether to reinstate was decided outside the transaction, so the
+   * policy can be reinstated and cancelled again — with a new chargeback — in
+   * between. The re-read then holds a *different* cancellation, and applying
+   * the edit would silently undo a cancellation nobody reinstating saw, and
+   * void its chargeback: 409 instead. A policy that has merely been reinstated
+   * already (a double submit) holds none, and goes through as a no-op. The
+   * void is by the read cancellation's chargeback id for the same reason —
+   * see {@link voidCancellationChargeback}.
+   *
+   * Returns the saved copy; the caller's `policy` holds the same values but
+   * is never itself saved.
    */
-  private async voidChargebacksOf(
+  private async saveReinstatement(
     access: AccessContext,
     policy: PolicyDocument,
-  ): Promise<void> {
-    try {
-      await this.transactions.run((session) =>
-        voidCancellationChargebacks(
+    read: ReadCancellation | null,
+  ): Promise<PolicyDocument> {
+    const edit = policy
+      .directModifiedPaths()
+      .map((path) => [path, policy.get(path) as unknown] as const);
+    const by = Types.ObjectId.isValid(access.userId)
+      ? new Types.ObjectId(access.userId)
+      : null;
+
+    return this.transactions.run(async (session) => {
+      const fresh = await this.policyModel
+        .findOne({ _id: policy._id, agencyId: policy.agencyId })
+        .session(session);
+      if (!fresh) throw new NotFoundException('Policy not found');
+      if (fresh.cancellation && !isSameCancellation(fresh.cancellation, read)) {
+        throw new ConflictException(
+          'This policy was cancelled again while you were editing it. Reload it to see the new cancellation before reinstating it.',
+        );
+      }
+      for (const [path, value] of edit) fresh.set(path, value);
+      await fresh.save(sessionOptions(session));
+      if (read?.chargebackId) {
+        await voidCancellationChargeback(
           { chargebackModel: this.chargebackModel, dealModel: this.dealModel },
           {
             session,
             agencyId: String(policy.agencyId),
-            policyId: policy._id,
-            by: Types.ObjectId.isValid(access.userId)
-              ? new Types.ObjectId(access.userId)
-              : null,
+            policyId: fresh._id,
+            chargebackId: read.chargebackId,
+            by,
           },
-        ),
-      );
-    } catch (error) {
-      this.logger.error(
-        `Policy ${String(policy._id)} reinstated, but voiding its chargeback failed — the next cancellation voids it: ${String(error)}`,
-      );
-    }
+        );
+      }
+      return fresh;
+    });
   }
 
   /**
