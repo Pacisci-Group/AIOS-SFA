@@ -1,0 +1,44 @@
+meta {
+  name: Assign Row (1-800 to CSR)
+  type: http
+  seq: 53
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{reconSvcCsrId}}",
+    "note": "Allstate 1-800 — please set it up for service"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the CSR has it", function () {
+    expect(res.getBody().assignment.user.id).to.equal(bru.getVar("reconSvcCsrId"));
+  });
+}
+
+docs {
+  # PATCH …/assignment — hand the 1-800 row to a CSR
+
+  A 1-800 policy the app does not have goes only to someone who can set it up
+  for service (`canSetUpService`, i.e. `leads:write`); every default CSR can.
+  See `Assign Row` for the rest of the contract.
+}

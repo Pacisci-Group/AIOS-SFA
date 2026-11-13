@@ -1,0 +1,52 @@
+meta {
+  name: Review Row (Reopen 1-800)
+  type: http
+  seq: 52
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "open"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the 1-800 line waits on a decision again, with nothing recorded on it", function () {
+    expect(res.getBody().review.status).to.equal("open");
+    expect(res.getBody().outcome).to.equal(null);
+  });
+
+  test("it is a 1-800 policy the app does not have", function () {
+    expect(res.getBody().tabs).to.include("review_1800");
+    expect(res.getBody().match).to.equal("dash_only");
+  });
+}
+
+docs {
+  # PATCH …/review `{ "status": "open" }` — set the 1-800 row up for service intake
+
+  The fixture's 1-800 line (`OSCVANJ`, `reconRowId`) was decided by hand
+  earlier in this folder (`Review Row`, "Set up for service") and is the
+  already-decided case of `Assign Row (Already Decided)`. Reopening it here,
+  after those, lets the service-intake requests run from the same state on
+  every run — and clears a finished service intake a previous run left on
+  it. What that intake created (household, policy, welcome call) stays.
+}

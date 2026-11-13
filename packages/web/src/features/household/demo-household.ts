@@ -72,6 +72,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-03-15T00:00:00.000Z",
     expirationDate: "2025-03-15T00:00:00.000Z",
     renewalDate: "2025-03-15T00:00:00.000Z",
+    origin: null,
     cancellation: null,
   },
   {
@@ -86,6 +87,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-06-01T00:00:00.000Z",
     expirationDate: "2025-06-01T00:00:00.000Z",
     renewalDate: "2025-06-01T00:00:00.000Z",
+    origin: null,
     cancellation: null,
   },
   {
@@ -100,6 +102,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-06-01T00:00:00.000Z",
     expirationDate: "2025-06-01T00:00:00.000Z",
     renewalDate: "2025-06-01T00:00:00.000Z",
+    origin: null,
     cancellation: null,
   },
   {
@@ -114,6 +117,7 @@ const POLICIES: HouseholdView["policies"] = [
     effectiveDate: "2024-01-10T00:00:00.000Z",
     expirationDate: "2025-01-10T00:00:00.000Z",
     renewalDate: "2025-01-10T00:00:00.000Z",
+    origin: null,
     cancellation: null,
   },
   /*
@@ -126,6 +130,7 @@ const POLICIES: HouseholdView["policies"] = [
     policyNumber: "HOM-180-206-71",
     policyType: "Home",
     carrier: "Allstate",
+    origin: null,
     active: false,
     policyStatus: "Cancelled",
     premium: 2904,

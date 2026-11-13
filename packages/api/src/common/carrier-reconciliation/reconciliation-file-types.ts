@@ -41,3 +41,15 @@ export const ALLOWED_RECONCILIATION_CONTENT_TYPES = [
  * covers `Content-Type`, so it must not depend on what a browser reports.
  */
 export const RECONCILIATION_CONTENT_TYPE = XLSX_CONTENT_TYPE;
+
+/**
+ * Where a 1-800 service intake's signed application goes (PAC-173 PR 5):
+ * under the Dash line's policy key, so the key's prefix is the ownership
+ * check — an upload for one policy cannot be attached to another — and the
+ * file belongs to the policy, not to a row a re-upload replaces (PAC-173
+ * review). A prefix of its own, not under {@link RECONCILIATION_PURPOSE}, so
+ * a document key never passes for a report upload's.
+ */
+export function reconciliationDocumentPurpose(policyKey: string): string {
+  return `serviced-policies/${policyKey}/nba`;
+}

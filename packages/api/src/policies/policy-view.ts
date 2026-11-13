@@ -69,6 +69,8 @@ export function toPolicySummary(
     policyNumber: policy.policyNumber ?? null,
     policyType: normalizePolicyType(policy.policyType) || null,
     carrier: normalizeCarrier(policy.carrier) || null,
+    // A 1-800 policy set up for service (PAC-173); absent = the agency's own.
+    origin: policy.origin ?? null,
     active: policy.active ?? false,
     policyStatus: normalizePolicyStatus(policy.policyStatus) || null,
     premium: policy.premium ?? 0,

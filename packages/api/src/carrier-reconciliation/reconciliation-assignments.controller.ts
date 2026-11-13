@@ -1,23 +1,38 @@
-import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   ModuleKey,
   modulePermission,
   type AccessContext,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRowDetail,
+  type ReconciliationPresignResponse,
+  type ReconciliationServiceIntakeOptions,
+  type ReconciliationServiceIntakeResponse,
 } from '@sfa/shared';
 import {
   RequireAnyPermission,
   RequireModule,
 } from '../common/decorators/access.decorators';
-import { Access } from '../common/decorators/user.decorators';
+import { Access, BranchId } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   assignedQuerySchema,
+  presignRowDocumentSchema,
   reconciliationIdSchema,
   recordOutcomeSchema,
+  serviceIntakeSchema,
   type AssignedQueryDto,
+  type PresignRowDocumentDto,
   type RecordOutcomeDto,
+  type ServiceIntakeDto,
 } from './dto/carrier-reconciliation.dto';
 import { ReconciliationAssignmentsService } from './reconciliation-assignments.service';
 import { ReconciliationOutcomesService } from './reconciliation-outcomes.service';
@@ -40,6 +55,10 @@ import { ReconciliationOutcomesService } from './reconciliation-outcomes.service
  * write to the row's assignee. Sold and Cancel rewrite book a sale, so those
  * two also need `leads:write` + `deal_audits:write`, checked in the service
  * where the kind is known.
+ *
+ * A 1-800 row is set up for service here too (PAC-173 PR 5): its signed
+ * application's presign, the CSRs its welcome call can go to, and the intake
+ * itself — `leads:write` for those, checked in the service the same way.
  */
 @Controller('carrier-reconciliation/assigned')
 @RequireModule(ModuleKey.CarrierReconciliation)
@@ -93,5 +112,55 @@ export class ReconciliationAssignmentsController {
     @Body(new ZodValidationPipe(recordOutcomeSchema)) body: RecordOutcomeDto,
   ): Promise<ReconciliationAssignedRowDetail> {
     return this.outcomes.record(access, rowId, body);
+  }
+
+  /**
+   * Where the 1-800 service intake's signed application goes: a presigned
+   * PUT under this row, PDF only. 400 for a row that offers no service intake
+   * (`RECONCILIATION_OUTCOME_NOT_ALLOWED`) or a body that is not a PDF of at
+   * most 10MB; 403 without `leads:write`; 404 unless the row is mine; 409 for
+   * a decided row or a replaced run.
+   */
+  @Post(':rowId/documents/presign')
+  presignDocument(
+    @Access() access: AccessContext,
+    @Param('rowId', new ZodValidationPipe(reconciliationIdSchema))
+    rowId: string,
+    @Body(new ZodValidationPipe(presignRowDocumentSchema))
+    body: PresignRowDocumentDto,
+  ): Promise<ReconciliationPresignResponse> {
+    return this.outcomes.presignDocument(access, rowId, body);
+  }
+
+  /**
+   * The CSRs the service intake's welcome call can go to — the ticket
+   * picker's pool, which a Producer cannot ask for themselves. 400 for a row
+   * that offers no service intake; 403 without `leads:write`; 404 unless the
+   * row is mine.
+   */
+  @Get(':rowId/service-intake/options')
+  serviceIntakeOptions(
+    @Access() access: AccessContext,
+    @Param('rowId', new ZodValidationPipe(reconciliationIdSchema))
+    rowId: string,
+  ): Promise<ReconciliationServiceIntakeOptions> {
+    return this.outcomes.serviceIntakeOptions(access, rowId);
+  }
+
+  /**
+   * Set my 1-800 row up for service: the household, a `carrier_direct`
+   * policy with no deal, and the chosen CSR's welcome call — never a sale.
+   * Finishes the row (`service_intake_recorded`). See the service for every
+   * refusal.
+   */
+  @Post(':rowId/service-intake')
+  serviceIntake(
+    @Access() access: AccessContext,
+    @BranchId() branchId: string | null,
+    @Param('rowId', new ZodValidationPipe(reconciliationIdSchema))
+    rowId: string,
+    @Body(new ZodValidationPipe(serviceIntakeSchema)) body: ServiceIntakeDto,
+  ): Promise<ReconciliationServiceIntakeResponse> {
+    return this.outcomes.serviceIntake(access, branchId, rowId, body);
   }
 }

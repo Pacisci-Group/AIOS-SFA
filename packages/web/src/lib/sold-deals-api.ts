@@ -47,8 +47,15 @@ export type SoldUploadKind = "discount_proof" | "new_business_application";
  * is how the rewrite fell through to the lead branch with an empty `leadId` and
  * could never upload. Both flows run on a lead now. The shape stays so the next
  * anchor, if there is one, is a compile error here rather than a fallback.
+ *
+ * And there is one now: a 1-800 service intake (PAC-173 PR 5) attaches its new
+ * business application before any household exists, so it is anchored on its
+ * Dash row (`carrier-reconciliation/assigned/:rowId/documents/presign`, PDF
+ * only) — a lead is exactly what that flow never makes.
  */
-export type UploadScope = { kind: "lead"; leadId: string };
+export type UploadScope =
+  | { kind: "lead"; leadId: string }
+  | { kind: "reconciliation"; rowId: string };
 
 /** `GET /sold-deals/context?leadId=` — the header and driver picker source. */
 export function getSoldDealContext(
@@ -95,6 +102,23 @@ function presignEndpoint(scope: UploadScope): string {
   switch (scope.kind) {
     case "lead":
       return "/sold-deals/documents/presign";
+    case "reconciliation":
+      return `/carrier-reconciliation/assigned/${encodeURIComponent(scope.rowId)}/documents/presign`;
+  }
+}
+
+/** What each anchor's presign takes: the lead's names its kind; the row's is the NBA. */
+function presignBody(
+  scope: UploadScope,
+  file: File,
+  kind: SoldUploadKind,
+): Record<string, unknown> {
+  const meta = { filename: file.name, contentType: file.type, size: file.size };
+  switch (scope.kind) {
+    case "lead":
+      return { leadId: scope.leadId, kind, ...meta };
+    case "reconciliation":
+      return meta;
   }
 }
 
@@ -107,13 +131,7 @@ export async function uploadSoldDocument(
     presignEndpoint(scope),
     {
       method: "POST",
-      body: JSON.stringify({
-        leadId: scope.leadId,
-        kind,
-        filename: file.name,
-        contentType: file.type,
-        size: file.size,
-      }),
+      body: JSON.stringify(presignBody(scope, file, kind)),
     },
   );
 

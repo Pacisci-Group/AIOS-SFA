@@ -23,17 +23,20 @@ export interface RowAssignment {
 }
 
 /**
- * What the assignee recorded on a row (PAC-173 PR 4): Sold, Cancel rewrite or
- * Other. Its own field beside `assignment`, for the same reason — saving a
+ * What the assignee recorded on a row (PAC-173 PR 4): Sold, Cancel rewrite,
+ * Service intake (PR 5) or Other. Its own field beside `assignment`, for the same reason — saving a
  * decision replaces `review` whole and must not drop it.
  *
  * Ids are strings, like every id in these snapshots: it is read back whole,
  * and the links (`leadId`, `dealId`, …) are followed one at a time, never
  * joined on. A sale kind starts `in_progress` at `record_sale`; a cancel
- * rewrite then waits at `write_replacement` for its replacement; `other` is
- * done at once. Done always comes with the row resolved
- * (`RECONCILIATION_OUTCOME_RESOLUTION`), so an open row holds either no
- * outcome or one in progress.
+ * rewrite then waits at `write_replacement` for its replacement; a service
+ * intake waits at `start_onboarding` only until its welcome call opens;
+ * `other` is done at once. Done comes with the row resolved
+ * (`RECONCILIATION_OUTCOME_RESOLUTION`), so an open row holds no outcome or
+ * one in progress — except a service intake finished on a row a re-upload
+ * carried it to that asks something else (a premium difference): that stays
+ * open for the owner, and off the assignee's list (`openAssignmentsFilter`).
  */
 export interface RowOutcome {
   kind: ReconciliationOutcomeKind;
@@ -51,6 +54,16 @@ export interface RowOutcome {
   /** A cancel rewrite's replacement, and the chargeback the rewrite wrote. */
   replacementPolicyId: string | null;
   chargebackId: string | null;
+  /**
+   * A service intake (PAC-173 PR 5): the CSR its welcome call goes to — kept
+   * so a retried hand-off needs nothing but the row — then the onboarding and
+   * its welcome-call ticket once open. Absent on outcomes stored before.
+   */
+  csrId?: string | null;
+  onboardingId?: string | null;
+  ticketId?: string | null;
+  /** While someone is opening the welcome call — so only one does. */
+  handOffAt?: Date | null;
   startedById: string;
   startedAt: Date;
   completedById: string | null;
@@ -69,15 +82,6 @@ export interface PreviousRowReview {
   reviewedAt: Date | null;
   assignment: RowAssignment | null;
   outcome: RowOutcome | null;
-}
-
-/** What carry-forward compares: the row's key, match and issues. */
-export interface CarriedRow {
-  rowKey: string;
-  match: ReconciliationMatch | null;
-  issues: readonly ReconciliationIssue[];
-  /** Whether the new row asks for a decision by its own tabs. */
-  needsReview?: boolean;
 }
 
 /** A carried decision, as the new row stores it (`StoredReview`). */
@@ -119,10 +123,11 @@ export function carriedFields(
   context: CarryContext,
 ): CarriedFields {
   const fields: CarriedFields = {};
-  // An outcome held open — under way, with a sale already booked — carries to
-  // the Dash line's new row whatever it now says: booking the Dash policy is
-  // what turned the row `matched`, and the outcome is the only link to that
-  // sale. It brings its assignee, and keeps the row asking until it is done.
+  // An outcome held open — under way, with a sale or a serviced policy already
+  // booked — carries to the Dash line's new row whatever it now says: booking
+  // the Dash policy is what turned the row `matched`, and the outcome is the
+  // only link to it. It brings its assignee, and keeps the row asking until
+  // it is done (a pending service intake: until its welcome call opens).
   const before = previous.get(row.rowKey);
   const held = before && isHeldOpen(before.outcome) ? before : null;
   const source = held ?? sameRowBefore(row, previous);
@@ -130,7 +135,14 @@ export function carriedFields(
   if (assignment && context.canTakeRows(assignment.userId)) {
     fields.assignment = assignment;
   }
-  if (source?.outcome) fields.outcome = source.outcome;
+  if (source?.outcome) {
+    // A welcome call being opened on the old row as it is replaced: the claim
+    // is that row's. The copy starts unclaimed, so a Continue there can open
+    // (or find) the call at once rather than wait for the claim to lapse.
+    fields.outcome = source.outcome.handOffAt
+      ? { ...source.outcome, handOffAt: null }
+      : source.outcome;
+  }
   if (held && !row.needsReview) fields.needsReview = true;
   const review = carriedReview(row, previous);
   if (review) {
@@ -189,7 +201,9 @@ export function carriedAssignment(
  * Booking the Dash policy makes the row match next upload, so a finished sale
  * recorded between two uploads changes the row and nothing carries — by
  * design: the row no longer asks the question. One still under way is the
- * exception ({@link carriedFields}, `isHeldOpen`): it carries anyway.
+ * exception ({@link carriedFields}, `isHeldOpen`): it carries anyway — a
+ * pending service intake included. A finished service intake is the other
+ * ({@link CarriedRow}, `servicedSince`).
  */
 export function carriedOutcome(
   row: CarriedRow,
@@ -198,15 +212,72 @@ export function carriedOutcome(
   return sameRowBefore(row, previous)?.outcome ?? null;
 }
 
+/**
+ * What carry-forward compares: the row's key, match and issues — and, for the
+ * one exception below, the app policy it matched.
+ */
+export interface CarriedRow {
+  rowKey: string;
+  match: ReconciliationMatch | null;
+  issues: readonly ReconciliationIssue[];
+  app?: { policyId: string; origin?: string | null } | null;
+  /** Whether the new row asks for a decision — the exception needs it not to. */
+  needsReview?: boolean;
+}
+
 function sameRowBefore(
   row: CarriedRow,
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): PreviousRowReview | null {
   const before = previous.get(row.rowKey);
   if (!before) return null;
+  if (servicedSince(before, row)) return before;
   if (before.match !== row.match) return null;
   if (issueSignature(before.issues) !== issueSignature(row.issues)) return null;
   return before;
+}
+
+/**
+ * The one change of row that still carries (PAC-173 PR 5): a 1-800 line set
+ * up for service now matches the policy that intake created. The row no longer
+ * asks anything — it is clean `matched`, with `direct_1800` — but its decision,
+ * assignee and finished outcome are the record of who set it up, and the
+ * outcome links the household, policy and welcome call, so they stay on the
+ * owner's page. Only a done `service_intake` whose policy is the one the line
+ * now matches; anything else starts clean.
+ */
+function servicedSince(before: PreviousRowReview, row: CarriedRow): boolean {
+  const outcome = before.outcome;
+  if (
+    before.match !== 'dash_only' ||
+    row.match !== 'matched' ||
+    row.app?.origin !== 'carrier_direct' ||
+    outcome?.kind !== 'service_intake' ||
+    outcome.policyId !== row.app.policyId
+  ) {
+    return false;
+  }
+  // Still waiting on its welcome call (the upload could not open it): it
+  // travels to the new row, which waits on a decision until it is opened.
+  if (isPendingServiceIntake(outcome)) return true;
+  // Done — but only onto a clean row: a premium the app and Dash now disagree
+  // on is a new question, and a decision carried onto it would hide it.
+  return outcome.status === 'done' && row.needsReview === false;
+}
+
+/**
+ * A 1-800 service intake whose household and policy are saved and whose
+ * welcome call is not open yet (PAC-173 PR 5). Its row stays waiting on a
+ * decision, wherever it is, until someone opens the call.
+ */
+export function isPendingServiceIntake(
+  outcome: RowOutcome | null | undefined,
+): boolean {
+  return (
+    outcome?.kind === 'service_intake' &&
+    outcome.status === 'in_progress' &&
+    outcome.step === 'start_onboarding'
+  );
 }
 
 function isRetired(resolution: string | null): boolean {

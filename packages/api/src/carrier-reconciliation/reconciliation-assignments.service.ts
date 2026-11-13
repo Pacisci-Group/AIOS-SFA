@@ -10,12 +10,15 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   ModuleKey,
   RECONCILIATION_ASSIGNEE_CANNOT_SELL,
+  RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
   RECONCILIATION_ASSIGNEE_PERMISSION,
   RECONCILIATION_SALE_OUTCOME_KINDS,
   RECONCILIATION_TAB_LABELS,
   canRecordReconciliationSale,
+  canSetUpReconciliationService,
   modulePermission,
   primaryReconciliationTab,
+  reconciliationOutcomeKinds,
   type AccessContext,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRow,
@@ -44,6 +47,7 @@ import {
   PermissionsService,
   type PermissionHolder,
 } from '../permissions/permissions.service';
+import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   AssignedQueryDto,
@@ -111,10 +115,13 @@ export class ReconciliationAssignmentsService {
     private readonly userModel: Model<UserDocument>,
     @InjectModel(Carrier.name)
     private readonly carrierModel: Model<CarrierDocument>,
+    @InjectModel(Agency.name)
+    private readonly agencyModel: Model<AgencyDocument>,
     private readonly inngest: InngestService,
     /**
-     * Who may be given a row — the pool, and who of it can book a sale — is
-     * decided by effective permission, never by role name.
+     * Who may be given a row — the pool, and who of it can book a sale or
+     * set a 1-800 policy up for service — is decided by effective
+     * permission, never by role name.
      */
     private readonly permissions: PermissionsService,
   ) {}
@@ -122,7 +129,9 @@ export class ReconciliationAssignmentsService {
   /**
    * The assignee picker: the agency's active users who can work leads, by
    * name, with their role names for display, each marked with whether they
-   * can book a sale — only they can be given a row missing from the app.
+   * can book a sale — only they can be given a row missing from the app —
+   * and whether they can set a 1-800 policy up for service, which a
+   * Dash-only 1-800 row needs.
    */
   async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
     const holders = await this.permissions.activeUsersHolding(
@@ -136,6 +145,7 @@ export class ReconciliationAssignmentsService {
         email: user.email ?? '',
         roles: user.roleNames,
         canRecordSale: canRecordReconciliationSale(user.permissions),
+        canSetUpService: canSetUpReconciliationService(user.permissions),
       })),
     };
   }
@@ -212,6 +222,14 @@ export class ReconciliationAssignmentsService {
           (isHeldOpen(row.outcome) && isSaleKind(row.outcome!.kind))
         ) {
           assertCanRecordSale(holder.permissions);
+        }
+        // A 1-800 row that offers a service intake — or one whose intake is
+        // under way and kept for them — needs someone who can set it up.
+        if (
+          reconciliationOutcomeKinds(row).includes('service_intake') ||
+          (isHeldOpen(row.outcome) && row.outcome!.kind === 'service_intake')
+        ) {
+          assertCanSetUpService(holder.permissions);
         }
         next = {
           userId: dto.userId,
@@ -360,12 +378,43 @@ export class ReconciliationAssignmentsService {
     agencyId: string,
     row: LeanRow,
   ): Promise<ReconciliationAssignedRowDetail> {
-    const [[view], carrierName] = await Promise.all([
+    const offersServiceIntake =
+      reconciliationOutcomeKinds(row).includes('service_intake');
+    const [[view], carrierName, crmServiceOn] = await Promise.all([
       this.assignedViews(agencyId, [row]),
       this.runCarrierName(agencyId, row.runId),
+      offersServiceIntake ? this.crmServiceOn(agencyId) : false,
     ]);
     if (!view) throw new NotFoundException('That row is not assigned to you.');
-    return { ...view, prefill: reconciliationPrefill(row.dash, carrierName) };
+    return {
+      ...view,
+      // A service intake ends in a CSR's welcome call, so it is offered only
+      // where CRM service is on: `serviceIntake: null` is how the page knows.
+      prefill: reconciliationPrefill(row.dash, carrierName, {
+        offersServiceIntake: offersServiceIntake && crmServiceOn,
+      }),
+    };
+  }
+
+  /**
+   * Whether the agency has CRM service on — the welcome call a service intake
+   * opens lives there, and the assignee controller's own gate is Dash
+   * Reconciliation only.
+   */
+  async crmServiceOn(agencyId: string): Promise<boolean> {
+    const agency = await this.agencyModel
+      .findById(agencyId)
+      .select('modules')
+      .lean<{ modules?: Record<string, { enabled?: boolean }> }>();
+    return agency?.modules?.[ModuleKey.CrmService]?.enabled === true;
+  }
+
+  /** The catalog name of the carrier a run was uploaded for. */
+  async carrierNameOfRun(
+    agencyId: string,
+    runId: Types.ObjectId,
+  ): Promise<string | null> {
+    return this.runCarrierName(agencyId, runId);
   }
 
   /**
@@ -517,6 +566,17 @@ function assertCanRecordSale(permissions: readonly string[]): void {
       code: RECONCILIATION_ASSIGNEE_CANNOT_SELL,
       message:
         'A Dash sale can be given only to someone who can book a sale (create leads and record sales).',
+    });
+  }
+}
+
+/** 400 unless these permissions can set a 1-800 policy up for service. */
+function assertCanSetUpService(permissions: readonly string[]): void {
+  if (!canSetUpReconciliationService(permissions)) {
+    throw new BadRequestException({
+      code: RECONCILIATION_ASSIGNEE_CANNOT_SERVICE,
+      message:
+        'A 1-800 policy the app does not have can be given only to someone who can set it up for service (create leads).',
     });
   }
 }

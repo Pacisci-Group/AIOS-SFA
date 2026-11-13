@@ -60,6 +60,12 @@ export interface PolicySummary {
   policyNumber: string | null;
   policyType: string | null;
   carrier: string | null;
+  /**
+   * `carrier_direct` for a policy Allstate sold directly (1-800) and the
+   * agency services — no deal, never a sale (PAC-173). `null` = the agency's
+   * own.
+   */
+  origin: import('../domain/policy-origin').PolicyOrigin | null;
   active: boolean;
   policyStatus: string | null;
   premium: number;

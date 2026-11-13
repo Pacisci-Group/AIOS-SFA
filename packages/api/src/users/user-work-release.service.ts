@@ -224,11 +224,16 @@ export class UserWorkReleaseService {
       // assignee: that is the record of who worked it, not open work. An
       // outcome they had under way goes too (PAC-173 PR 4): its lead just went
       // back to the pool above, so whoever takes the row next starts over.
-      // Open rows hold no finished outcome — finishing one decides the row.
+      // Rows on a person's list hold no finished outcome (`openAssignmentsFilter`
+      // leaves those out), so nothing finished is cleared here.
       //
-      // Except one that has booked a sale (`HELD_OPEN_OUTCOME`, PAC-173
-      // review): it is the only link to that sale, so it stays for whoever
-      // the owner hands the row to next, who continues it.
+      // Except one held open (`HELD_OPEN_OUTCOME`, PAC-173 review) — a sale
+      // already booked, or a 1-800 service intake waiting on its welcome call
+      // (PR 5), whose household and policy are saved: the outcome is their
+      // only link, so it stays for whoever the owner hands the row to next.
+      // The owner deciding or handing on a pending intake opens the call, as
+      // does a re-upload of the same period; the call then re-checks its CSR,
+      // so it never goes to the person just removed.
       (async () => {
         const [cleared, kept] = await Promise.all([
           this.reconciliationRowModel.updateMany(

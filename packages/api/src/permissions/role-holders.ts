@@ -12,6 +12,15 @@ import type { UserRole } from './schemas/user-role.schema';
  * caller passes the models its module already registers. Read only:
  * `RoleAssignmentsService` stays the sole writer of `userRoles`.
  */
+/**
+ * Whose holders can be a service ticket's Assigned Client Relation Manager —
+ * and so the CSR a 1-800 policy's welcome call goes to (PAC-173), which is a
+ * ticket. One list, so the ticket picker and the intake that checks against
+ * it cannot drift. Still a role list, not a permission: moving the ticket
+ * picker to a permission is its own change.
+ */
+export const TICKET_ASSIGNEE_ROLE_SLUGS = ['csr', 'crm'] as const;
+
 export interface RoleHolderModels {
   roleModel: Model<AgencyRoleDocument>;
   userRoleModel: Model<UserRole>;

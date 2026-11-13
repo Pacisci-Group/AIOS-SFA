@@ -40,6 +40,8 @@ tests {
         effectiveDate: "2026-10-12",
         soldDate: "2026-10-12",
       },
+      // A row missing from the app offers no service intake (PR 5).
+      serviceIntake: null,
     });
   });
 }
@@ -79,13 +81,21 @@ docs {
     - `itemCount` — Dash's, at least 1
     - `soldDate` — Dash's date written, else issued; `effectiveDate` — issued,
       else written (`YYYY-MM-DD`)
+  - `serviceIntake` (PAC-173 PR 5) — `{ openingNote }`, the welcome call's
+    first line written from the Dash line ("1-800 policy from Dash — bound by
+    OSCVANJ on 2026-10-15 through 1-800, Standard Auto, written premium
+    $793.08."), on a row that offers **Set up for service** — a 1-800 policy
+    the app does not have — while the agency has CRM service on. `null`
+    otherwise; on a 1-800 row it means CRM service is off. See `Get Assigned
+    Row (as CSR)`.
 
   ```json
   { "prefill": {
       "lead": { "firstName": "Avery", "lastName": "Quinn", "createdDate": "2026-10-12" },
       "policy": { "policyNumber": "900299990", "policyType": "Home",
         "carrier": "Allstate", "premium": 2210.5, "itemCount": 1,
-        "effectiveDate": "2026-10-12", "soldDate": "2026-10-12" } } }
+        "effectiveDate": "2026-10-12", "soldDate": "2026-10-12" },
+      "serviceIntake": null } }
   ```
 
   ## Errors

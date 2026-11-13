@@ -148,6 +148,13 @@ export function PolicyCard({
               <span className="block truncate text-xs tabular-nums text-muted-foreground">
                 {policy.policyNumber}
               </span>
+              {/* Allstate sold it (1-800); the agency services it — no
+                  producer, never a sale (PAC-173). */}
+              {policy.origin && (
+                <span className="block truncate text-xs font-medium text-primary">
+                  {policy.origin}
+                </span>
+              )}
             </span>
           </span>
           <Badge

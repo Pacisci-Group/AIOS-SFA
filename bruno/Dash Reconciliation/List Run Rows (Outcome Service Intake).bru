@@ -1,0 +1,44 @@
+meta {
+  name: List Run Rows (Outcome Service Intake)
+  type: http
+  seq: 63
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?outcome=service_intake&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  outcome: service_intake
+  pageSize: 25
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the 1-800 row set up for service, as the owner reads it", function () {
+    const row = res.getBody().items.find((item) => item.id === bru.getVar("reconRowId"));
+    expect(row).to.not.equal(undefined);
+    expect(row.outcome.kind).to.equal("service_intake");
+    expect(row.outcome.onboardingId).to.be.a("string");
+    expect(row.outcome.ticketId).to.be.a("string");
+    expect(row.review.resolution).to.equal("service_intake_recorded");
+  });
+}
+
+docs {
+  # GET …/rows?outcome=service_intake — the owner's filter on the new kind
+
+  See `List Run Rows (1-800 Review)` for the endpoint. The owner's drawer
+  shows the outcome read-only with links to the household, the policy and
+  the welcome call; the export's `outcome` column reads
+  `Service intake — done`.
+}

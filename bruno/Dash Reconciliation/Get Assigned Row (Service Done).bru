@@ -1,0 +1,38 @@
+meta {
+  name: Get Assigned Row (Service Done)
+  type: http
+  seq: 62
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("still the CSR's to read, now resolved by the intake", function () {
+    const body = res.getBody();
+    expect(body.outcome.kind).to.equal("service_intake");
+    expect(body.outcome.status).to.equal("done");
+    expect(body.outcome.householdId).to.equal(bru.getVar("reconSvcHouseholdId"));
+    expect(body.outcome.policyId).to.equal(bru.getVar("reconSvcPolicyId"));
+    expect(body.review.resolution).to.equal("service_intake_recorded");
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId — after the service intake
+
+  A decided row is still readable by its assignee (an old notification still
+  opens it), and leaves their list. The outcome links the household, the
+  policy, the onboarding and its welcome-call ticket.
+}

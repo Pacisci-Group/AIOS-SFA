@@ -1,0 +1,47 @@
+meta {
+  name: Get Assigned Row (as CSR)
+  type: http
+  seq: 55
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconRowId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconSvcCsrToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the 1-800 line as the service-intake form wants it", function () {
+    // The fixture's 900299991: MORGAN HALE, Standard Auto, bound by OSCVANJ
+    // through 1-800 on 15 Oct 2026, $793.08.
+    const prefill = res.getBody().prefill;
+    expect(prefill.lead).to.include({ firstName: "Morgan", lastName: "Hale" });
+    expect(prefill.policy).to.include({
+      policyNumber: "900299991",
+      policyType: "Auto",
+      carrier: "Allstate",
+      premium: 793.08,
+    });
+    expect(prefill.serviceIntake.openingNote).to.equal(
+      "1-800 policy from Dash — bound by OSCVANJ on 2026-10-15 through 1-800, Standard Auto, written premium $793.08.",
+    );
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId — a 1-800 row, as its CSR
+
+  The same endpoint as `Get Assigned Row (as Producer)`. On a row that offers
+  **Set up for service** — a 1-800 policy the app does not have — `prefill`
+  also carries `serviceIntake.openingNote`, the welcome call's first line,
+  written from the Dash line. It is `null` there when the agency has CRM
+  service off (no welcome call can open), and on every other row.
+}

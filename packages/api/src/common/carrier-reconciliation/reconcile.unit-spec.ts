@@ -2,6 +2,7 @@ import { appPolicy, dashRow } from './__fixtures__/dash-workbook';
 import type { DashRow } from './dash-file-reader';
 import { ProducerCodeIndex } from './producer-code-index';
 import {
+  asksForDecision,
   deriveRow,
   editDistance,
   looksLikeCarrierNumber,
@@ -493,6 +494,126 @@ describe('matched-row checks', () => {
       expect(row.issues).not.toContain('direct_recorded_as_sale');
     });
   });
+
+  // PAC-173 PR 5: the policy a service intake created.
+  describe('a 1-800 policy set up for service', () => {
+    const direct: Partial<DashRow> = {
+      bindId: 'OSCVANJ',
+      bindIdKey: 'OSCVANJ',
+      bindIdName: null,
+      channel: '1-800',
+    };
+    const serviced = (overrides: Partial<AppPolicyLite> = {}) =>
+      appPolicy({
+        dealId: null,
+        producerId: null,
+        soldDay: null,
+        origin: 'carrier_direct',
+        ...overrides,
+      });
+
+    it('matches clean: the question 1-800 review asks is answered', () => {
+      const [row] = run([dashRow(direct)], [serviced()]);
+      expect(row.match).toBe('matched');
+      expect(row.tabs).toEqual(['matched']);
+      expect(row.issues).toEqual(
+        expect.arrayContaining(['direct_1800', 'not_staff_bind_id']),
+      );
+      expect(row.issues).not.toContain('no_app_producer');
+      expect(row.issues).not.toContain('direct_recorded_as_sale');
+      expect(row.needsReview).toBe(false);
+    });
+
+    it('still checks the premium against the app', () => {
+      const [row] = run(
+        [dashRow({ ...direct, writtenPremium: 1000 })],
+        [serviced({ premium: 1000.01 })],
+      );
+      expect(row.tabs.sort()).toEqual(['matched', 'premium_mismatch']);
+      expect(row.needsReview).toBe(true);
+    });
+
+    it('is not in Dash when the file leaves out one that took effect in the period', () => {
+      const [row] = run([], [serviced({ expectedInDash: true })]);
+      expect(row.match).toBe('app_only');
+      expect(row.tabs).toEqual(['not_in_dash']);
+    });
+
+    it('checks the copy booked on a sale before its serviced twin of the same number', () => {
+      const [row] = run(
+        [dashRow({ ...direct, dateWritten: '2026-09-02' })],
+        [
+          // The serviced copy took effect the day Dash wrote it…
+          serviced({ policyId: 'p-serviced' }),
+          // …and someone booked the same number as a sale later.
+          appPolicy({ policyId: 'p-sold', soldDay: '2026-09-25' }),
+        ],
+      );
+      expect(row.app?.policyId).toBe('p-sold');
+      expect(row.tabs.sort()).toEqual(['matched', 'review_1800']);
+      expect(row.issues).toContain('direct_recorded_as_sale');
+    });
+
+    it('links the newer of two serviced copies — what setting it up again after a reopen leaves', () => {
+      const [row] = run(
+        [dashRow(direct)],
+        [
+          serviced({
+            policyId: '6a0000000000000000000001',
+            effectiveDay: '2026-09-15',
+          }),
+          serviced({
+            policyId: '6a0000000000000000000002',
+            effectiveDay: '2026-09-15',
+          }),
+        ],
+      );
+      expect(row.app?.policyId).toBe('6a0000000000000000000002');
+      expect(row.issues).toContain('duplicate_in_app');
+    });
+
+    it('is a 1-800 policy recorded as a sale again once someone puts it on a deal', () => {
+      const [row] = run(
+        [dashRow(direct)],
+        [serviced({ dealId: 'd9', producerId: 'u-pat' })],
+      );
+      expect(row.tabs.sort()).toEqual(['matched', 'review_1800']);
+      expect(row.issues).toContain('direct_recorded_as_sale');
+      expect(row.issues).not.toContain('direct_1800');
+    });
+
+    it('stays out of the per-producer table, matched or missing from Dash', () => {
+      const rows = run(
+        [dashRow(direct)],
+        [
+          serviced(),
+          serviced({
+            policyId: 'p2',
+            policyNumber: '900000777',
+            policyKey: '900000777',
+            expectedInDash: true,
+          }),
+        ],
+      );
+      expect(rows.map((r) => r.tabs.sort())).toEqual([
+        ['matched'],
+        ['not_in_dash'],
+      ]);
+      const { totals, byProducer } = summarize(rows);
+      expect(byProducer).toEqual([]);
+      expect(totals.matched).toBe(1);
+      expect(totals.appOnly).toBe(1);
+    });
+
+    it('a policy the agency sold keeps its 1-800 question', () => {
+      const [row] = run(
+        [dashRow(direct)],
+        [appPolicy({ dealId: null, origin: null })],
+      );
+      expect(row.tabs.sort()).toEqual(['matched', 'review_1800']);
+      expect(row.issues).not.toContain('direct_1800');
+    });
+  });
 });
 
 describe('summarize', () => {
@@ -703,6 +824,15 @@ describe('summarize', () => {
 });
 
 describe('helpers', () => {
+  it('says whether a row’s own tabs ask for a decision, less one an outcome answered', () => {
+    expect(asksForDecision(['matched'])).toBe(false);
+    expect(asksForDecision(['review_1800'])).toBe(true);
+    expect(asksForDecision(['review_1800'], 'review_1800')).toBe(false);
+    expect(
+      asksForDecision(['matched', 'premium_mismatch'], 'review_1800'),
+    ).toBe(true);
+  });
+
   it('reads a surname past middle initials and suffixes', () => {
     expect(surname('ROBERT GERALD LOFTIN III')).toBe('LOFTIN');
     expect(surname('Jonathan G G Reimbold')).toBe('REIMBOLD');

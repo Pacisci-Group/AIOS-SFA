@@ -9,6 +9,7 @@ import {
   RECONCILIATION_TABS,
   RETIRED_RECONCILIATION_RESOLUTIONS,
   canRecordReconciliationSale,
+  canSetUpReconciliationService,
   primaryReconciliationTab,
   reconciliationOutcomeKinds,
   reconciliationPremiumDelta,
@@ -115,20 +116,42 @@ describe('primaryReconciliationTab', () => {
 
 describe('outcomes', () => {
   it('lets a missing Dash sale be Sold, a Cancel rewrite or Other', () => {
-    expect(reconciliationOutcomeKinds(['missing_from_app'])).toEqual([
-      'sold',
-      'cancel_rewrite',
-      'other',
-    ]);
+    expect(
+      reconciliationOutcomeKinds({
+        tabs: ['missing_from_app'],
+        match: 'dash_only',
+      }),
+    ).toEqual(['sold', 'cancel_rewrite', 'other']);
+  });
+
+  it('lets a 1-800 policy the app does not have be set up for service, or Other', () => {
+    expect(
+      reconciliationOutcomeKinds({ tabs: ['review_1800'], match: 'dash_only' }),
+    ).toEqual(['service_intake', 'other']);
+  });
+
+  it('gives a 1-800 policy the app already has Other only, on a deal or not', () => {
+    expect(
+      reconciliationOutcomeKinds({
+        tabs: ['matched', 'review_1800'],
+        match: 'matched',
+      }),
+    ).toEqual(['other']);
   });
 
   it('gives every other tab Other only', () => {
     for (const tab of RECONCILIATION_TABS.filter(
-      (t) => t !== 'missing_from_app',
+      (t) => t !== 'missing_from_app' && t !== 'review_1800',
     )) {
-      expect(reconciliationOutcomeKinds([tab])).toEqual(['other']);
+      for (const match of ['matched', 'dash_only', 'app_only', null] as const) {
+        expect(reconciliationOutcomeKinds({ tabs: [tab], match })).toEqual([
+          'other',
+        ]);
+      }
     }
-    expect(reconciliationOutcomeKinds([])).toEqual(['other']);
+    expect(reconciliationOutcomeKinds({ tabs: [], match: null })).toEqual([
+      'other',
+    ]);
   });
 
   it('resolves each kind with its own resolution, which a review cannot set', () => {
@@ -148,6 +171,14 @@ describe('outcomes', () => {
     expect(canRecordReconciliationSale(['deal_audits:write'])).toBe(false);
     expect(
       canRecordReconciliationSale(['leads:read', 'deal_audits:read']),
+    ).toBe(false);
+  });
+
+  it('sets up service with leads write, which Producers and CSRs both hold', () => {
+    expect(canSetUpReconciliationService(['leads:write'])).toBe(true);
+    expect(canSetUpReconciliationService(['leads:read'])).toBe(false);
+    expect(
+      canSetUpReconciliationService(['crm_service:write', 'clients:write']),
     ).toBe(false);
   });
 });

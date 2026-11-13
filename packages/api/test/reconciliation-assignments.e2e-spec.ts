@@ -231,6 +231,8 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
 
       // `canRecordSale` (PAC-173 PR 4): only a Producer's template books a
       // sale, so only they can be given a row missing from the app.
+      // `canSetUpService` (PR 5): both templates hold `leads:write`, so either
+      // can be given a 1-800 row to set up for service.
       expect(assignees).toEqual(
         expect.arrayContaining([
           {
@@ -239,6 +241,7 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
             email: ctx.producerEmail,
             roles: ['Producer'],
             canRecordSale: true,
+            canSetUpService: true,
           },
           {
             id: csrId,
@@ -246,6 +249,7 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
             email: ctx.csrEmail,
             roles: ['CSR'],
             canRecordSale: false,
+            canSetUpService: true,
           },
         ]),
       );

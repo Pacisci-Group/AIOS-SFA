@@ -135,6 +135,7 @@ export const ISSUE_SHORT_LABELS: Record<ReconciliationIssue, string> = {
   no_bind_id: "No Bind ID",
   direct_channel: "1-800 / web",
   direct_recorded_as_sale: "1-800 on a sale",
+  direct_1800: "Allstate direct",
   premium_mismatch: "Premium differs",
   item_count_mismatch: "Items differ",
   producer_mismatch: "Credit differs",
@@ -174,14 +175,15 @@ export function outcomeLabel(outcome: ReconciliationOutcome): string {
 
 /**
  * An outcome as its assignee reads it, on their own lists: what is left for
- * them to do — `Sold — in progress`, `Write the replacement`.
+ * them to do — `Sold — in progress`, `Write the replacement`, `Open the
+ * welcome call`.
  */
 export function outcomeNextStep(outcome: ReconciliationOutcome): string {
   const kind = RECONCILIATION_OUTCOME_KIND_LABELS[outcome.kind];
   if (outcome.status === "done") return `${kind} — done`;
-  return outcome.step === "write_replacement"
-    ? "Write the replacement"
-    : `${kind} — in progress`;
+  if (outcome.step === "write_replacement") return "Write the replacement";
+  if (outcome.step === "start_onboarding") return "Open the welcome call";
+  return `${kind} — in progress`;
 }
 
 /** Done reads as settled; one under way as still open. */
@@ -197,6 +199,7 @@ export const OUTCOME_FILTER_LABELS: Record<ReconciliationOutcomeFilter, string> 
   done: "Done",
   sold: RECONCILIATION_OUTCOME_KIND_LABELS.sold,
   cancel_rewrite: RECONCILIATION_OUTCOME_KIND_LABELS.cancel_rewrite,
+  service_intake: RECONCILIATION_OUTCOME_KIND_LABELS.service_intake,
   other: RECONCILIATION_OUTCOME_KIND_LABELS.other,
 };
 
