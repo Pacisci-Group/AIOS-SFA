@@ -657,6 +657,155 @@ describe('Dash Reconciliation row assignment (e2e)', () => {
     });
   });
 
+  /**
+   * PAC-173 review: every month stays its period's current run, so without
+   * closing, every month ever uploaded stayed on people's lists for good.
+   */
+  describe('closing a month', () => {
+    const close = (runId: string, token = ownerToken) =>
+      api().post(`${base}/runs/${runId}/close`).set(authHeader(token));
+    const reopen = (runId: string, token = ownerToken) =>
+      api().post(`${base}/runs/${runId}/reopen`).set(authHeader(token));
+    const closedRun = () =>
+      seedRun({
+        closedAt: new Date(),
+        closedById: new Types.ObjectId(ownerId),
+      });
+
+    it("takes the month's rows off everyone's list until it is reopened", async () => {
+      const runId = await seedRun();
+      const row = await seedRow(runId, { assignment: assignedTo(producerId) });
+      expect(
+        (await assigned(producerToken)).items.map((item) => item.id),
+      ).toEqual([row.rowId]);
+
+      const closed = (await close(runId).expect(201))
+        .body as ReconciliationRunDetail;
+      expect(typeof closed.closedAt).toBe('string');
+      expect(closed.closedBy?.id).toBe(ownerId);
+      expect((await assigned(producerToken)).total).toBe(0);
+      // The owner still has it, with whoever it was with.
+      expect(await rowIds(runId, { assignee: producerId })).toEqual([
+        row.rowId,
+      ]);
+      // An old notification still opens it, and says the month is closed.
+      const opened = (
+        await api()
+          .get(`${base}/assigned/${row.rowId}`)
+          .set(authHeader(producerToken))
+          .expect(200)
+      ).body as ReconciliationAssignedRow;
+      expect(opened.run.closedAt).toBe(closed.closedAt);
+
+      const reopened = (await reopen(runId).expect(201))
+        .body as ReconciliationRunDetail;
+      expect(reopened).toMatchObject({ closedAt: null, closedBy: null });
+      expect(
+        (await assigned(producerToken)).items.map((item) => item.id),
+      ).toEqual([row.rowId]);
+    });
+
+    it('refuses to hand a row to anyone while closed, but takes one back', async () => {
+      const runId = await closedRun();
+      const open = await seedRow(runId);
+      const held = await seedRow(runId, { assignment: assignedTo(producerId) });
+
+      const refused = await assign(open, { userId: producerId }).expect(409);
+      expect((refused.body as { message: string }).message).toMatch(/closed/i);
+      // A note on someone's row is handing it over again, too.
+      await assign(held, { userId: producerId, note: 'Still yours' }).expect(
+        409,
+      );
+      await assign(held, { userId: null }).expect(200);
+
+      expect((await rows.findById(held.rowId).lean())?.assignment).toBeNull();
+      expect((await rows.findById(open.rowId).lean())?.assignment).toBeNull();
+      expect(notifications()).toHaveLength(0);
+    });
+
+    it('closes and reopens idempotently', async () => {
+      const runId = await seedRun();
+      const first = (await close(runId).expect(201))
+        .body as ReconciliationRunDetail;
+      const again = (await close(runId).expect(201))
+        .body as ReconciliationRunDetail;
+      expect(again.closedAt).toBe(first.closedAt);
+
+      await reopen(runId).expect(201);
+      const still = (await reopen(runId).expect(201))
+        .body as ReconciliationRunDetail;
+      expect(still.closedAt).toBeNull();
+    });
+
+    it.each([
+      ['a re-upload replaced', { supersededByRunId: new Types.ObjectId() }],
+      ['failed', { status: 'failed' as const }],
+      [
+        'is still processing',
+        { status: 'processing' as const, startedAt: new Date() },
+      ],
+    ])('refuses to close or reopen a run that %s', async (_label, extra) => {
+      const runId = await seedRun(extra);
+      await close(runId).expect(409);
+      await reopen(runId).expect(409);
+    });
+
+    it('on reopening, takes an open row back from someone who can no longer be given rows', async () => {
+      const runId = await closedRun();
+      const kept = await seedRow(runId, { assignment: assignedTo(producerId) });
+      // Left while the month was closed: on no list, so no release or
+      // transfer ever saw the row.
+      const leaver = new Types.ObjectId().toHexString();
+      const gone = await seedRow(runId, { assignment: assignedTo(leaver) });
+      // A decided row keeps whoever worked it — that is the record.
+      const worked = await seedRow(runId, {
+        assignment: assignedTo(leaver),
+        review: decided('resolved'),
+      });
+
+      await reopen(runId).expect(201);
+
+      const stored = async (row: SeededRow) =>
+        (await rows.findById(row.rowId).lean())?.assignment ?? null;
+      expect((await stored(kept))?.userId).toBe(producerId);
+      expect(await stored(gone)).toBeNull();
+      expect((await stored(worked))?.userId).toBe(leaver);
+    });
+
+    it('is the owner’s: a producer can neither close nor reopen a month', async () => {
+      const runId = await seedRun();
+      await close(runId, producerToken).expect(403);
+      await reopen(runId, producerToken).expect(403);
+      expect((await runDetail(runId)).closedAt).toBeNull();
+    });
+  });
+
+  /** PAC-173 review: `assignment` was `type: Object`, which nothing checked. */
+  describe('the stored assignment', () => {
+    it('is checked on write: one without a person or a time is refused, and anything else is dropped', async () => {
+      await expect(
+        seedRow(undefined, { assignment: { note: 'nobody' } as never }),
+      ).rejects.toThrow(/userId|assignedAt/);
+
+      const { rowId } = await seedRow(undefined, {
+        assignment: {
+          ...assignedTo(producerId.toUpperCase()),
+          extra: 'dropped',
+        } as never,
+      });
+      const stored = (await rows.findById(rowId).lean())
+        ?.assignment as unknown as Record<string, unknown>;
+      expect(Object.keys(stored).sort()).toEqual([
+        'assignedAt',
+        'assignedById',
+        'note',
+        'userId',
+      ]);
+      // Lower-cased, the way `openAssignmentsFilter` compares it.
+      expect(stored.userId).toBe(producerId);
+    });
+  });
+
   describe('access', () => {
     it('lets neither a producer assign rows nor list who can take them', async () => {
       const row = await seedRow();

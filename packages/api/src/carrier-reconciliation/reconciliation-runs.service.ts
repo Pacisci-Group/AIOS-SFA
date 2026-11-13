@@ -114,6 +114,7 @@ import {
   STALE_RUN_MINUTES,
   toProducerSummary,
   resolveRowViews,
+  runUserIds,
   toRunView,
   type LeanRow,
   type LeanRun,
@@ -579,6 +580,12 @@ export class ReconciliationRunsService {
           byProducer: summary.byProducer,
           supersedesRunId: previous?._id ?? null,
           currentKey: runPeriodKey(run.fileMeta.agentNumber, window),
+          // A closed month stays closed when its report is uploaded again:
+          // closing is the owner's call about the period, not about one file.
+          // Read with the supersede above, so a close racing this upload
+          // either conflicts with it or lands first and is carried.
+          closedAt: previous?.closedAt ?? null,
+          closedById: previous?.closedAt ? previous.closedById : null,
           finishedAt,
           durationMs:
             finishedAt.getTime() - (run.startedAt ?? finishedAt).getTime(),
@@ -743,7 +750,7 @@ export class ReconciliationRunsService {
     );
     const names = await displayNamesFor(
       this.userModel,
-      runs.flatMap((run) => (run.createdBy ? [String(run.createdBy)] : [])),
+      runs.flatMap(runUserIds),
     );
     return {
       items: runs.map((run) =>
@@ -781,7 +788,7 @@ export class ReconciliationRunsService {
       }),
     ]);
     const names = await displayNamesFor(this.userModel, [
-      ...(run.createdBy ? [String(run.createdBy)] : []),
+      ...runUserIds(run),
       ...run.byProducer.flatMap((entry) =>
         entry.userId ? [entry.userId] : [],
       ),
@@ -998,6 +1005,101 @@ export class ReconciliationRunsService {
       );
     }
     return operations.length;
+  }
+
+  // -------------------------------------------------------------------------
+  // Closing a month
+  // -------------------------------------------------------------------------
+
+  /**
+   * Close a month (PAC-173 review): its rows leave every assignee's list —
+   * `currentRunIds` skips a closed run, which also keeps work transfer and
+   * release off them — and none can be handed to anyone until it is reopened.
+   * The owner still reads, decides and re-checks its rows, and assignments are
+   * kept, so reopening puts the rows back with whoever had them.
+   *
+   * Only the period's current run. Idempotent: a closed month stays as it was.
+   */
+  async close(
+    access: AccessContext,
+    runId: string,
+  ): Promise<ReconciliationRunDetail> {
+    const agencyId = clientAgencyId(access);
+    const run = await this.loadRun(agencyId, runId);
+    assertCurrentMonth(run);
+    if (!run.closedAt) {
+      const closed = await this.runModel.updateOne(
+        { _id: run._id, agencyId, ...CLOSABLE, closedAt: null },
+        {
+          $set: {
+            closedAt: new Date(),
+            closedById: Types.ObjectId.isValid(access.userId)
+              ? new Types.ObjectId(access.userId)
+              : null,
+          },
+        },
+      );
+      // Closed by someone else meanwhile is fine; replaced by a re-upload is
+      // the 409 a fresh read gives.
+      if (!closed.matchedCount) {
+        assertCurrentMonth(await this.loadRun(agencyId, runId));
+      }
+    }
+    return this.detail(access, runId);
+  }
+
+  /**
+   * Reopen a closed month: its open rows are back on their assignees' lists.
+   *
+   * Except where the assignee can no longer be given rows — they left, or
+   * lost the permission, while the month was closed. A work transfer or a
+   * release then never saw these rows (they were on no list), so the row
+   * starts with nobody on it, the rule a re-upload applies to a carried
+   * assignment (`carriedFields`). In the reopen's transaction, so neither
+   * lands without the other. Idempotent.
+   */
+  async reopen(
+    access: AccessContext,
+    runId: string,
+  ): Promise<ReconciliationRunDetail> {
+    const agencyId = clientAgencyId(access);
+    const run = await this.loadRun(agencyId, runId);
+    assertCurrentMonth(run);
+    if (run.closedAt) {
+      const context = await this.carryContext(agencyId);
+      const reopened = await this.transactions.run(async (session) => {
+        const opened = await this.runModel.updateOne(
+          { _id: run._id, agencyId, ...CLOSABLE, closedAt: { $ne: null } },
+          { $set: { closedAt: null, closedById: null } },
+          { session: session ?? undefined },
+        );
+        if (!opened.matchedCount) return false;
+        const open = {
+          agencyId,
+          runId: run._id,
+          needsReview: true,
+          'review.status': 'open' as const,
+          ...LIVE_ROW,
+        };
+        const assignees = await this.rowModel
+          .distinct('assignment.userId', {
+            ...open,
+            'assignment.userId': { $type: 'string' },
+          })
+          .session(session);
+        const gone = assignees.filter((id) => !context.canTakeRows(id));
+        if (gone.length) {
+          await this.rowModel.updateMany(
+            { ...open, 'assignment.userId': { $in: gone } },
+            { $set: { assignment: null } },
+            { session: session ?? undefined },
+          );
+        }
+        return true;
+      });
+      if (!reopened) assertCurrentMonth(await this.loadRun(agencyId, runId));
+    }
+    return this.detail(access, runId);
   }
 
   // -------------------------------------------------------------------------
@@ -1234,6 +1336,27 @@ function assertWorkable(run: LeanRun, what: 'decided' | 're-checked'): void {
   }
   if (run.status !== 'ready' || isStale(run)) {
     throw new ConflictException(`Only a finished run can be ${what}.`);
+  }
+}
+
+/** What a run must still be for its month to be closed or reopened. */
+const CLOSABLE = { status: 'ready', supersededByRunId: null } as const;
+
+/**
+ * Only the period's current run is closed or reopened: a replaced run's rows
+ * are history already — the month's state is on the run that replaced it —
+ * and a run that never finished was never on anyone's list.
+ */
+function assertCurrentMonth(run: LeanRun): void {
+  if (run.supersededByRunId) {
+    throw new ConflictException(
+      'A newer upload of this report replaced this run. Close or reopen the month on that one.',
+    );
+  }
+  if (run.status !== 'ready' || isStale(run)) {
+    throw new ConflictException(
+      'Only a finished run can be closed or reopened.',
+    );
   }
 }
 
