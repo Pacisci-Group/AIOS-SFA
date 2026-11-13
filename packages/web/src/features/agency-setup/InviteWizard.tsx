@@ -4,6 +4,12 @@ import { z } from "zod";
 import type { InvitePreview } from "@/lib/invite-api";
 import { StepProgress } from "@/components/common/StepProgress";
 import { WizardFooter } from "@/components/common/WizardFooter";
+import { AllstateCodeFields } from "@/components/allstate-codes/AllstateCodeFields";
+import {
+  allstateCodeConflict,
+  allstateCodesFormValues,
+  allstateCodesShape,
+} from "@/components/allstate-codes/allstate-codes-schema";
 import { SetPasswordForm } from "@/components/auth/SetPasswordForm";
 import { FormError, FormGrid, FormSection } from "@/components/form";
 import { Button } from "@/components/ui/button";
@@ -13,22 +19,28 @@ import { useAppForm } from "@/hooks/form";
 import { completeAgencySetup } from "@/lib/agency-setup-api";
 import { ApiError } from "@/lib/api-client";
 import { acceptInvite } from "@/lib/invite-api";
+import { serverFieldError } from "@/lib/server-field-error";
 import {
   AGENCY_SETUP_STEPS,
   AgencySetupStepContent,
 } from "./AgencySetupSteps";
 
-/** Phase 1: what the invitee tells us about themselves before they have a session. */
+/**
+ * Phase 1: what the invitee tells us about themselves before they have a
+ * session — their name, and their Allstate codes (PAC-173), which the inviter
+ * may have filled in already and the invitee knows best.
+ */
 const profileSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required").max(100),
   lastName: z.string().trim().min(1, "Last name is required").max(100),
+  ...allstateCodesShape,
 });
 
 /**
  * Accepting an invite, as a guided flow (PAC-69).
  *
  * ## Two phases, and why the counter spans both from the start
- * Phase 1 is personal — name, then password. Phase 2 is the agency's white-label
+ * Phase 1 is personal — name and Allstate codes, then password. Phase 2 is the agency's white-label
  * setup, and only an incoming **owner** sees it (`preview.agencySetupPending`,
  * which the public preview endpoint answers before any session exists). Because
  * that is known up front, the counter reads "Step 1 of 5" from the first screen
@@ -83,6 +95,7 @@ export function InviteWizard({
     defaultValues: {
       firstName: preview.firstName ?? "",
       lastName: preview.lastName ?? "",
+      ...allstateCodesFormValues(preview),
     },
     validators: { onBlur: profileSchema },
     onSubmit: () => goToStep(1),
@@ -97,10 +110,14 @@ export function InviteWizard({
   async function handlePassword(password: string) {
     setSubmitError(null);
     try {
-      const { firstName, lastName } = form.state.values;
+      const values = form.state.values;
+      // Always sent, prefilled from the invite: `''` clears what the inviter
+      // typed, which is a real choice when they typed it wrong.
       const result = await acceptInvite(token, password, {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
+        firstName: values.firstName.trim(),
+        lastName: values.lastName.trim(),
+        allstateBindId: values.allstateBindId.trim(),
+        allstateSubProducerCode: values.allstateSubProducerCode.trim(),
       });
       // `acceptInvite` has already persisted the tokens; this tells React about
       // the session so `ProtectedRoute` lets them through on the next render.
@@ -116,6 +133,17 @@ export function InviteWizard({
       void refreshBranding();
       goToStep(personalSteps.length);
     } catch (err) {
+      /*
+       * A code someone else in the agency already holds. The field is on the
+       * previous step, so go back to it and put the message under the input;
+       * nothing was saved, so the password is simply typed again after.
+       */
+      const conflict = allstateCodeConflict(err);
+      if (conflict) {
+        form.setFieldMeta(conflict.field, serverFieldError(conflict.message));
+        goToStep(0);
+        return;
+      }
       setSubmitError(
         err instanceof ApiError
           ? err.message
@@ -199,6 +227,16 @@ export function InviteWizard({
                   )}
                 </form.AppField>
               </FormGrid>
+              <AllstateCodeFields
+                form={form}
+                fields={{
+                  allstateBindId: "allstateBindId",
+                  allstateSubProducerCode: "allstateSubProducerCode",
+                }}
+                inputClassName="bg-card border-border"
+                markOptional
+                columns={preview.agencySetupPending ? 2 : 1}
+              />
               {/*
                 The invited address is shown as text, not a field. The token
                 already determines the account, so an input — even read-only —

@@ -20,6 +20,8 @@ tests {
     expect(body.email).to.equal(bru.getVar("onboardOwnerEmail"));
     expect(body.firstName).to.equal("Pac");
     expect(body.roleNames).to.include("Agency Owner");
+    // PAC-173 — the owner's Bind ID as the operator typed it, normalised.
+    expect(body.allstateBindId).to.equal("SOKPAC69");
   });
 
   test("flags that the agency's own setup is still waiting", function () {

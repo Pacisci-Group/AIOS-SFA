@@ -93,7 +93,14 @@ export interface OnboardAgencyInput {
     address: { street?: string; city?: string; state?: string; zip?: string };
   };
   modules: ModuleKey[];
-  owner: { firstName: string; lastName: string; email: string };
+  owner: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    /** The owner's Allstate codes (PAC-173), omitted when blank. */
+    allstateBindId?: string;
+    allstateSubProducerCode?: string;
+  };
 }
 
 /**

@@ -26,6 +26,15 @@ export enum ModuleKey {
    * `analytics_module` migration copies the resulting 140/141.
    */
   Analytics = 'analytics',
+  /**
+   * The Dash Reconciliation page: the carrier's monthly new-business report
+   * matched against the agency's own sales — policies missing from the app,
+   * app policies the carrier does not show, and 1-800 policies (bound by an
+   * Allstate login that is not one of the agency's producers) for review.
+   * Appended last for the same reason as `DataExport` — the
+   * `carrier_reconciliation_module` migration copies the resulting 150/151.
+   */
+  CarrierReconciliation = 'carrier_reconciliation',
 }
 
 export const ALL_MODULE_KEYS = Object.values(ModuleKey);

@@ -30,7 +30,8 @@ import tseslint from 'typescript-eslint';
  */
 const FEATURE_DIRS = [
   'activities', 'audit-generation', 'audit-templates', 'auth', 'branches',
-  'carriers', 'clients', 'contacts', 'crm', 'crm-rotations', 'data-export',
+  'carrier-reconciliation', 'carriers', 'clients', 'contacts', 'crm',
+  'crm-rotations', 'data-export',
   'deal-audit-items', 'deal-audits', 'deals', 'feature-modules', 'households',
   'interested-parties', 'leaderboard', 'lead-sources', 'leads', 'mail',
   'mailers', 'notifications', 'performance', 'permissions', 'platform', 'policies',

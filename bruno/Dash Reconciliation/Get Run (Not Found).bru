@@ -1,0 +1,27 @@
+meta {
+  name: Get Run (Not Found)
+  type: http
+  seq: 20
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/000000000000000000000000
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 404 Not Found", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id — a run outside the agency (404)
+
+  Another agency's run and a run that never existed answer the same way.
+}

@@ -31,6 +31,9 @@ const DealAuditsQueuePage = lazy(
 const DealAuditPage = lazy(
   () => import('@/features/deal-audits/DealAuditPage'),
 );
+const ReconciliationPage = lazy(
+  () => import('@/features/reconciliation/ReconciliationPage'),
+);
 const DataExportPage = lazy(
   () => import('@/features/data-export/DataExportPage'),
 );
@@ -425,6 +428,24 @@ export function App() {
                   element={
                     <LazyPage>
                       <DataExportPage />
+                    </LazyPage>
+                  }
+                />
+              </Route>
+
+              {/* The Dash Reconciliation page. The owner holds it through
+                  enabled modules; no other role does by default — the owner
+                  grants it from the role matrix. */}
+              <Route
+                element={
+                  <RequirePermission permission={`${ModuleKey.CarrierReconciliation}:read`} />
+                }
+              >
+                <Route
+                  path="/reconciliation"
+                  element={
+                    <LazyPage>
+                      <ReconciliationPage />
                     </LazyPage>
                   }
                 />

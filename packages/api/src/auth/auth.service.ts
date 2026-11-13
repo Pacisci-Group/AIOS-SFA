@@ -27,6 +27,10 @@ import { TenantUrlService } from '../common/tenancy/tenant-url.service';
 import { AccessResolverService } from '../permissions/access-resolver.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { Agency, AgencyDocument } from '../platform/schemas/agency.schema';
+import {
+  allstateCodeConflict,
+  applyAllstateCodes,
+} from '../users/allstate-codes';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   AcceptInviteDto,
@@ -201,6 +205,8 @@ export class AuthService {
       expiresAt: expiresAt.toISOString(),
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
+      allstateBindId: user.allstateBindId ?? null,
+      allstateSubProducerCode: user.allstateSubProducerCode ?? null,
       // Gated on the *permission*, never on the role slug — the project rule is
       // that a role name is display only. Anyone who could complete the setup
       // is anyone who could do its writes.
@@ -237,6 +243,7 @@ export class AuthService {
     if (dto.lastName !== undefined) {
       user.lastName = dto.lastName || undefined;
     }
+    applyAllstateCodes(user, dto);
 
     user.passwordHash = await bcrypt.hash(dto.password, 12);
     user.inviteToken = undefined;
@@ -253,7 +260,12 @@ export class AuthService {
     user.passwordResetToken = undefined;
     user.passwordResetExpiresAt = undefined;
     user.tokenVersion = (user.tokenVersion ?? 0) + 1;
-    await user.save();
+    try {
+      await user.save();
+    } catch (error) {
+      // One write: a clash leaves the invite unaccepted and the link usable.
+      throw (await allstateCodeConflict(error, this.userModel)) ?? error;
+    }
     await this.accessResolver.invalidateUser(user._id.toString());
 
     return this.issueTokens(user);
@@ -431,6 +443,9 @@ export class AuthService {
         null,
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
+      /** Allstate codes (PAC-173), for the profile form. */
+      allstateBindId: user.allstateBindId ?? null,
+      allstateSubProducerCode: user.allstateSubProducerCode ?? null,
       /**
        * A stable relative path, not a presigned URL (PAC-81). The blob sits in
        * the client's `localStorage` indefinitely, so anything that expires

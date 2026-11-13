@@ -37,7 +37,11 @@ import { ProfileService } from './profile.service';
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 
-  /** Edit own name. Returns the same auth-user blob as `GET /auth/me`. */
+  /**
+   * Edit own name and Allstate codes (PAC-173). Returns the same auth-user
+   * blob as `GET /auth/me`; 409 `ALLSTATE_CODE_DUPLICATE` when a colleague
+   * already holds the code.
+   */
   @Patch('profile')
   updateProfile(
     @CurrentUser() user: JwtPayload,

@@ -1,0 +1,38 @@
+meta {
+  name: Presign Upload (Not XLSX)
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs/presign
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "dash-report.csv",
+    "size": 1000
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs/presign — not an `.xlsx` (400)
+
+  Dash exports Excel; the reader is built for that layout.
+}

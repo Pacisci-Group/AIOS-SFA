@@ -38,7 +38,8 @@ body:json {
     "owner": {
       "firstName": "Pac",
       "lastName": "Owner",
-      "email": "{{onboardOwnerEmail}}"
+      "email": "{{onboardOwnerEmail}}",
+      "allstateBindId": "sokpac69"
     }
   }
 }
@@ -121,9 +122,14 @@ docs {
     "branch": { "name": "Main", "address": { "street": "…", "city": "…",
                 "state": "…", "zip": "…" } },
     "modules": ["dashboard", "leads"],
-    "owner": { "firstName": "Ada", "lastName": "Owner", "email": "ada@acme.test" }
+    "owner": { "firstName": "Ada", "lastName": "Owner", "email": "ada@acme.test",
+               "allstateBindId": "SOK5PE0T", "allstateSubProducerCode": "034" }
   }
   ```
+
+  `owner.allstateBindId` / `owner.allstateSubProducerCode` (PAC-173) are
+  optional — the owner's own Allstate codes, as on `POST /users/invite`; the
+  owner confirms or enters them while accepting the invite.
 
   `agency.ticker` and `agency.carrierAppointments` are optional but
   consequential (PAC-73, PAC-93): without the ticker the agency imports no

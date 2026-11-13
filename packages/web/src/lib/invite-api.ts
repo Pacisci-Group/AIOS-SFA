@@ -16,6 +16,9 @@ export interface InvitePreview {
   /** What the inviter typed, so the wizard's name step arrives prefilled. */
   firstName: string | null;
   lastName: string | null;
+  /** The Allstate codes the inviter typed (PAC-173), prefilled the same way. */
+  allstateBindId: string | null;
+  allstateSubProducerCode: string | null;
   /**
    * Whether accepting leads into the agency's own first-run setup — true only
    * for the owner of a freshly onboarded agency (PAC-69).
@@ -24,6 +27,17 @@ export interface InvitePreview {
    * the start rather than growing by three once the session exists.
    */
   agencySetupPending: boolean;
+}
+
+/**
+ * What the invitee confirms about themselves. Each key: absent keeps what the
+ * inviter typed, `''` clears it.
+ */
+export interface AcceptInviteDetails {
+  firstName?: string;
+  lastName?: string;
+  allstateBindId?: string;
+  allstateSubProducerCode?: string;
 }
 
 export interface AcceptInviteResult {
@@ -59,13 +73,13 @@ export function getInvitePreview(token: string) {
 export async function acceptInvite(
   token: string,
   password: string,
-  names?: { firstName?: string; lastName?: string },
+  details?: AcceptInviteDetails,
 ) {
   const data = await publicFetch<AcceptInviteResult>('/auth/accept-invite', {
     method: 'POST',
-    // Names omitted rather than sent empty when the caller has none: absent
+    // Details omitted rather than sent empty when the caller has none: absent
     // means "keep what the inviter typed", where `''` would clear it.
-    body: JSON.stringify({ token, password, ...(names ?? {}) }),
+    body: JSON.stringify({ token, password, ...(details ?? {}) }),
   });
 
   setTokens(data.accessToken, data.refreshToken);

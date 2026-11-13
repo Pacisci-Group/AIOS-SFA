@@ -1,0 +1,58 @@
+meta {
+  name: Update My Profile (Duplicate Code)
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/me/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{profileAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "allstateBindId": "SOKDEMOA"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("names the field and who holds the code", function () {
+    const body = res.getBody();
+    expect(body.code).to.equal("ALLSTATE_CODE_DUPLICATE");
+    expect(body.field).to.equal("allstateBindId");
+    expect(body.message).to.contain("Alex Rivera");
+  });
+}
+
+docs {
+  # PATCH /me/profile — a Bind ID a colleague already holds (PAC-173)
+
+  Pat Producer (the demo seed's `SOKDEMOP`) tries to take Alex Rivera's Bind
+  ID `SOKDEMOA`. Allstate codes are unique within the agency — two holders
+  would make a Dash line's producer a coin toss — so the save is refused and
+  nothing changes.
+
+  **Response `409`**
+  ```json
+  {
+    "code": "ALLSTATE_CODE_DUPLICATE",
+    "field": "allstateBindId",
+    "message": "Allstate Bind ID SOKDEMOA is already on Alex Rivera."
+  }
+  ```
+
+  `field` is the body key, so a form can put the message under the right input.
+}

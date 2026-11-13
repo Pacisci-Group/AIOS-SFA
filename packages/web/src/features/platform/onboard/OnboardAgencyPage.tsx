@@ -239,6 +239,11 @@ export default function OnboardAgencyPage() {
 function stepForError(message: string): number | null {
   const lower = message.toLowerCase();
   if (lower.includes("slug")) return indexOfStep("agency");
+  // The owner's Allstate codes (PAC-173) — checked before the carrier
+  // appointment rule below, which would claim "sub-producer code" for "code".
+  if (lower.includes("bind id") || lower.includes("sub-producer")) {
+    return indexOfStep("owner");
+  }
   if (lower.includes("ticker")) return indexOfStep("agency");
   // Every appointment conflict names the code (PAC-93) — "Allstate code
   // A0B9049 already belongs to …", "…is listed twice for the same carrier",

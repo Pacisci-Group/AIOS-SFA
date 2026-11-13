@@ -1,0 +1,64 @@
+meta {
+  name: List Run Rows (1-800 Review)
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?tab=review_1800&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  tab: review_1800
+  pageSize: 25
+}
+
+script:post-response {
+  if (res.getStatus() === 200 && res.getBody().items.length) {
+    bru.setVar("reconRowId", res.getBody().items[0].id);
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the 1-800 line, flagged by a Bind ID on no user", function () {
+    const row = res.getBody().items.find((item) => item.dash.bindId === "OSCVANJ");
+    expect(row).to.not.equal(undefined);
+    expect(row.bindIdStatus).to.equal("not_staff");
+    expect(row.issues).to.include("not_staff_bind_id");
+    expect(row.tabs).to.include("review_1800");
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/rows — a run's rows
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  ## Query
+  - `tab` — `missing_from_app` | `not_in_dash` | `review_1800` |
+    `producer_mismatch` | `matched` | `ignored` (omitted: every row)
+  - `producer` — a summary row's `producerKey`: `user:<id>`, `code:<nnn>`,
+    `bind:<Bind ID>` (a former employee Dash names), `none`
+  - `reviewStatus` — `open` | `resolved` | `dismissed` (rows needing review only)
+  - `q` — policy number, customer or client name, Bind ID (substring)
+  - `page`, `pageSize` (≤ 100, default 25)
+
+  ## Response `200`
+
+  Paged `ReconciliationRowView`s: `dash` (the line as parsed), `app` (the
+  matched or app-only policy, with its deal, producer and sold day),
+  `issues`, `tabs`, `needsReview`, `credit` (who Dash credits), `suggestions`
+  (likely counterparts of an unmatched row — usually a mistyped number) and
+  `review`.
+}

@@ -1,0 +1,44 @@
+meta {
+  name: Get Options
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/options
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("lists the agency's people", function () {
+    const users = res.getBody().users;
+    expect(users).to.be.an("array").that.is.not.empty;
+    expect(users[0]).to.have.keys(["id", "name", "isActive"]);
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/options — the agency's people, for pickers
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+  - **Data scope:** none — the page is agency-wide by design.
+
+  Every user of the caller's agency (platform admins excluded), active first,
+  for the page's user pickers.
+
+  ## Response `200`
+
+  ```json
+  { "users": [{ "id": "6a95…", "name": "Pat Producer", "isActive": true }] }
+  ```
+}

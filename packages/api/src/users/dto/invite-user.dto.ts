@@ -8,6 +8,10 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import {
+  IsAllstateBindId,
+  IsAllstateSubProducerCode,
+} from './allstate-codes.dto';
 
 /**
  * `class-transformer` types `TransformFnParams.value` as `any`, so an inline
@@ -69,4 +73,17 @@ export class InviteUserDto {
   @MaxLength(100)
   @Transform(trim)
   lastName?: string;
+
+  /**
+   * The invitee's Allstate codes (PAC-173), when the inviter has them to hand.
+   * Optional — the invitee can enter them while accepting, or edit them from
+   * their profile later. Blank means none.
+   */
+  @IsOptional()
+  @IsAllstateBindId()
+  allstateBindId?: string;
+
+  @IsOptional()
+  @IsAllstateSubProducerCode()
+  allstateSubProducerCode?: string;
 }

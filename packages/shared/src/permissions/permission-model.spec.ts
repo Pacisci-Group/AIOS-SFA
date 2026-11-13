@@ -234,6 +234,7 @@ describe('page-level permission model', () => {
         [ModuleKey.Leaderboard]: 'none',
         [ModuleKey.DataExport]: 'none',
         [ModuleKey.Analytics]: 'none',
+        [ModuleKey.CarrierReconciliation]: 'none',
       };
 
       for (const moduleKey of ALL_MODULE_KEYS) {

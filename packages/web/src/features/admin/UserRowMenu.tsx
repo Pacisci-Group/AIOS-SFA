@@ -5,6 +5,7 @@ import {
   KeyRound,
   Loader2,
   MoreHorizontal,
+  Pencil,
   Send,
   ShieldCheck,
   Trash2,
@@ -45,6 +46,7 @@ import {
   agencyUserOptionsKey,
 } from "@/lib/users-api";
 import { ChangeRoleDialog } from "./ChangeRoleDialog";
+import { EditUserDetailsDialog } from "./EditUserDetailsDialog";
 import { TransferWorkDialog } from "./TransferWorkDialog";
 
 /** Which confirmation is open. `null` closes the dialog. */
@@ -75,8 +77,11 @@ function errorMessage(error: unknown, fallback: string): string {
  * calls `preventDefault()` before closing it explicitly, so the order is ours
  * rather than a race between Radix's focus restore and the dialog's autofocus.
  *
- * ## What renders when — unchanged from the three components
+ * ## What renders when
  *
+ * * **Edit details** (PAC-173) on every status — name and Allstate codes. An
+ *   invited person's codes may have been mistyped at the invite, and a removed
+ *   person's Bind ID still identifies their old sales in Dash Reconciliation.
  * * **invited** → Resend, Revoke. Both endpoints 409 on an active user.
  * * **active** → Change roles (including on your own row: giving up your own
  *   owner role is server-supported, it is taking it off *someone else* that is
@@ -100,6 +105,7 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [workDialog, setWorkDialog] = useState<"transfer" | "remove" | null>(
     null,
@@ -262,9 +268,23 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
             </DropdownMenuItem>
           )}
 
-          {mayManage && status === "invited" && (
+          {mayManage && (
             <>
               {mayEditPermissions && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                disabled={busy}
+                onSelect={choose(() => setDetailsOpen(true))}
+              >
+                <Pencil className="size-4" />
+                Edit details
+              </DropdownMenuItem>
+            </>
+          )}
+
+          {/* The status items share Edit details' group, so no separator of
+              their own. */}
+          {mayManage && status === "invited" && (
+            <>
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => resend.mutate())}
@@ -285,7 +305,6 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
           {mayManage && status === "active" && (
             <>
-              {mayEditPermissions && <DropdownMenuSeparator />}
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => setRolesOpen(true))}
@@ -318,7 +337,6 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
 
           {mayManage && status === "deactivated" && (
             <>
-              {mayEditPermissions && <DropdownMenuSeparator />}
               <DropdownMenuItem
                 disabled={busy}
                 onSelect={choose(() => reactivate.mutate())}
@@ -357,6 +375,12 @@ export function UserRowMenu({ user }: { user: AgencyUser }) {
         user={user}
         open={rolesOpen}
         onOpenChange={setRolesOpen}
+      />
+
+      <EditUserDetailsDialog
+        user={user}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
       />
 
       <AlertDialog

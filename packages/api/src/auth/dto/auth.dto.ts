@@ -7,6 +7,10 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import {
+  IsAllstateBindId,
+  IsAllstateSubProducerCode,
+} from '../../users/dto/allstate-codes.dto';
 
 /**
  * `class-transformer` types `TransformFnParams.value` as `any`, so an inline
@@ -58,6 +62,18 @@ export class AcceptInviteDto {
   @MaxLength(100)
   @Transform(trim)
   lastName?: string;
+
+  /**
+   * Allstate code corrections (PAC-173), on the same terms as the names:
+   * prefilled from the invite, absent leaves the inviter's value, `''` clears.
+   */
+  @IsOptional()
+  @IsAllstateBindId()
+  allstateBindId?: string;
+
+  @IsOptional()
+  @IsAllstateSubProducerCode()
+  allstateSubProducerCode?: string;
 }
 
 /**

@@ -1,0 +1,43 @@
+meta {
+  name: Update User Details (000 Sub-producer)
+  type: http
+  seq: 10
+}
+
+patch {
+  url: {{baseUrl}}/users/{{invitedUserId}}/details
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{ownerAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "allstateSubProducerCode": "000"
+  }
+}
+
+tests {
+  test("returns 400 Bad Request", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("says why", function () {
+    expect(JSON.stringify(res.getBody())).to.contain("no sub-producer");
+  });
+}
+
+docs {
+  # PATCH /users/:userId/details — `000` as a sub-producer code (PAC-173)
+
+  `000` is Allstate's "no sub-producer": Dash prints it beside several
+  people's Bind IDs, so it can never identify one person. Refused with `400`;
+  leave the code blank instead.
+}

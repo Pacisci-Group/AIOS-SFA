@@ -157,7 +157,7 @@ export default function UsersPage() {
         </div>
       ) : (
         <>
-          {/* Desktop: the table. Below `md` its five columns don't fit. */}
+          {/* Desktop: the table. Below `md` its columns don't fit. */}
           <div className="hidden md:block">
             <UsersTable
               users={users}

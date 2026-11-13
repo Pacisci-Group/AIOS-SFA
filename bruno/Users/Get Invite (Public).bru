@@ -21,6 +21,14 @@ tests {
     expect(body.roleNames).to.be.an("array").that.is.not.empty;
   });
 
+  test("prefills the Bind ID the inviter typed, normalised", function () {
+    // Invite User sent it lower-case; it is stored as Dash prints it.
+    expect(res.getBody().allstateBindId).to.equal(
+      bru.getVar("inviteBindId").toUpperCase(),
+    );
+    expect(res.getBody().allstateSubProducerCode).to.equal(null);
+  });
+
   test("an employee invite has no agency setup waiting behind it", function () {
     // True only for the owner of a freshly onboarded agency (PAC-69).
     expect(res.getBody().agencySetupPending).to.equal(false);
@@ -35,9 +43,15 @@ tests {
     // `lastName` are what the inviter typed and already appear in the greeting
     // of the email the link came from, and `agencySetupPending` is a fact about
     // the *agency's* setup state rather than about the person.
+    //
+    // PAC-173's two are the Allstate codes the inviter typed, prefilled so the
+    // invitee confirms rather than retypes them. A login id is not a
+    // credential, and whoever holds this link can accept the invite outright.
     expect(Object.keys(res.getBody()).sort()).to.eql([
       "agencyName",
       "agencySetupPending",
+      "allstateBindId",
+      "allstateSubProducerCode",
       "email",
       "expiresAt",
       "firstName",
@@ -63,6 +77,8 @@ docs {
     "expiresAt": "2026-08-24T09:00:00.000Z",
     "firstName": "Pending",
     "lastName": "Invitee",
+    "allstateBindId": "SOKPENDING",
+    "allstateSubProducerCode": null,
     "agencySetupPending": false
   }
   ```
@@ -71,6 +87,10 @@ docs {
   id, nothing that would turn a token into a directory lookup.
 
   The last three arrived with PAC-69 and were held to the same rule.
+  `allstateBindId` / `allstateSubProducerCode` (PAC-173) are the Allstate codes
+  the inviter typed (`null` when none), prefilled on the accept page so the
+  invitee confirms them — not in the email, but a login id is not a
+  credential, and the holder of the link can accept the invite outright.
   `firstName` / `lastName` are what the inviter typed and already appear in the
   greeting of the email the link came from — they let the onboarding wizard show
   the names prefilled rather than asking the invitee to retype what is already on

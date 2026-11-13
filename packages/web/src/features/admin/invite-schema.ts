@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  allstateCodesForCreate,
+  allstateCodesShape,
+  EMPTY_ALLSTATE_CODES,
+} from "@/components/allstate-codes/allstate-codes-schema";
 import type { InviteUserInput } from "@/lib/users-api";
 
 /**
@@ -23,6 +28,9 @@ import type { InviteUserInput } from "@/lib/users-api";
  * (Branchless is still a dead end — nothing reassigns a branch after the
  * invite yet — which is why the picker defaults to a real branch rather than
  * to "none".)
+ *
+ * The **Allstate codes** (PAC-173) are optional: the owner fills them in when
+ * they know them, and the invitee can add or correct them when accepting.
  */
 export const inviteFormSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required").max(100),
@@ -35,6 +43,7 @@ export const inviteFormSchema = z.object({
     .max(160),
   roleId: z.string().min(1, "Pick a role"),
   branchId: z.string().optional(),
+  ...allstateCodesShape,
 });
 
 export type InviteFormValues = z.infer<typeof inviteFormSchema>;
@@ -45,6 +54,7 @@ export const EMPTY_INVITE: InviteFormValues = {
   email: "",
   roleId: "",
   branchId: "",
+  ...EMPTY_ALLSTATE_CODES,
 };
 
 /** Form state → wire body. Lowercasing is repeated server-side; both matter. */
@@ -57,5 +67,7 @@ export function toInviteUserInput(values: InviteFormValues): InviteUserInput {
     ...(values.branchId ? { branchId: values.branchId } : {}),
     firstName: values.firstName.trim(),
     lastName: values.lastName.trim(),
+    // Blank codes omitted: absent is "none yet", and the invitee may add them.
+    ...allstateCodesForCreate(values),
   };
 }

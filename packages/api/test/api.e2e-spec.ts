@@ -1369,10 +1369,17 @@ describe('SFA API (e2e)', () => {
        * fact about the *agency's* setup state, not about the person, and it is
        * here so the wizard can size its step counter before a session exists.
        * Anything added later has to survive the same question.
+       *
+       * `allstateBindId` and `allstateSubProducerCode` (PAC-173) are, like the
+       * names, what the inviter typed for this person: Allstate login codes,
+       * not personal details, returned so the accept step can show them to be
+       * confirmed or corrected rather than typed again.
        */
       expect(Object.keys(body).sort()).toEqual([
         'agencyName',
         'agencySetupPending',
+        'allstateBindId',
+        'allstateSubProducerCode',
         'email',
         'expiresAt',
         'firstName',

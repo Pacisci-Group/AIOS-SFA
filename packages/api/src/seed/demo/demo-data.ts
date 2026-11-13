@@ -43,6 +43,13 @@ export interface TeamMemberSpec {
    * end-of-day hour, 8 PM by default; the seed re-stamps these on every run.)
    */
   availability?: UserAvailability;
+  /**
+   * The producer's Allstate identifiers as the Dash report prints them —
+   * written onto the user (`allstateBindId` / `allstateSubProducerCode`) so a
+   * Dash reconciliation run credits and clears their lines (producers only).
+   * Invented, like everything here.
+   */
+  dash?: { bindId: string; subProducer: string };
 }
 
 /**
@@ -85,6 +92,7 @@ export const TEAM: TeamMemberSpec[] = [
     firstName: 'Pat',
     lastName: 'Producer',
     roleSlug: 'producer',
+    dash: { bindId: 'SOKDEMOP', subProducer: '101' },
     branch: 'main',
     monthlyGoal: 60000,
   },
@@ -94,6 +102,7 @@ export const TEAM: TeamMemberSpec[] = [
     firstName: 'Alex',
     lastName: 'Rivera',
     roleSlug: 'producer',
+    dash: { bindId: 'SOKDEMOA', subProducer: '102' },
     branch: 'main',
     monthlyGoal: 55000,
   },
@@ -103,6 +112,7 @@ export const TEAM: TeamMemberSpec[] = [
     firstName: 'Jordan',
     lastName: 'Blake',
     roleSlug: 'producer',
+    dash: { bindId: 'SOKDEMOJ', subProducer: '103' },
     branch: 'main',
     monthlyGoal: 70000,
     availability: 'busy',
@@ -113,6 +123,7 @@ export const TEAM: TeamMemberSpec[] = [
     firstName: 'Sam',
     lastName: 'Torres',
     roleSlug: 'producer',
+    dash: { bindId: 'SOKDEMOS', subProducer: '104' },
     branch: 'main',
     monthlyGoal: 48000,
     availability: 'away',
@@ -123,6 +134,7 @@ export const TEAM: TeamMemberSpec[] = [
     firstName: 'Morgan',
     lastName: 'Lee',
     roleSlug: 'producer',
+    dash: { bindId: 'SOKDEMOM', subProducer: '105' },
     branch: 'north',
     monthlyGoal: 52000,
   },
