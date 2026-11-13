@@ -177,6 +177,21 @@ export const AgencyPermission = {
    */
   SettingsRead: 'agency:settings:read',
   SettingsWrite: 'agency:settings:write',
+  /**
+   * Payouts administration (PAC-176): payment structures and who is on them,
+   * the team-bonus and Salesperson of the Month settings, the carrier
+   * chargeback import, and generating a month's statements.
+   *
+   * Its own key rather than `payouts:write`: that pair is the page — a branch
+   * manager reviews, adjusts and sends the statements of their branch — while
+   * this decides *how much everyone is paid*. An owner who delegates the
+   * monthly review must not hand over the rates with it.
+   *
+   * Same `agency:` namespace requirement as {@link ChangeLogsRead} above, and
+   * the same ⚠ as {@link SettingsRead}: existing owners receive it from the
+   * `payouts_module` migration, not from `DEFAULT_ROLE_TEMPLATES`.
+   */
+  PayoutsAdmin: 'agency:payouts:admin',
 } as const;
 
 export type ModuleAction = 'read' | 'write';

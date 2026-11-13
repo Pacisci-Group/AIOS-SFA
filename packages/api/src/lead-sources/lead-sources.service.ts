@@ -79,6 +79,37 @@ export class LeadSourcesService {
     return new Map(rows.map((row) => [row._id.toString(), row.name]));
   }
 
+  /**
+   * The rows among `ids` this agency can see — its own and the platform's —
+   * **archived ones included**, by id, with whether each is still active.
+   *
+   * For a writer that stores a *list* of references and must tell "not this
+   * agency's" (refuse) from "archived since it was chosen" (may stay on the
+   * record that already holds it) — the payment structures' lead-source rates
+   * (PAC-177). A single pick goes through {@link assertSelectable}.
+   */
+  async visibleRows(
+    agencyId: string,
+    ids: readonly string[],
+  ): Promise<Map<string, { name: string; active: boolean }>> {
+    const valid = ids.filter((id) => Types.ObjectId.isValid(id));
+    if (!valid.length) return new Map();
+    const rows = await this.leadSourceModel
+      .find({
+        _id: { $in: valid.map((id) => new Types.ObjectId(id)) },
+        agencyId: { $in: scopes(agencyId) },
+      })
+      .select({ name: 1, active: 1 })
+      .lean()
+      .exec();
+    return new Map(
+      rows.map((row) => [
+        row._id.toString(),
+        { name: row.name, active: row.active !== false },
+      ]),
+    );
+  }
+
   /** Render one reference through {@link labelsFor}'s map. */
   static toRef(
     id: Types.ObjectId | string | null | undefined,

@@ -1,5 +1,7 @@
 import {
   DEFAULT_AGENCY_END_OF_DAY_HOUR,
+  DEFAULT_SALESPERSON_OF_MONTH,
+  DEFAULT_TEAM_BONUS,
   type AgencySetupStatus,
   type ModuleEntitlements,
 } from '@sfa/shared';
@@ -10,6 +12,7 @@ import {
   isIanaTimeZone,
 } from '../../common/dates/time-zones';
 import { ObjectIdType } from '../../common/mongo/object-id';
+import { MONEY_PROP, PERCENT_PROP } from '../../common/payouts/stored-amounts';
 
 export type AgencyDocument = HydratedDocument<Agency>;
 
@@ -296,6 +299,87 @@ export const AgencyAvailabilitySweepSchema = SchemaFactory.createForClass(
   AgencyAvailabilitySweep,
 );
 
+/** One team-bonus level: agency premium reached → pool paid out. */
+@Schema({ _id: false })
+export class AgencyTeamBonusLevel {
+  @Prop({ ...MONEY_PROP, required: true })
+  thresholdPremium: number;
+
+  @Prop({ ...MONEY_PROP, required: true })
+  poolAmount: number;
+}
+export const AgencyTeamBonusLevelSchema =
+  SchemaFactory.createForClass(AgencyTeamBonusLevel);
+
+/**
+ * The agency-wide team bonus (PAC-177): each level whose threshold the
+ * agency's month reaches pays its pool — every level reached, added up, when
+ * `stackable`; only the highest otherwise. The pool is split
+ * `csrSharePercent` among CSRs and `producerSharePercent` among producers,
+ * each by their share of their group's premium. The rules and the defaults
+ * live in `@sfa/shared` `domain/payouts.ts`.
+ */
+@Schema({ _id: false })
+export class AgencyTeamBonus {
+  @Prop({ type: Boolean, default: DEFAULT_TEAM_BONUS.enabled })
+  enabled: boolean;
+
+  @Prop({ type: Boolean, default: DEFAULT_TEAM_BONUS.stackable })
+  stackable: boolean;
+
+  /** Lowest threshold first. */
+  @Prop({ type: [AgencyTeamBonusLevelSchema] })
+  levels: AgencyTeamBonusLevel[];
+
+  @Prop({ ...PERCENT_PROP, default: DEFAULT_TEAM_BONUS.csrSharePercent })
+  csrSharePercent: number;
+
+  @Prop({ ...PERCENT_PROP, default: DEFAULT_TEAM_BONUS.producerSharePercent })
+  producerSharePercent: number;
+}
+export const AgencyTeamBonusSchema =
+  SchemaFactory.createForClass(AgencyTeamBonus);
+
+/** A fixed bonus for the month's top seller (PAC-177). */
+@Schema({ _id: false })
+export class AgencySalespersonOfMonth {
+  @Prop({ type: Boolean, default: DEFAULT_SALESPERSON_OF_MONTH.enabled })
+  enabled: boolean;
+
+  @Prop({ ...MONEY_PROP, default: DEFAULT_SALESPERSON_OF_MONTH.bonusAmount })
+  bonusAmount: number;
+}
+export const AgencySalespersonOfMonthSchema = SchemaFactory.createForClass(
+  AgencySalespersonOfMonth,
+);
+
+/**
+ * How the agency pays bonuses that are not per structure (PAC-177). Served by
+ * `/payouts/settings` behind `agency:payouts:admin`, not by the agency profile:
+ * it decides money, and its blast radius is its own.
+ *
+ * Absent on every agency until the owner first saves it, and each section
+ * absent until that section is saved — so readers fill each field from
+ * `DEFAULT_TEAM_BONUS` / `DEFAULT_SALESPERSON_OF_MONTH` through
+ * `payoutSettingsFrom` (`common/payouts/payout-settings.ts`). No backfill: the
+ * defaults *are* the value of an agency that never chose.
+ *
+ * ⚠ Deliberately **no** `default: () => ({})` here or on `Agency.payouts`
+ * (unlike `availabilitySweep`): a hydrated `create()` / `save()` would then
+ * write today's defaults into every new agency, and a later change to a
+ * default would not reach them — they would read as an owner's choice.
+ */
+@Schema({ _id: false })
+export class AgencyPayoutSettings {
+  @Prop({ type: AgencyTeamBonusSchema })
+  teamBonus?: AgencyTeamBonus;
+
+  @Prop({ type: AgencySalespersonOfMonthSchema })
+  salespersonOfMonth?: AgencySalespersonOfMonth;
+}
+export const AgencyPayoutSettingsSchema =
+  SchemaFactory.createForClass(AgencyPayoutSettings);
+
 @Schema({ timestamps: true, collection: 'agencies' })
 export class Agency {
   @Prop({ required: true, trim: true })
@@ -447,6 +531,20 @@ export class Agency {
   /** Where the end-of-day Away sweep is up to. See {@link AgencyAvailabilitySweep}. */
   @Prop({ type: AgencyAvailabilitySweepSchema, default: () => ({}) })
   availabilitySweep: AgencyAvailabilitySweep;
+
+  /** Team bonus and Salesperson of the Month. See {@link AgencyPayoutSettings}. */
+  @Prop({ type: AgencyPayoutSettingsSchema })
+  payouts?: AgencyPayoutSettings;
+
+  /**
+   * Not data: a counter `PaymentStructuresService` bumps as the first write
+   * of every structure create/update transaction, so two concurrent saves in
+   * one agency write-conflict and the second retries after the first commits
+   * (PAC-177 — see `lockStructures`). Absent until the first save; the value
+   * itself means nothing.
+   */
+  @Prop({ type: Number })
+  payoutStructuresRevision?: number;
 }
 
 export const AgencySchema = SchemaFactory.createForClass(Agency);

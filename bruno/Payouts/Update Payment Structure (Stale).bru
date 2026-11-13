@@ -1,0 +1,65 @@
+meta {
+  name: Update Payment Structure (Stale)
+  type: http
+  seq: 10
+}
+
+patch {
+  url: {{baseUrl}}/payouts/structures/{{payoutsStructureId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "{{payoutsStructureName}}",
+    "rules": [{ "carrier": "*", "ratePercent": 7 }],
+    "leadSourceRules": [],
+    "hatTrick": { "enabled": false, "dealsPerDay": 3, "bonusAmount": 50 },
+    "individualTiers": [],
+    "tiersStackable": false,
+    "teamBonusEligible": true,
+    "memberIds": [],
+    "expectedUpdatedAt": "{{payoutsStructureUpdatedAt}}"
+  }
+}
+
+tests {
+  test("returns 409", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("says the copy is stale", function () {
+    expect(res.getBody().code).to.equal("PAYMENT_STRUCTURE_STALE");
+    expect(res.getBody().message).to.equal(
+      "This structure was changed somewhere else. Reload to see the latest version."
+    );
+  });
+}
+
+docs {
+  # PATCH /payouts/structures/:id — refused: edited from a stale copy
+
+  Sends the `updatedAt` captured **before** **Update Payment Structure** ran —
+  a second tab still holding the old version. The API refuses rather than
+  silently undoing the first save:
+
+  ```json
+  {
+    "code": "PAYMENT_STRUCTURE_STALE",
+    "message": "This structure was changed somewhere else. Reload to see the latest version."
+  }
+  ```
+
+  The same `409` follows a save of *another* structure that moved one of this
+  structure's members off it. The web editor shows the message with a Reload
+  action, which re-fetches the structure and the people and re-seeds the form.
+}

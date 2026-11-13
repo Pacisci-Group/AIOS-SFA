@@ -92,6 +92,11 @@ export const MODULE_CATALOG: Record<ModuleKey, ModuleDescriptor> = {
     description:
       "Matching Allstate's monthly new-business report against the agency's sales — missing policies, unreported policies and 1-800 business to review.",
   },
+  [ModuleKey.Payouts]: {
+    label: "Payouts",
+    description:
+      "Payment structures and the monthly commission statement each producer and CSR receives, accepts or disputes.",
+  },
 };
 
 /** The catalog in a stable display order, grouped the way the nav groups pages. */
@@ -119,6 +124,7 @@ export const MODULE_GROUPS: { title: string; modules: ModuleKey[] }[] = [
       ModuleKey.Performance,
       ModuleKey.Leaderboard,
       ModuleKey.Analytics,
+      ModuleKey.Payouts,
     ],
   },
   {

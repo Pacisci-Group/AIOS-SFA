@@ -1,0 +1,65 @@
+meta {
+  name: Create Payment Structure (Duplicate Lead-Source Rate)
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/payouts/structures
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{payoutsOwnerToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "Bruno duplicate lead-source rate",
+    "rules": [{ "carrier": "*", "ratePercent": 5 }],
+    "leadSourceRules": [
+      { "leadSourceId": "{{payoutsLeadSourceId}}", "carrier": "Allstate", "ratePercent": 4 },
+      { "leadSourceId": "{{payoutsLeadSourceId}}", "carrier": "B4tEH", "ratePercent": 6 }
+    ],
+    "hatTrick": { "enabled": false, "dealsPerDay": 3, "bonusAmount": 0 },
+    "individualTiers": [],
+    "tiersStackable": false,
+    "teamBonusEligible": true,
+    "memberIds": []
+  }
+}
+
+tests {
+  test("returns 400", function () {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("says which rates collide, with the shared message", function () {
+    expect(JSON.stringify(res.getBody())).to.contain(
+      "Lead-source rates 1 and 2 both set a rate for Allstate from the same lead source."
+    );
+  });
+}
+
+docs {
+  # POST /payouts/structures — refused: two rates for one lead source and carrier
+
+  `B4tEH` is how migrated policies spell Allstate, so both rules are
+  "Allstate sales from this source" — one rate too many. The rule is
+  `leadSourceRulesError` in `@sfa/shared` (the web form runs the same one):
+  one rate per `(lead source, carrier)`, where "any carrier" (`*`) counts as
+  a carrier of its own. The message names the rules by position in the
+  request body.
+
+  Other `400`s from the same rules: a blank carrier, a rate outside 0–100 or
+  with a third decimal, more than 50 lead-source rates. A source that is not
+  this agency's (another agency's, or no row) is a `400` "Some lead sources
+  chosen are not available to this agency."; an archived source cannot be
+  added ("… has been archived and cannot be added.") but stays on a structure
+  that already has a rule for it.
+}

@@ -1,6 +1,7 @@
 import { ALL_MODULE_KEYS, ModuleKey } from '../enums/module-key.enum';
 import { allPagePermissionKeys, pageLevelMap } from './permission-catalog';
 import {
+  AgencyPermission,
   ALL_AGENCY_ADMIN_PERMISSIONS,
   ALL_PLATFORM_PERMISSIONS,
 } from './permission.constants';
@@ -202,6 +203,40 @@ describe('page-level permission model', () => {
     });
   });
 
+  /**
+   * PAC-176. Every employee reads their own statements; the Branch Manager
+   * manages the branch's; rates and structures are the owner's admin key.
+   */
+  describe('payouts permissions', () => {
+    const holder = (slug: string) =>
+      DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === slug)!;
+
+    it.each(['producer', 'csr', 'crm', 'data_team'])(
+      'gives %s read only',
+      (slug) => {
+        const resolved = resolvePermissionSet({
+          rolePermissions: holder(slug).permissions,
+        });
+        expect(resolved).toContain('payouts:read');
+        expect(resolved).not.toContain('payouts:write');
+        expect(resolved).not.toContain(AgencyPermission.PayoutsAdmin);
+      },
+    );
+
+    it('gives the Branch Manager read and write but not the admin key', () => {
+      const permissions = holder('branch_manager').permissions;
+      expect(permissions).toContain('payouts:read');
+      expect(permissions).toContain('payouts:write');
+      expect(permissions).not.toContain(AgencyPermission.PayoutsAdmin);
+    });
+
+    it('gives the Agency Owner the admin key', () => {
+      expect(holder('agency_owner').permissions).toContain(
+        AgencyPermission.PayoutsAdmin,
+      );
+    });
+  });
+
   describe('CSR role template', () => {
     const csr = DEFAULT_ROLE_TEMPLATES.find((t) => t.slug === 'csr');
 
@@ -235,6 +270,8 @@ describe('page-level permission model', () => {
         [ModuleKey.DataExport]: 'none',
         [ModuleKey.Analytics]: 'none',
         [ModuleKey.CarrierReconciliation]: 'none',
+        // PAC-176: own commission statements.
+        [ModuleKey.Payouts]: 'read',
       };
 
       for (const moduleKey of ALL_MODULE_KEYS) {
