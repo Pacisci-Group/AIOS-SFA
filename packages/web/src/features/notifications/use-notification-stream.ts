@@ -158,9 +158,13 @@ export function useNotificationStream(): void {
         }
         // A query, never a counter: the badge and the list re-ask the server.
         invalidate();
-        // A Dash row handed to this user (PAC-173): their "Assigned to me"
-        // page and the Producer Dashboard panel re-ask as well.
-        if (record.type === 'reconciliation.row_assigned') {
+        // A Dash row handed to this user (PAC-173), or a transfer's worth of
+        // them: their "Assigned to me" page and the Producer Dashboard panel
+        // re-ask as well.
+        if (
+          record.type === 'reconciliation.row_assigned' ||
+          record.type === 'reconciliation.rows_transferred'
+        ) {
           void queryClient.invalidateQueries({
             queryKey: reconciliationAssignedKey,
           });

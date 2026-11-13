@@ -91,6 +91,23 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
         : '/reconciliation/assigned',
     };
   },
+  'reconciliation.rows_transferred': (data) => {
+    const count =
+      typeof data.count === 'number' && Number.isInteger(data.count) && data.count > 0
+        ? data.count
+        : null;
+    const from = text(data.fromName);
+    const lines = count
+      ? `${count} Dash line${count === 1 ? '' : 's'}`
+      : 'Dash lines';
+    return {
+      title: 'Dash policies handed to you',
+      body: from
+        ? `${lines} from ${from}'s list ${count === 1 ? 'is' : 'are'} now yours.`
+        : `${lines} ${count === 1 ? 'is' : 'are'} now yours.`,
+      href: '/reconciliation/assigned',
+    };
+  },
 };
 
 /**

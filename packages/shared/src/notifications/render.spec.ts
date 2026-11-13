@@ -31,6 +31,11 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       tabLabel: 'Premium differs',
       assignerName: 'Olive Owner',
     },
+    'reconciliation.rows_transferred': {
+      count: 3,
+      fromName: 'Pat Producer',
+      assignerName: 'Olive Owner',
+    },
   };
 
 describe('renderNotification', () => {
@@ -105,5 +110,28 @@ describe('renderNotification', () => {
       expect(rendered.href).toBe('/reconciliation/assigned');
       expect(rendered.body).toBe('A line from the Dash report needs you.');
     }
+  });
+
+  it('says how many Dash lines a transfer handed over, and from whom', () => {
+    expect(
+      renderNotification(
+        'reconciliation.rows_transferred',
+        FIXTURES['reconciliation.rows_transferred'],
+      ),
+    ).toEqual({
+      title: 'Dash policies handed to you',
+      body: "3 Dash lines from Pat Producer's list are now yours.",
+      href: '/reconciliation/assigned',
+    });
+    expect(
+      renderNotification('reconciliation.rows_transferred', {
+        count: 1,
+        fromName: 'Pat Producer',
+      }).body,
+    ).toBe("1 Dash line from Pat Producer's list is now yours.");
+    expect(
+      renderNotification('reconciliation.rows_transferred', { count: 'many' })
+        .body,
+    ).toBe('Dash lines are now yours.');
   });
 });

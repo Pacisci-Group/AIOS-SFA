@@ -63,6 +63,7 @@ export function toRunView(
   const stale = isStale(run);
   const status: ReconciliationRunStatus = stale ? 'failed' : run.status;
   const createdBy = run.createdBy ? String(run.createdBy) : null;
+  const closedBy = run.closedById ? String(run.closedById) : null;
   return {
     id: String(run._id),
     status,
@@ -93,6 +94,12 @@ export function toRunView(
     supersededByRunId: run.supersededByRunId
       ? String(run.supersededByRunId)
       : null,
+    // A run stored before closing existed has neither field.
+    closedAt: run.closedAt ? new Date(run.closedAt).toISOString() : null,
+    closedBy:
+      run.closedAt && closedBy
+        ? { id: closedBy, name: names.get(closedBy) ?? 'Former user' }
+        : null,
     createdAt: (run.createdAt ?? new Date()).toISOString(),
     createdBy: createdBy
       ? { id: createdBy, name: names.get(createdBy) ?? 'Former user' }
@@ -128,6 +135,15 @@ export function toProducerSummary(
     mismatches: raw.mismatches,
     captureRate: raw.captureRate,
   };
+}
+
+/** Every user id a run view names. */
+export function runUserIds(
+  run: Pick<LeanRun, 'createdBy' | 'closedById'>,
+): string[] {
+  return [run.createdBy, run.closedById].flatMap((id) =>
+    id ? [String(id)] : [],
+  );
 }
 
 /** Every user id a row view names. */
