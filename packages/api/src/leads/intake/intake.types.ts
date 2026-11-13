@@ -137,6 +137,20 @@ export interface IntakeInput {
    * cancellation on coverage that is not theirs.
    */
   replacementIntent?: IntakeReplacementIntent;
+  /**
+   * The Dash Reconciliation row this lead is created to record (PAC-173 PR 4)
+   * — an assignee entering a Dash sale missing from the app.
+   *
+   * The pipeline only reads its presence: `ResolveLeadStep` skips the address
+   * dedupe for it, as for a replacement, so the assignee always gets a fresh
+   * lead of their own. A merged one could be a colleague's (the Sold form
+   * would then 404) or dated after the Dash sale it must precede. Linking it
+   * to the row happens after the pipeline, in `LeadsService.create`.
+   *
+   * Authenticated path only, like `householdId`: the public schema does not
+   * accept it.
+   */
+  reconciliationRowId?: string;
 }
 
 /** The validated intent, as the pipeline receives it. */

@@ -1,0 +1,52 @@
+meta {
+  name: Presign NBA (Dash Row)
+  type: http
+  seq: 43
+}
+
+post {
+  url: {{baseUrl}}/sold-deals/documents/presign
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "leadId": "{{reconLeadId}}",
+    "kind": "new_business_application",
+    "filename": "avery-quinn-application.pdf",
+    "contentType": "application/pdf",
+    "size": 2048
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("reconNbaKey", res.getBody().key);
+    bru.setVar("reconNbaUploadUrl", res.getBody().uploadUrl);
+  }
+}
+
+tests {
+  test("returns 201 Created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("an NBA key under the Dash lead", function () {
+    const key = res.getBody().key;
+    expect(key).to.contain(bru.getVar("reconLeadId"));
+    expect(key).to.contain("/nba/");
+  });
+}
+
+docs {
+  # POST /sold-deals/documents/presign — the Dash sale's new business application
+
+  The Sold form still requires the signed application on every policy, Dash
+  row or not. Same endpoint as `Sold Deals/Presign New Business Application`,
+  for the lead `Create Lead (Dash Row)` made. Feeds `Upload NBA (Dash Row)`.
+}

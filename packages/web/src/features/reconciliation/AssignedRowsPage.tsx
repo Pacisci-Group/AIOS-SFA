@@ -36,6 +36,8 @@ import {
   apiErrorStatus,
   formatDayRange,
   formatPremium,
+  outcomeBadgeVariant,
+  outcomeNextStep,
   rowCustomer,
   rowPolicyNumber,
 } from "./reconciliation-format";
@@ -65,11 +67,18 @@ const retryUnlessForbidden = (failureCount: number, error: unknown) =>
  * which opens that row's drawer.
  *
  * Open to `leads:read` as well as `carrier_reconciliation:read`, because the
- * people it is for hold no reconciliation permission; for them the drawer is
- * read-only. A row leaves the list once a decision is recorded on it, on the
- * owner's page. **Recording an outcome from here — Sold, Other and the rest —
- * is the next PR**; until then this page tells the assignee what to look into
- * and where the row stands.
+ * people it is for hold no reconciliation permission; for them the drawer
+ * holds none of the owner's forms. **What they do here is record what became
+ * of each row** (PAC-173 PR 4): the drawer's Outcome section offers Sold,
+ * Cancel rewrite and Other, and carries one under way on to its next form —
+ * the New Lead and Sold forms return here, to the row. The Outcome column says
+ * where each stands; the actions stay in the drawer, so a row is still opened
+ * by clicking it.
+ *
+ * A row leaves the list once it is decided: by the assignee's outcome
+ * finishing, or by the owner deciding it by hand. Opened by id — from a
+ * notification, or on the way back from the Sold form — a decided row still
+ * opens, to show how it ended.
  *
  * A 403 means the agency does not use the module (or the viewer's role does
  * not include it): the page says so calmly rather than showing an error.
@@ -139,7 +148,8 @@ export default function AssignedRowsPage() {
               <p className="pt-1 text-sm text-muted-foreground">
                 Lines from Allstate's Dash report handed to you to look into,
                 oldest first. Open one to see what Dash and the app each say.
-                It leaves this list once a decision is recorded on it.
+                It stays here until you record what became of it, or the
+                owner decides.
               </p>
             }
             isPending={rows.isPending}
@@ -156,6 +166,7 @@ export default function AssignedRowsPage() {
                   <TableHead className="pl-5">Policy</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead>Why</TableHead>
+                  <TableHead>Outcome</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead className="text-right">Dash premium</TableHead>
                   <TableHead>Report period</TableHead>
@@ -191,6 +202,20 @@ export default function AssignedRowsPage() {
                           </Badge>
                         ) : (
                           NOT_AVAILABLE
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {row.outcome ? (
+                          <Badge
+                            variant={outcomeBadgeVariant(row.outcome)}
+                            size="sm"
+                          >
+                            {outcomeNextStep(row.outcome)}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            Not started
+                          </span>
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">

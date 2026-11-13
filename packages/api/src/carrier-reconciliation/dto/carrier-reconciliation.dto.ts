@@ -2,7 +2,10 @@ import {
   DATA_EXPORT_FORMATS,
   MAX_RECONCILIATION_ASSIGNMENT_NOTE_LENGTH,
   MAX_RECONCILIATION_FILE_BYTES,
+  MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH,
   RECONCILIATION_ASSIGNEE_FILTER_PATTERN,
+  RECONCILIATION_OUTCOME_FILTERS,
+  RECONCILIATION_OUTCOME_KINDS,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_RESOLUTIONS,
   RECONCILIATION_REVIEW_STATUSES,
@@ -58,12 +61,19 @@ export const rowsQuerySchema = z.object({
     .regex(RECONCILIATION_ASSIGNEE_FILTER_PATTERN)
     .transform((value) => value.toLowerCase())
     .optional(),
+  /** `in_progress` / `done`, or an outcome kind (PAC-173 PR 4). */
+  outcome: z.enum(RECONCILIATION_OUTCOME_FILTERS).optional(),
   q: z.string().trim().max(80).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 export type RowsQueryDto = z.infer<typeof rowsQuerySchema>;
 
+/**
+ * The owner's decision. `resolution` is limited to `RECONCILIATION_RESOLUTIONS`,
+ * which leaves out the outcome resolutions (`sold_recorded`, …): only an
+ * assignee's finished outcome writes those.
+ */
 export const reviewRowSchema = z
   .object({
     status: z.enum(RECONCILIATION_REVIEW_STATUSES),
@@ -95,6 +105,31 @@ export const assignRowSchema = z.object({
     .optional(),
 });
 export type AssignRowDto = z.infer<typeof assignRowSchema>;
+
+/**
+ * What the assignee records on their row (PAC-173 PR 4). `other` is the note
+ * itself, so it needs one; a sale kind may carry one for the owner.
+ */
+export const recordOutcomeSchema = z
+  .object({
+    kind: z.enum(RECONCILIATION_OUTCOME_KINDS),
+    note: z
+      .string()
+      .trim()
+      .max(MAX_RECONCILIATION_OUTCOME_NOTE_LENGTH)
+      .nullable()
+      .optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.kind === 'other' && !body.note) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['note'],
+        message: 'say what became of it',
+      });
+    }
+  });
+export type RecordOutcomeDto = z.infer<typeof recordOutcomeSchema>;
 
 /** The assignee's list: their own rows, or — with `:read` — someone else's. */
 export const assignedQuerySchema = z.object({

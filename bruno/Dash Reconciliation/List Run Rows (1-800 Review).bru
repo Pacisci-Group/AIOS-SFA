@@ -55,6 +55,9 @@ docs {
     re-checked
   - `reviewStatus` — `open` | `resolved` | `dismissed` (rows needing review only)
   - `assignee` — a user id, `me` or `unassigned`
+  - `outcome` — what the assignee recorded (PAC-173 PR 4): `in_progress` or
+    `done` (by where it stands), or `sold` | `cancel_rewrite` | `other` (by
+    kind). Anything else is a `400`. See `List Run Rows (Outcome Done)`
   - `q` — policy number, customer or client name, Bind ID (substring)
   - `page`, `pageSize` (≤ 100, default 25)
 
@@ -64,7 +67,9 @@ docs {
   matched or app-only policy, with its deal, producer and sold day),
   `issues`, `tabs`, `needsReview`, `credit` (who Dash credits), `suggestions`
   (likely counterparts of an unmatched row — usually a mistyped number),
-  `review`, `runId` and `assignment` (who the owner handed it to, or `null`).
+  `review`, `runId`, `assignment` (who the owner handed it to, or `null`) and
+  `outcome` (what the assignee recorded, or is recording, or `null` — shape in
+  `Record Outcome (Sold)`).
 
   A matched row in the 1-800 tab also carries `direct_recorded_as_sale` when
   the app has the policy on a deal: a 1-800 policy is serviced, never sold. A

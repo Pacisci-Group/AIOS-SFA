@@ -1,0 +1,45 @@
+meta {
+  name: Assign Row (Premium Differs)
+  type: http
+  seq: 36
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconPremiumRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{currentUserId}}",
+    "note": "Which premium is right?"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row is with the producer", function () {
+    expect(res.getBody().assignment.user.id).to.equal(bru.getVar("currentUserId"));
+  });
+}
+
+docs {
+  # PATCH …/assignment — hand the premium row to the producer
+
+  Same request as `Assign Row`, for `900200000`: a matched policy whose
+  premium differs, so a row that is **not** missing from the app. The two
+  outcome requests after it need one assigned to the caller. Assigning it to
+  the same person again on a re-run only changes the note.
+}

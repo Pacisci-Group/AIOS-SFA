@@ -22,6 +22,10 @@ import { useSaleMode } from "./modes/useSaleMode";
  * endpoint, its own upload prefix and its own guards, and they had drifted apart
  * while doing the same job. `SoldFlow` is the shape they were reduced to, and
  * the mode hook is where the anchor, the endpoint and the return route live.
+ *
+ * `&reconciliationRowId={id}` (PAC-173) makes the sale — or the replacement —
+ * the assignee's outcome on a Dash Reconciliation row: prefilled from the Dash
+ * line, sent with the row's id, and returning to the row. See `useSaleMode`.
  */
 export default function SoldDealPage() {
   const [searchParams] = useSearchParams();
@@ -29,6 +33,7 @@ export default function SoldDealPage() {
   const flow = useSaleMode({
     leadId: searchParams.get("leadId") ?? "",
     quoteRecapId: searchParams.get("quoteRecapId") ?? "",
+    reconciliationRowId: searchParams.get("reconciliationRowId") ?? "",
     enabled: true,
   });
 
@@ -101,6 +106,8 @@ export default function SoldDealPage() {
                 carriers={flow.ready.carriers}
                 staff={flow.ready.staff}
                 uploadScope={flow.ready.uploadScope}
+                initialSoldDate={flow.ready.initialSoldDate}
+                initialDraft={flow.ready.initialDraft}
                 submitting={flow.submitting}
                 errorMessage={flow.errorMessage}
                 onSubmit={flow.onSubmit}

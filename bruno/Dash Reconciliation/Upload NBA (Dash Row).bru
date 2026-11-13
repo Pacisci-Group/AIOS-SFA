@@ -1,0 +1,37 @@
+meta {
+  name: Upload NBA (Dash Row)
+  type: http
+  seq: 44
+}
+
+put {
+  url: {{reconNbaUploadUrl}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/pdf
+}
+
+body:text {
+  %PDF-1.4
+  1 0 obj<</Type/Catalog>>endobj
+  trailer<</Root 1 0 R>>
+  %%EOF
+}
+
+tests {
+  test("storage accepts the application", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  # PUT <uploadUrl> — the raw application, straight to storage
+
+  Not an API endpoint. `auth: none` — the collection's bearer would break the
+  S3 signature. `POST /sold-deals` reads the object's type and size back with
+  `HeadObject`, so the `Content-Type` must be `application/pdf`, the value
+  the URL was signed for.
+}

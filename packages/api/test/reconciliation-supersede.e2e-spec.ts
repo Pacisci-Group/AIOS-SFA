@@ -374,9 +374,24 @@ describe('Dash Reconciliation re-upload (e2e)', () => {
           (await rowsOf(runId)).map((row) => [row.dash?.policyNumber, row]),
         );
       const firstRows = await byNumber(first.id);
+      // The rows are missing from the app, so each goes to someone who can
+      // book a sale: the producer, and the read-only user lent the rights.
+      const roleAssignments = app.get(RoleAssignmentsService);
+      const salesRights = [
+        'leads:read',
+        'leads:write',
+        'deal_audits:read',
+        'deal_audits:write',
+      ];
+      await roleAssignments.setUserOverrides(
+        ctx.agencyId,
+        ctx.readOnlyUserId,
+        salesRights,
+        [],
+      );
       for (const [number, userId] of [
         ['900800001', producerId],
-        ['900800002', ctx.csrUserId],
+        ['900800002', ctx.readOnlyUserId],
       ] as const) {
         await api()
           .patch(
@@ -387,13 +402,13 @@ describe('Dash Reconciliation re-upload (e2e)', () => {
           .expect(200);
       }
 
-      // The CSR loses `leads:write` before the report is uploaded again.
-      const roleAssignments = app.get(RoleAssignmentsService);
+      // The read-only user loses those rights before the report is uploaded
+      // again, so is no longer in the pool.
       await roleAssignments.setUserOverrides(
         ctx.agencyId,
-        ctx.csrUserId,
+        ctx.readOnlyUserId,
         [],
-        ['leads:write'],
+        [],
       );
       try {
         const { run: second } = await upload(
@@ -407,7 +422,7 @@ describe('Dash Reconciliation re-upload (e2e)', () => {
       } finally {
         await roleAssignments.setUserOverrides(
           ctx.agencyId,
-          ctx.csrUserId,
+          ctx.readOnlyUserId,
           [],
           [],
         );

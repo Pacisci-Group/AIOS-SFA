@@ -21,6 +21,12 @@ export type SelectOption<V extends string> =
        * trigger. Defaults to `label`.
        */
       triggerLabel?: React.ReactNode;
+      /**
+       * Listed but not pickable — the reconciliation assignee picker shows
+       * who cannot take a row, and why, rather than hiding them (PAC-173). A
+       * disabled option that is already the value still shows on the trigger.
+       */
+      disabled?: boolean;
     };
 
 interface SelectFieldProps<V extends string> {
@@ -51,6 +57,8 @@ const optionValue = <V extends string>(o: SelectOption<V>): V =>
   typeof o === "string" ? o : o.value;
 const optionLabel = <V extends string>(o: SelectOption<V>): React.ReactNode =>
   typeof o === "string" ? o : o.label;
+const optionDisabled = <V extends string>(o: SelectOption<V>): boolean =>
+  typeof o === "string" ? false : Boolean(o.disabled);
 const optionTriggerLabel = <V extends string>(
   o: SelectOption<V>,
 ): React.ReactNode =>
@@ -120,7 +128,11 @@ export function SelectField<V extends string>({
           </SelectTrigger>
           <SelectContent className={contentClassName}>
             {options.map((o) => (
-              <SelectItem key={optionValue(o)} value={optionValue(o)}>
+              <SelectItem
+                key={optionValue(o)}
+                value={optionValue(o)}
+                disabled={optionDisabled(o)}
+              >
                 {optionLabel(o)}
               </SelectItem>
             ))}

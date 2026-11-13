@@ -60,6 +60,20 @@ interface SoldDealWizardProps {
    * reliably knows it.
    */
   uploadScope: UploadScope;
+  /**
+   * A sold date to start from instead of today — the day Dash says a policy
+   * was written, when a reconciliation outcome records it (PAC-173). Seeds
+   * the value only: the date's `max` and what counts as unsaved work stay
+   * today, so a prefilled date guards a reload like a typed one. A date after
+   * today is ignored.
+   */
+  initialSoldDate?: string;
+  /**
+   * The first policy's starting values, from the same Dash line. Handed to the
+   * first `PolicyDraftStepper` as its `seed`, so it reads as a new policy, not
+   * an edit; every later policy starts blank.
+   */
+  initialDraft?: SoldPolicyFormValues;
 }
 
 /** One opening of the policy steps. */
@@ -105,17 +119,24 @@ export function SoldDealWizard({
   onSubmit,
   variant = "sale",
   uploadScope,
+  initialSoldDate,
+  initialDraft,
 }: SoldDealWizardProps) {
   /**
    * Today on the **agency's** calendar (PAC-159) — the day the API's
    * "not in the future" rule is judged on, which is neither UTC nor the
-   * producer's own zone. The initial value is kept so a date nobody touched
-   * does not count as unsaved work.
+   * producer's own zone. Kept so a date nobody touched does not count as
+   * unsaved work.
    */
-  const [initialSoldDate] = useState(() =>
+  const [agencyToday] = useState(() =>
     agencyTodayYmd(getStoredUser()?.timeZone),
   );
-  const [soldDate, setSoldDate] = useState(initialSoldDate);
+  // `YYYY-MM-DD` compares as text.
+  const [soldDate, setSoldDate] = useState(() =>
+    initialSoldDate && initialSoldDate <= agencyToday
+      ? initialSoldDate
+      : agencyToday,
+  );
   const [policies, setPolicies] = useState<SoldPolicyFormValues[]>([]);
 
   const sessionSeq = useRef(0);
@@ -127,7 +148,7 @@ export function SoldDealWizard({
   const [draftDirty, setDraftDirty] = useState(false);
 
   const dirty =
-    soldDate !== initialSoldDate || policies.length > 0 || draftDirty;
+    soldDate !== agencyToday || policies.length > 0 || draftDirty;
 
   /**
    * Guard a hard reload / tab close.
@@ -213,7 +234,7 @@ export function SoldDealWizard({
           {context.householdName && <> · {context.householdName}</>}
         </p>
         <SoldDateCard
-          max={initialSoldDate}
+          max={agencyToday}
           value={soldDate}
           onChange={setSoldDate}
           disabled={submitting}
@@ -231,6 +252,9 @@ export function SoldDealWizard({
           initialValues={
             editingIndex !== null ? policies[editingIndex] : undefined
           }
+          // Only the sale's first opening: a policy added after it, or one
+          // reopened after the seeded one was removed, starts blank.
+          seed={draft.key === 0 ? initialDraft : undefined}
           position={
             editingIndex !== null ? editingIndex + 1 : policies.length + 1
           }

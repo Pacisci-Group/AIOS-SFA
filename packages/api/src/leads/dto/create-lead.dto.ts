@@ -173,6 +173,21 @@ export const createLeadSchema = leadIntakeBaseSchema.extend({
       reason: z.enum(POLICY_REPLACEMENT_REASONS),
     })
     .optional(),
+  /**
+   * The Dash Reconciliation row this lead records (PAC-173 PR 4): the
+   * assignee's Sold or Cancel rewrite outcome, step one of two. The lead skips
+   * the address dedupe, and is stamped on the row after it is created —
+   * best-effort, and only on a row assigned to the caller with a sale under
+   * way and no lead yet. The lead is created either way.
+   *
+   * Absent from `publicCreateLeadSchema`: an outside submitter has no row.
+   */
+  reconciliationRowId: z
+    .string()
+    .trim()
+    .regex(/^[a-f0-9]{24}$/i, 'reconciliationRowId must be a record id')
+    .transform((value) => value.toLowerCase())
+    .optional(),
 });
 
 export type CreateLeadDto = z.infer<typeof createLeadSchema>;

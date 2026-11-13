@@ -2,10 +2,13 @@ import {
   RETIRED_RECONCILIATION_RESOLUTIONS,
   type ReconciliationIssue,
   type ReconciliationMatch,
-  type ReconciliationResolution,
+  type ReconciliationOutcomeKind,
+  type ReconciliationOutcomeStatus,
+  type ReconciliationOutcomeStep,
   type ReconciliationReviewStatus,
-  type RetiredReconciliationResolution,
+  type StoredReconciliationResolution,
 } from '@sfa/shared';
+import { isHeldOpen } from './outcome-state';
 
 /**
  * Who a row was handed to. Ids are strings, like the review's: it is a
@@ -19,17 +22,53 @@ export interface RowAssignment {
   note: string | null;
 }
 
+/**
+ * What the assignee recorded on a row (PAC-173 PR 4): Sold, Cancel rewrite or
+ * Other. Its own field beside `assignment`, for the same reason — saving a
+ * decision replaces `review` whole and must not drop it.
+ *
+ * Ids are strings, like every id in these snapshots: it is read back whole,
+ * and the links (`leadId`, `dealId`, …) are followed one at a time, never
+ * joined on. A sale kind starts `in_progress` at `record_sale`; a cancel
+ * rewrite then waits at `write_replacement` for its replacement; `other` is
+ * done at once. Done always comes with the row resolved
+ * (`RECONCILIATION_OUTCOME_RESOLUTION`), so an open row holds either no
+ * outcome or one in progress.
+ */
+export interface RowOutcome {
+  kind: ReconciliationOutcomeKind;
+  status: ReconciliationOutcomeStatus;
+  /** `null` once done, and for `other`. */
+  step: ReconciliationOutcomeStep | null;
+  note: string | null;
+  /** The lead the sale is booked on — stamped as soon as it exists. */
+  leadId: string | null;
+  /** The deal that books the Dash line. */
+  dealId: string | null;
+  /** That deal's policy which is the Dash line. */
+  policyId: string | null;
+  householdId: string | null;
+  /** A cancel rewrite's replacement, and the chargeback the rewrite wrote. */
+  replacementPolicyId: string | null;
+  chargebackId: string | null;
+  startedById: string;
+  startedAt: Date;
+  completedById: string | null;
+  completedAt: Date | null;
+}
+
 /** What a superseded run's row carries forward. */
 export interface PreviousRowReview {
   rowId: string;
   match: ReconciliationMatch | null;
   issues: readonly ReconciliationIssue[];
   status: ReconciliationReviewStatus;
-  resolution: ReconciliationResolution | RetiredReconciliationResolution | null;
+  resolution: StoredReconciliationResolution | null;
   note: string | null;
   reviewedById: string | null;
   reviewedAt: Date | null;
   assignment: RowAssignment | null;
+  outcome: RowOutcome | null;
 }
 
 /** What carry-forward compares: the row's key, match and issues. */
@@ -37,6 +76,8 @@ export interface CarriedRow {
   rowKey: string;
   match: ReconciliationMatch | null;
   issues: readonly ReconciliationIssue[];
+  /** Whether the new row asks for a decision by its own tabs. */
+  needsReview?: boolean;
 }
 
 /** A carried decision, as the new row stores it (`StoredReview`). */
@@ -57,6 +98,9 @@ export interface CarriedReviewFields {
 export interface CarriedFields {
   review?: CarriedReviewFields;
   assignment?: RowAssignment;
+  outcome?: RowOutcome;
+  /** Set when a carried outcome holds a row open that would not otherwise ask. */
+  needsReview?: true;
 }
 
 /** What the upload knows about the people rows may be carried to. */
@@ -75,10 +119,19 @@ export function carriedFields(
   context: CarryContext,
 ): CarriedFields {
   const fields: CarriedFields = {};
-  const assignment = carriedAssignment(row, previous);
+  // An outcome held open — under way, with a sale already booked — carries to
+  // the Dash line's new row whatever it now says: booking the Dash policy is
+  // what turned the row `matched`, and the outcome is the only link to that
+  // sale. It brings its assignee, and keeps the row asking until it is done.
+  const before = previous.get(row.rowKey);
+  const held = before && isHeldOpen(before.outcome) ? before : null;
+  const source = held ?? sameRowBefore(row, previous);
+  const assignment = source?.assignment ?? null;
   if (assignment && context.canTakeRows(assignment.userId)) {
     fields.assignment = assignment;
   }
+  if (source?.outcome) fields.outcome = source.outcome;
+  if (held && !row.needsReview) fields.needsReview = true;
   const review = carriedReview(row, previous);
   if (review) {
     fields.review = {
@@ -125,6 +178,24 @@ export function carriedAssignment(
   previous: ReadonlyMap<string, PreviousRowReview>,
 ): RowAssignment | null {
   return sameRowBefore(row, previous)?.assignment ?? null;
+}
+
+/**
+ * The outcome carries on the same terms again (PAC-173 PR 4). One still in
+ * progress travels with its assignment, so the assignee resumes where they
+ * were; a done one travels with the decision it resolved the row with, and
+ * still names what it created.
+ *
+ * Booking the Dash policy makes the row match next upload, so a finished sale
+ * recorded between two uploads changes the row and nothing carries — by
+ * design: the row no longer asks the question. One still under way is the
+ * exception ({@link carriedFields}, `isHeldOpen`): it carries anyway.
+ */
+export function carriedOutcome(
+  row: CarriedRow,
+  previous: ReadonlyMap<string, PreviousRowReview>,
+): RowOutcome | null {
+  return sameRowBefore(row, previous)?.outcome ?? null;
 }
 
 function sameRowBefore(

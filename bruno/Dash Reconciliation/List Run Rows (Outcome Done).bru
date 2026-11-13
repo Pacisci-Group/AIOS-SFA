@@ -1,0 +1,55 @@
+meta {
+  name: List Run Rows (Outcome Done)
+  type: http
+  seq: 47
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?outcome=done&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  outcome: done
+  pageSize: 25
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the rows an assignee finished — the Dash sale and the premium Other", function () {
+    const ids = res.getBody().items.map((item) => item.id);
+    expect(ids).to.include(bru.getVar("reconAssignRowId"));
+    expect(ids).to.include(bru.getVar("reconPremiumRowId"));
+  });
+
+  test("only finished outcomes", function () {
+    for (const item of res.getBody().items) {
+      expect(item.outcome.status).to.equal("done");
+    }
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/rows?outcome=done — the owner's outcome filter
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  `outcome` filters on what the assignee recorded (PAC-173 PR 4):
+
+  - `in_progress` | `done` — where it stands (`outcome.status`);
+  - `sold` | `cancel_rewrite` | `other` — what it is (`outcome.kind`).
+
+  Anything else is a `400`. It combines with `tab`, `producer`,
+  `reviewStatus`, `assignee` and `q` (see `List Run Rows (1-800 Review)`).
+  The run's `inProgress` count (`Get Run`) is the open, assigned rows with
+  an outcome `in_progress`.
+}

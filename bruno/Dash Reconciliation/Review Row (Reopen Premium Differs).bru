@@ -1,0 +1,46 @@
+meta {
+  name: Review Row (Reopen Premium Differs)
+  type: http
+  seq: 35
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconPremiumRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "open"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row waits on a decision, with nothing recorded on it", function () {
+    expect(res.getBody().review.status).to.equal("open");
+    expect(res.getBody().outcome).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH …/review `{ "status": "open" }` — reset the premium row for the outcome requests
+
+  The same reset as `Review Row (Reopen Missing)`, for the fixture's
+  `900200000` (a premium a cent apart): the previous run of this folder left
+  it recorded **Other — done** by `Record Outcome (Other)`. Reopening clears
+  the decision and the outcome, so the requests that follow start from an
+  open row every time.
+}

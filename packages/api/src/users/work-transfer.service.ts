@@ -11,9 +11,12 @@ import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import {
   DataScope,
   RECONCILIATION_ASSIGNEE_PERMISSION,
+  RECONCILIATION_SALE_OUTCOME_KINDS,
   SERVICE_TICKET_TERMINAL_STATUSES,
+  canRecordReconciliationSale,
   terminalLeadStatusValues,
   type AccessContext,
+  type ReconciliationOutcomeKind,
   type ReconciliationTab,
 } from '@sfa/shared';
 import { Activity } from '../activities/schemas/activity.schema';
@@ -24,6 +27,7 @@ import {
   openAssignmentsFilter,
 } from '../common/carrier-reconciliation/assignment-scope';
 import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
+import { HELD_OPEN_OUTCOME } from '../common/carrier-reconciliation/outcome-state';
 import { currentUserObjectId } from '../common/context/request-context';
 import { TransactionRunner } from '../common/mongo/transaction.runner';
 import { notificationRequested } from '../inngest/events';
@@ -77,8 +81,9 @@ export interface WorkTransferCounts {
   /** Dash Reconciliation rows assigned to them that still wait on a decision. */
   reconciliationRows: number;
   /**
-   * Of those, the rows the successor cannot be given (they cannot work leads)
-   * — sent back to the owner unassigned rather than moved.
+   * Of those, the rows the successor cannot be given — they cannot work
+   * leads, or the row is a sale and they cannot book one — sent back to the
+   * owner unassigned rather than moved.
    */
   reconciliationRowsUnassigned: number;
 }
@@ -158,9 +163,16 @@ type Plan = WorkTransferTouched;
  *   on current runs (PAC-173) — not a closed month's, which is on nobody's
  *   list. The hand-over stamps `assignedById` (whoever ran the transfer) and
  *   `assignedAt`, and the successor gets one `reconciliation.rows_transferred`
- *   push for the lot; a decided row keeps the name of whoever worked it. A
- *   row the successor could not be given through `assign()` — they cannot
- *   work leads — goes back to the owner unassigned instead (PAC-173 review).
+ *   push for the lot; a decided row keeps the name of whoever worked it. An
+ *   outcome under way on one (PAC-173 PR 4) is **kept**: its lead moves to the
+ *   successor with the open leads above, so they resume it where it stood —
+ *   unlike a release, which clears it along with the lead's owner unless it
+ *   has booked a sale (`isHeldOpen`). Its `startedById` stays the person who
+ *   started it (attribution); whoever finishes it is `completedById`. A row
+ *   the successor could not be given through `assign()` — they cannot work
+ *   leads, or a sale is involved and they cannot book one — goes back to the
+ *   owner unassigned instead (PAC-173 review), its outcome as a release
+ *   leaves it.
  *
  * **Seeds** — not tasks themselves, but the fields the system reads when it
  * mints the *next* task. Moving the tickets without these undoes itself: the
@@ -561,7 +573,7 @@ export class WorkTransferService {
               ),
             ),
           )
-          .select('_id tabs')
+          .select('_id tabs outcome')
           .session(session)
           .lean<OpenReconciliationRow[]>(),
     ]);
@@ -798,6 +810,8 @@ export class WorkTransferService {
           },
           opts,
         ),
+      // As a release leaves them: an outcome under way goes, unless it has
+      // booked a sale (`HELD_OPEN_OUTCOME`) — the next assignee continues it.
       () =>
         plan.reconciliationRowsReleased.length &&
         this.reconciliationRowModel.updateMany(
@@ -805,6 +819,19 @@ export class WorkTransferService {
             ...byIds(plan.reconciliationRowsReleased),
             'assignment.userId': fromId.toString(),
             ...LIVE_ROW,
+            $nor: [HELD_OPEN_OUTCOME],
+          },
+          { $set: { assignment: null, outcome: null } },
+          opts,
+        ),
+      () =>
+        plan.reconciliationRowsReleased.length &&
+        this.reconciliationRowModel.updateMany(
+          {
+            ...byIds(plan.reconciliationRowsReleased),
+            'assignment.userId': fromId.toString(),
+            ...LIVE_ROW,
+            ...HELD_OPEN_OUTCOME,
           },
           { $set: { assignment: null } },
           opts,
@@ -922,18 +949,27 @@ export class WorkTransferService {
 interface OpenReconciliationRow {
   _id: Types.ObjectId;
   tabs: ReconciliationTab[];
+  outcome?: { kind: ReconciliationOutcomeKind } | null;
 }
 
 /**
  * Whether the successor could be given this row through `assign()`: they can
- * be handed rows at all (`RECONCILIATION_ASSIGNEE_PERMISSION`).
+ * be handed rows at all (`RECONCILIATION_ASSIGNEE_PERMISSION`), and can book
+ * a sale when the row is one — missing from the app, or a sale already under
+ * way on it, which they would be the one to finish.
  */
 function successorCanTake(
   permissions: readonly string[] | null,
   row: OpenReconciliationRow,
 ): boolean {
-  void row;
-  return permissions !== null;
+  if (permissions === null) return false;
+  const sale =
+    row.tabs.includes('missing_from_app') ||
+    (!!row.outcome &&
+      (RECONCILIATION_SALE_OUTCOME_KINDS as readonly string[]).includes(
+        row.outcome.kind,
+      ));
+  return !sale || canRecordReconciliationSale(permissions);
 }
 
 /**

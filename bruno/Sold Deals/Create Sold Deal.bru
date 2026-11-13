@@ -202,6 +202,7 @@ docs {
   | policies         | array  | 1–10; one per loop iteration                |
   | policies[].newBusinessApplication | object | **required**, PDF only — see below |
   | submissionToken  | string | optional idempotency key, 8–200 chars       |
+  | reconciliationRowId | string | optional — the Dash Reconciliation row this sale records (PAC-173 PR 4); see below |
 
   ## The new business application (PAC-56 #23)
   Required on **every policy**, and **PDF only** — the deliberate exception to
@@ -379,6 +380,26 @@ docs {
   Extra rows are new policies on the same deal (an Auto becoming Auto +
   Motorcycle); only the first replaces anything. Prior insurance is not asked
   on a replacement — the policy being replaced is already ours.
+
+  ## Recording a Dash row (`reconciliationRowId`, PAC-173 PR 4)
+  Step two of an assignee recording a Dash Reconciliation row as Sold or a
+  Cancel rewrite, after `POST /leads` with the same id. The sale books
+  **exactly as it would without it** — same validation, same credit, same
+  response. After it commits (and on a `submissionToken` replay), the row's
+  outcome is moved on, best-effort:
+
+  - Sold → done, linking the lead, the deal, its household and the deal's
+    policy that is the Dash line (by policy-number key, else the first); the
+    row is decided `sold_recorded`.
+  - Cancel rewrite → the same links, then "write the replacement"; the
+    replacement's own sale (a lead with `replacementIntent`) then finishes it
+    with the replacement policy and the chargeback, decided
+    `cancel_rewrite_recorded`.
+
+  Only on the caller's own row, on a current run, still waiting on a
+  decision, with that step under way — anything else is logged and ignored,
+  never an error. Idempotent on the deal. This request does not send it;
+  `Dash Reconciliation/Create Sold Deal (Dash Row)` does.
 
   ## Idempotency
   Replaying `submissionToken` returns the **same deal id** and creates nothing

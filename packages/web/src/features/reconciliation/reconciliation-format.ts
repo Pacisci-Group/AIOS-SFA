@@ -1,9 +1,16 @@
 import {
   RECONCILIATION_ISSUE_LABELS,
+  RECONCILIATION_OUTCOME_KIND_LABELS,
+  RECONCILIATION_OUTCOME_RESOLUTIONS,
+  RECONCILIATION_OUTCOME_STEP_LABELS,
   type ReconciliationIssue,
+  type ReconciliationOutcome,
+  type ReconciliationOutcomeFilter,
+  type ReconciliationOutcomeResolution,
   type ReconciliationReviewStatus,
   type ReconciliationRowView,
   type ReconciliationRunView,
+  type StoredReconciliationResolution,
 } from "@sfa/shared";
 import { ApiError } from "@/lib/api-client";
 import { NOT_AVAILABLE } from "@/lib/not-available";
@@ -152,6 +159,60 @@ export const REVIEW_BADGE: Record<
   resolved: "success",
   dismissed: "secondary",
 };
+
+/**
+ * An outcome as the owner reads it — `Sold — done`, `Cancel rewrite — writing
+ * the replacement` — worded as the export's `outcome` column words it.
+ */
+export function outcomeLabel(outcome: ReconciliationOutcome): string {
+  const kind = RECONCILIATION_OUTCOME_KIND_LABELS[outcome.kind];
+  if (outcome.status === "done") return `${kind} — done`;
+  return outcome.step
+    ? `${kind} — ${RECONCILIATION_OUTCOME_STEP_LABELS[outcome.step].toLowerCase()}`
+    : `${kind} — in progress`;
+}
+
+/**
+ * An outcome as its assignee reads it, on their own lists: what is left for
+ * them to do — `Sold — in progress`, `Write the replacement`.
+ */
+export function outcomeNextStep(outcome: ReconciliationOutcome): string {
+  const kind = RECONCILIATION_OUTCOME_KIND_LABELS[outcome.kind];
+  if (outcome.status === "done") return `${kind} — done`;
+  return outcome.step === "write_replacement"
+    ? "Write the replacement"
+    : `${kind} — in progress`;
+}
+
+/** Done reads as settled; one under way as still open. */
+export function outcomeBadgeVariant(
+  outcome: ReconciliationOutcome,
+): "success" | "outline" {
+  return outcome.status === "done" ? "success" : "outline";
+}
+
+/** The rows filter's choices, worded for the trigger's `Outcome: …`. */
+export const OUTCOME_FILTER_LABELS: Record<ReconciliationOutcomeFilter, string> = {
+  in_progress: "Under way",
+  done: "Done",
+  sold: RECONCILIATION_OUTCOME_KIND_LABELS.sold,
+  cancel_rewrite: RECONCILIATION_OUTCOME_KIND_LABELS.cancel_rewrite,
+  other: RECONCILIATION_OUTCOME_KIND_LABELS.other,
+};
+
+/**
+ * Whether a stored resolution was left by an assignee's finished outcome
+ * rather than picked by the owner. The owner's form cannot offer it back — the
+ * review endpoint refuses it — so such a row is reopened, not re-decided.
+ */
+export function isOutcomeResolution(
+  resolution: StoredReconciliationResolution | null,
+): resolution is ReconciliationOutcomeResolution {
+  return (
+    resolution != null &&
+    (RECONCILIATION_OUTCOME_RESOLUTIONS as readonly string[]).includes(resolution)
+  );
+}
 
 /** The policy number a row is known by — Dash's, else the app's. */
 export function rowPolicyNumber(row: ReconciliationRowView): string {

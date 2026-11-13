@@ -1,11 +1,16 @@
 import {
+  RECONCILIATION_OUTCOME_KINDS,
+  RECONCILIATION_OUTCOME_RESOLUTION,
+  RECONCILIATION_OUTCOME_RESOLUTIONS,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_RESOLUTION_LABELS,
   RECONCILIATION_RESOLUTIONS,
   RECONCILIATION_RESOLUTIONS_BY_TAB,
   RECONCILIATION_TABS,
   RETIRED_RECONCILIATION_RESOLUTIONS,
+  canRecordReconciliationSale,
   primaryReconciliationTab,
+  reconciliationOutcomeKinds,
   reconciliationPremiumDelta,
 } from './carrier-reconciliation';
 
@@ -105,5 +110,44 @@ describe('primaryReconciliationTab', () => {
       'review_1800',
     );
     expect(primaryReconciliationTab([])).toBeNull();
+  });
+});
+
+describe('outcomes', () => {
+  it('lets a missing Dash sale be Sold, a Cancel rewrite or Other', () => {
+    expect(reconciliationOutcomeKinds(['missing_from_app'])).toEqual([
+      'sold',
+      'cancel_rewrite',
+      'other',
+    ]);
+  });
+
+  it('gives every other tab Other only', () => {
+    for (const tab of RECONCILIATION_TABS.filter(
+      (t) => t !== 'missing_from_app',
+    )) {
+      expect(reconciliationOutcomeKinds([tab])).toEqual(['other']);
+    }
+    expect(reconciliationOutcomeKinds([])).toEqual(['other']);
+  });
+
+  it('resolves each kind with its own resolution, which a review cannot set', () => {
+    for (const kind of RECONCILIATION_OUTCOME_KINDS) {
+      const resolution = RECONCILIATION_OUTCOME_RESOLUTION[kind];
+      expect(RECONCILIATION_OUTCOME_RESOLUTIONS).toContain(resolution);
+      expect(RECONCILIATION_RESOLUTIONS).not.toContain(resolution);
+      expect(RECONCILIATION_RESOLUTION_LABELS[resolution]).toBeTruthy();
+    }
+  });
+
+  it('books a sale only with both leads and deal audits write', () => {
+    expect(
+      canRecordReconciliationSale(['leads:write', 'deal_audits:write']),
+    ).toBe(true);
+    expect(canRecordReconciliationSale(['leads:write'])).toBe(false);
+    expect(canRecordReconciliationSale(['deal_audits:write'])).toBe(false);
+    expect(
+      canRecordReconciliationSale(['leads:read', 'deal_audits:read']),
+    ).toBe(false);
   });
 });

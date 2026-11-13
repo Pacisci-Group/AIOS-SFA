@@ -9,17 +9,26 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import {
   ModuleKey,
+  RECONCILIATION_ASSIGNEE_CANNOT_SELL,
   RECONCILIATION_ASSIGNEE_PERMISSION,
+  RECONCILIATION_SALE_OUTCOME_KINDS,
   RECONCILIATION_TAB_LABELS,
+  canRecordReconciliationSale,
   modulePermission,
   primaryReconciliationTab,
   type AccessContext,
   type ReconciliationAssignedListResponse,
   type ReconciliationAssignedRow,
+  type ReconciliationAssignedRowDetail,
   type ReconciliationOptionsResponse,
+  type ReconciliationOutcomeKind,
   type ReconciliationRowView,
 } from '@sfa/shared';
 import { Types, type Model } from 'mongoose';
+import {
+  Carrier,
+  type CarrierDocument,
+} from '../carriers/schemas/carrier.schema';
 import { clientAgencyId } from '../common/access/client-scope';
 import {
   currentRunIds,
@@ -27,17 +36,23 @@ import {
 } from '../common/carrier-reconciliation/assignment-scope';
 import type { RowAssignment } from '../common/carrier-reconciliation/carry-forward';
 import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
+import { isHeldOpen } from '../common/carrier-reconciliation/outcome-state';
 import { displayName, displayNamesFor } from '../common/domain/user-names';
 import { notificationRequested } from '../inngest/events';
 import { InngestService } from '../inngest/inngest.service';
-import { PermissionsService } from '../permissions/permissions.service';
+import {
+  PermissionsService,
+  type PermissionHolder,
+} from '../permissions/permissions.service';
 import { User, type UserDocument } from '../users/schemas/user.schema';
 import type {
   AssignedQueryDto,
   AssignRowDto,
 } from './dto/carrier-reconciliation.dto';
+import { outcomeAsRead } from './outcome-filters';
 import {
   isStale,
+  reconciliationPrefill,
   resolveRowViews,
   type LeanRow,
   type LeanRun,
@@ -67,6 +82,21 @@ const READ = modulePermission(ModuleKey.CarrierReconciliation, 'read');
  * The assignee's reads are not gated on `carrier_reconciliation:read`, which
  * no Producer or CSR holds: they see the rows assigned to **them** and
  * nothing else of the report.
+ *
+ * ## Outcomes (PAC-173 PR 4)
+ *
+ * The assignee records what became of the row (`ReconciliationOutcomesService`).
+ * Two rules land here:
+ *
+ * - A row **missing from the app** goes only to someone who can book a sale
+ *   (`canRecordReconciliationSale`: `leads:write` + `deal_audits:write`), by
+ *   their effective permissions rather than their role — a CSR an agency lets
+ *   sell qualifies, a standard one does not (owner, 28 Oct 2026). The picker
+ *   marks who can.
+ * - Handing the row to someone else, or taking it back, **clears an outcome
+ *   still in progress**: the new person starts over, because the first one's
+ *   lead stays in their own pipeline. A note change for the same person keeps
+ *   it, and a finished outcome is a record either way.
  */
 @Injectable()
 export class ReconciliationAssignmentsService {
@@ -79,17 +109,20 @@ export class ReconciliationAssignmentsService {
     private readonly rowModel: Model<ReconciliationRowDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(Carrier.name)
+    private readonly carrierModel: Model<CarrierDocument>,
     private readonly inngest: InngestService,
     /**
-     * Who may be given a row is decided by effective permission
-     * (`RECONCILIATION_ASSIGNEE_PERMISSION`), never by role name.
+     * Who may be given a row — the pool, and who of it can book a sale — is
+     * decided by effective permission, never by role name.
      */
     private readonly permissions: PermissionsService,
   ) {}
 
   /**
    * The assignee picker: the agency's active users who can work leads, by
-   * name, with their role names for display.
+   * name, with their role names for display, each marked with whether they
+   * can book a sale — only they can be given a row missing from the app.
    */
   async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
     const holders = await this.permissions.activeUsersHolding(
@@ -102,6 +135,7 @@ export class ReconciliationAssignmentsService {
         name: displayName(user),
         email: user.email ?? '',
         roles: user.roleNames,
+        canRecordSale: canRecordReconciliationSale(user.permissions),
       })),
     };
   }
@@ -115,6 +149,10 @@ export class ReconciliationAssignmentsService {
    * The new assignee is notified (in-app + push) after the write, best-effort
    * — the event outbox replays a failed send — and never for a note change,
    * an unassign, or a row the owner gives themselves.
+   *
+   * A row missing from the app goes only to someone who can book a sale (400
+   * `RECONCILIATION_ASSIGNEE_CANNOT_SELL`). A new assignee, or none, clears
+   * an outcome still in progress in the same write.
    */
   async assign(
     access: AccessContext,
@@ -166,7 +204,15 @@ export class ReconciliationAssignmentsService {
           note: dto.note === undefined ? current.note : dto.note || null,
         };
       } else {
-        await this.assertAssignable(agencyId, dto.userId);
+        const holder = await this.assertAssignable(agencyId, dto.userId);
+        // A row missing from the app is booked as a sale, and so is one whose
+        // sale is under way and kept for them (`isHeldOpen`).
+        if (
+          row.tabs.includes('missing_from_app') ||
+          (isHeldOpen(row.outcome) && isSaleKind(row.outcome!.kind))
+        ) {
+          assertCanRecordSale(holder.permissions);
+        }
         next = {
           userId: dto.userId,
           assignedById: access.userId,
@@ -176,9 +222,21 @@ export class ReconciliationAssignmentsService {
       }
     }
 
+    // The person changes (or nobody has it now): an outcome they had under
+    // way goes with them. Their lead stays theirs; the next person starts
+    // over. A finished outcome is the record of what was done — it stays —
+    // and so does one that has booked a sale (`isHeldOpen`): it is the only
+    // link to that sale, and whoever takes the row next continues it.
+    const clearsOutcome =
+      next?.userId !== current?.userId &&
+      row.outcome?.status === 'in_progress' &&
+      !isHeldOpen(row.outcome);
+
     // Compare-and-swap on the assignment just read: two people assigning the
     // same row at once must not both believe they won, or the loser's
-    // assignee is notified about a row that is with someone else.
+    // assignee is notified about a row that is with someone else. The
+    // outcome is in the match too, so one the assignee started meanwhile is
+    // not handed to someone else half-done.
     const updated = await this.rowModel
       .findOneAndUpdate(
         {
@@ -190,17 +248,22 @@ export class ReconciliationAssignmentsService {
                 'assignment.assignedAt': current.assignedAt,
               }
             : { assignment: null }),
+          ...outcomeAsRead(row.outcome),
           // A re-upload that replaced the run meanwhile copied the row's
           // assignment as it stood; a write here now would be lost.
           ...LIVE_ROW,
         },
-        { $set: { assignment: next } },
+        {
+          $set: clearsOutcome
+            ? { assignment: next, outcome: null }
+            : { assignment: next },
+        },
         { new: true },
       )
       .lean<LeanRow>();
     if (!updated) {
       throw new ConflictException(
-        'Someone else changed who this row is with, or a newer upload of this report just replaced it. Reload it and try again.',
+        'Someone else changed who this row is with or what is recorded on it, or a newer upload of this report just replaced it. Reload it and try again.',
       );
     }
 
@@ -265,11 +328,14 @@ export class ReconciliationAssignmentsService {
    * and would still read "open, assigned to you" after the row was decided or
    * handed to someone else on the new run. No current copy, or one that is
    * no longer theirs, is a 404.
+   *
+   * Carries the Dash line as the New Lead and Sold forms want it (`prefill`),
+   * for the assignee who records it as sold.
    */
   async detail(
     access: AccessContext,
     rowId: string,
-  ): Promise<ReconciliationAssignedRow> {
+  ): Promise<ReconciliationAssignedRowDetail> {
     const agencyId = clientAgencyId(access);
     const asked = await this.rowModel
       .findOne({ _id: new Types.ObjectId(rowId), agencyId })
@@ -282,23 +348,34 @@ export class ReconciliationAssignmentsService {
     if (!row || !visible) {
       throw new NotFoundException('That row is not assigned to you.');
     }
-    const [view] = await this.assignedViews(agencyId, [row]);
-    return view;
+    return this.assignedDetail(agencyId, row);
   }
 
-  // -------------------------------------------------------------------------
-  // Helpers
-  // -------------------------------------------------------------------------
+  /**
+   * One assigned row as `GET assigned/:rowId` answers it — the view, the
+   * upload it came from, and the prefill. Shared with the outcome endpoint,
+   * which answers with the row it just wrote.
+   */
+  async assignedDetail(
+    agencyId: string,
+    row: LeanRow,
+  ): Promise<ReconciliationAssignedRowDetail> {
+    const [[view], carrierName] = await Promise.all([
+      this.assignedViews(agencyId, [row]),
+      this.runCarrierName(agencyId, row.runId),
+    ]);
+    if (!view) throw new NotFoundException('That row is not assigned to you.');
+    return { ...view, prefill: reconciliationPrefill(row.dash, carrierName) };
+  }
 
   /**
    * The row as the agency's current run of the same report has it: `row`
    * itself unless a re-upload replaced its run (perhaps more than once), then
    * the row with its key on the newest run, or `null` if that file dropped it.
+   *
+   * Public for the sale hook, which is handed whatever row id the page held.
    */
-  private async currentCopy(
-    agencyId: string,
-    row: LeanRow,
-  ): Promise<LeanRow | null> {
+  async currentCopy(agencyId: string, row: LeanRow): Promise<LeanRow | null> {
     let runId = row.runId;
     // Bounded: a chain is one link per re-upload of the same period.
     for (let hops = 0; hops < 100; hops += 1) {
@@ -314,11 +391,18 @@ export class ReconciliationAssignmentsService {
       .lean<LeanRow>();
   }
 
-  /** 400 unless `userId` is an active user of this agency who can work leads. */
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * The person, if they can be given a row — an active user of this agency
+   * who can work leads — with their effective permissions; else a 400.
+   */
   private async assertAssignable(
     agencyId: string,
     userId: string,
-  ): Promise<void> {
+  ): Promise<PermissionHolder> {
     const [holder] = await this.permissions.activeUsersHolding(
       agencyId,
       RECONCILIATION_ASSIGNEE_PERMISSION,
@@ -329,6 +413,22 @@ export class ReconciliationAssignmentsService {
         'A row can be assigned only to an active user of this agency who can work leads.',
       );
     }
+    return holder;
+  }
+
+  /** The catalog name of the carrier a run was uploaded for. */
+  private async runCarrierName(
+    agencyId: string,
+    runId: Types.ObjectId,
+  ): Promise<string | null> {
+    const run = await this.runModel
+      .findOne({ _id: runId, agencyId }, { carrierId: 1 })
+      .lean<Pick<LeanRun, 'carrierId'>>();
+    if (!run?.carrierId) return null;
+    const carrier = await this.carrierModel
+      .findById(run.carrierId, { name: 1 })
+      .lean<{ name?: string }>();
+    return carrier?.name ?? null;
   }
 
   private async assignedViews(
@@ -408,4 +508,21 @@ export class ReconciliationAssignmentsService {
       );
     }
   }
+}
+
+/** 400 unless these permissions can book a sale — a sale row's rule. */
+function assertCanRecordSale(permissions: readonly string[]): void {
+  if (!canRecordReconciliationSale(permissions)) {
+    throw new BadRequestException({
+      code: RECONCILIATION_ASSIGNEE_CANNOT_SELL,
+      message:
+        'A Dash sale can be given only to someone who can book a sale (create leads and record sales).',
+    });
+  }
+}
+
+function isSaleKind(kind: ReconciliationOutcomeKind): boolean {
+  return (RECONCILIATION_SALE_OUTCOME_KINDS as readonly string[]).includes(
+    kind,
+  );
 }

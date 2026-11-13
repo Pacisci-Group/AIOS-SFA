@@ -1,0 +1,50 @@
+meta {
+  name: Get Assigned Row (Done)
+  type: http
+  seq: 46
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the sale finished the outcome, linking what it booked", function () {
+    const outcome = res.getBody().outcome;
+    expect(outcome.kind).to.equal("sold");
+    expect(outcome.status).to.equal("done");
+    expect(outcome.step).to.equal(null);
+    expect(outcome.note).to.equal("Booked from the Dash line");
+    expect(outcome.leadId).to.equal(bru.getVar("reconLeadId"));
+    expect(outcome.dealId).to.equal(bru.getVar("reconDealId"));
+    expect(outcome.policyId).to.be.a("string");
+    expect(outcome.householdId).to.be.a("string");
+    expect(outcome.completedBy.id).to.equal(bru.getVar("currentUserId"));
+  });
+
+  test("and decided the row as sold, by the assignee", function () {
+    const review = res.getBody().review;
+    expect(review.status).to.equal("resolved");
+    expect(review.resolution).to.equal("sold_recorded");
+    expect(review.note).to.equal("Booked from the Dash line");
+    expect(review.reviewedBy.id).to.equal(bru.getVar("currentUserId"));
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned/:rowId — after the Dash sale
+
+  Same request as `Get Assigned Row (as Producer)`. A decided row still
+  opens for its assignee: the outcome is `done`, with the lead
+  (`Create Lead (Dash Row)`), the deal (`Create Sold Deal (Dash Row)`), its
+  household and the policy that is the Dash line; the row is resolved
+  `sold_recorded` with the outcome's note, by the assignee. It has left
+  their list (`List Assigned Rows`), and the owner's page shows it under
+  `outcome=done` / `sold`.
+}

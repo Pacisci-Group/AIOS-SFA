@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 import { toast } from "sonner";
 import {
+  RECONCILIATION_OUTCOME_FILTERS,
   RECONCILIATION_REVIEW_STATUS_LABELS,
   RECONCILIATION_TAB_LABELS,
   RECONCILIATION_TABS,
@@ -46,6 +47,7 @@ import {
   downloadReconciliationExport,
   getReconciliationRows,
   reconciliationRowsKey,
+  type ReconciliationOutcomeFilter,
   type ReconciliationRowView,
   type ReconciliationRunDetail,
   type ReconciliationTab,
@@ -58,6 +60,9 @@ import {
   headlineIssues,
   issueLabel,
   ISSUE_SHORT_LABELS,
+  OUTCOME_FILTER_LABELS,
+  outcomeBadgeVariant,
+  outcomeLabel,
   REVIEW_BADGE,
   rowCustomer,
   rowPolicyNumber,
@@ -100,6 +105,11 @@ export interface RowsFilter {
   producer: string;
   /** A user id, `unassigned` (or `me`), or `""` for anyone. */
   assignee: string;
+  /**
+   * The assignee's outcome (PAC-173 PR 4): under way, done, or a kind — or
+   * `""` for any, including none.
+   */
+  outcome: ReconciliationOutcomeFilter | "";
   q: string;
   page: number;
 }
@@ -122,6 +132,7 @@ export function RowsPanel({
     tab: filter.tab,
     producer: filter.producer || undefined,
     assignee: filter.assignee || undefined,
+    outcome: filter.outcome || undefined,
     q: filter.q || undefined,
     page: filter.page,
     pageSize: PAGE_SIZE,
@@ -251,6 +262,32 @@ export function RowsPanel({
                 ))}
               </SelectContent>
             </Select>
+            <Select
+              value={filter.outcome || ANYONE}
+              onValueChange={(value) =>
+                onFilterChange({
+                  outcome:
+                    value === ANYONE ? "" : (value as ReconciliationOutcomeFilter),
+                  page: 1,
+                })
+              }
+            >
+              <SelectTrigger className="w-full bg-card sm:w-48" aria-label="Outcome">
+                <SelectValue>
+                  {filter.outcome
+                    ? `Outcome: ${OUTCOME_FILTER_LABELS[filter.outcome]}`
+                    : "Any outcome"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANYONE}>Any outcome</SelectItem>
+                {RECONCILIATION_OUTCOME_FILTERS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {OUTCOME_FILTER_LABELS[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {filter.producer && (
               <Badge variant="secondary" size="lg" className="gap-1">
                 {producerName ?? "Producer"}
@@ -295,7 +332,7 @@ export function RowsPanel({
       isError={rows.isError}
       isEmpty={(data?.items.length ?? 0) === 0}
       emptyMessage={
-        filter.q || filter.producer || filter.assignee
+        filter.q || filter.producer || filter.assignee || filter.outcome
           ? "No rows match these filters."
           : "Nothing here — this tab is clear."
       }
@@ -318,6 +355,7 @@ export function RowsPanel({
             )}
             <TableHead>Flags</TableHead>
             <TableHead>Assigned</TableHead>
+            <TableHead>Outcome</TableHead>
             <TableHead className="pr-5">Review</TableHead>
           </TableRow>
         </TableHeader>
@@ -380,6 +418,13 @@ export function RowsPanel({
                 {row.assignment ? (
                   <Badge variant="secondary" size="sm">
                     {row.assignment.user.name}
+                  </Badge>
+                ) : null}
+              </TableCell>
+              <TableCell>
+                {row.outcome ? (
+                  <Badge variant={outcomeBadgeVariant(row.outcome)} size="sm">
+                    {outcomeLabel(row.outcome)}
                   </Badge>
                 ) : null}
               </TableCell>

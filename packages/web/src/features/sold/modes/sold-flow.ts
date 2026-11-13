@@ -8,6 +8,7 @@ import { carriersKey, getCarriers } from "@/lib/carriers-api";
 import type { UploadScope } from "@/lib/sold-deals-api";
 import type {
   SoldDealFormValues,
+  SoldPolicyFormValues,
   WizardVariant,
 } from "../components/sold-deal-schema";
 
@@ -45,6 +46,10 @@ export interface FlowReady {
   uploadScope: UploadScope;
   /** Shown above the wizard — the rewrite's "nothing is cancelled yet" note. */
   notice?: string;
+  /** The wizard's starting sold date, when the flow knows better than today. */
+  initialSoldDate?: string;
+  /** The first policy's starting values — see `SoldDealWizard.initialDraft`. */
+  initialDraft?: SoldPolicyFormValues;
 }
 
 /**

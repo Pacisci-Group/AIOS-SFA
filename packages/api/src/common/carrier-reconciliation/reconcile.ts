@@ -474,6 +474,18 @@ const REVIEW_TABS: ReadonlySet<ReconciliationTab> = new Set([
   'producer_mismatch',
 ]);
 
+/**
+ * Whether a row's own tabs ask for a decision — {@link deriveRow}'s
+ * `needsReview`, for a stored row whose flag an outcome held open has kept up
+ * (PAC-173 review). `besides` leaves out the tab an outcome just answered.
+ */
+export function asksForDecision(
+  tabs: readonly ReconciliationTab[],
+  besides?: ReconciliationTab,
+): boolean {
+  return tabs.some((tab) => tab !== besides && REVIEW_TABS.has(tab));
+}
+
 export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   const issues = new Set<ReconciliationIssue>(base.matchIssues);
   const tabs = new Set<ReconciliationTab>();

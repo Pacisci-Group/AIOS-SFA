@@ -126,6 +126,7 @@ docs {
   | leadSourceId            | string | yes      | a row id from `GET /lead-sources`; an archived or foreign id is a 400 |
   | householdId             | string | no       | ObjectId (24 hex); pins the lead to an existing household — see below |
   | replacementIntent       | object | no       | `{ policyId, reason }` — create this lead to replace a policy. See below |
+  | reconciliationRowId     | string | no       | ObjectId (24 hex) of a Dash Reconciliation row assigned to the caller — this lead records it. See below |
   | quoteControlNumber      | string | no       | dedupe signal 2                              |
   | submissionToken         | string | no       | 8–200 chars; per-form-session idempotency key |
 
@@ -225,6 +226,28 @@ docs {
   - Absent from `POST /public/leads/:token`, like `householdId` and for a
     stronger version of the same reason: an outside submitter naming a policy
     would be queueing a cancellation on somebody's coverage.
+
+  **Recording a Dash row (`reconciliationRowId`, PAC-173 PR 4).** An assignee
+  who records a Dash Reconciliation row as Sold or a Cancel rewrite enters it
+  as an ordinary sale, and this is step one: the New Lead form, prefilled
+  from the row (`GET /carrier-reconciliation/assigned/:rowId` → `prefill`).
+
+  - ⚠ **Address dedupe (signal 3) is skipped**, as for a replacement: the
+    assignee always gets a fresh lead of their own. An open lead at the
+    address could be a colleague's (the Sold form would 404 on it) or dated
+    after the Dash sale, which the sold-date rule then refuses. The token and
+    mailer signals still apply.
+  - After the lead is created — and on a token replay — it is stamped on the
+    row's outcome (`outcome.leadId`), so resuming the row goes on to the Sold
+    form with this lead instead of opening another. Only while the row is the
+    caller's, with a Sold or Cancel rewrite at "record the sale" and no lead
+    yet; a cancel rewrite's replacement lead is never stamped.
+  - **Best-effort**: the response is the same `{ id }` either way, and
+    nothing about the row can fail this request.
+  - Authenticated route only — `POST /public/leads/:token` does not accept it.
+
+  This request does not send it; `Dash Reconciliation/Create Lead (Dash Row)`
+  does.
 
   **Policies of interest (PAC-56 #2).** What the submitter wants quoted — the
   Quote Recap's policy rows **minus premium**, since no quote exists yet. Same

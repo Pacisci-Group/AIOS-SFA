@@ -1,7 +1,10 @@
 import {
   carriedAssignment,
+  carriedFields,
+  carriedOutcome,
   carriedReview,
   type PreviousRowReview,
+  type RowOutcome,
 } from './carry-forward';
 
 const previous = (overrides: Partial<PreviousRowReview> = {}) =>
@@ -18,6 +21,7 @@ const previous = (overrides: Partial<PreviousRowReview> = {}) =>
         reviewedById: 'u-owner',
         reviewedAt: new Date('2026-10-02T12:00:00Z'),
         assignment: null,
+        outcome: null,
         ...overrides,
       },
     ],
@@ -106,5 +110,177 @@ describe('carriedAssignment', () => {
     expect(
       carriedAssignment({ ...row, issues: [...row.issues] }, previous()),
     ).toBeNull();
+  });
+});
+
+describe('carriedOutcome', () => {
+  const assignment = {
+    userId: 'u-pat',
+    assignedById: 'u-owner',
+    assignedAt: new Date('2026-10-03T09:00:00Z'),
+    note: null,
+  };
+  const outcome = (overrides: Partial<RowOutcome> = {}): RowOutcome => ({
+    kind: 'sold',
+    status: 'in_progress',
+    step: 'record_sale',
+    note: null,
+    leadId: 'l1',
+    dealId: null,
+    policyId: null,
+    householdId: null,
+    replacementPolicyId: null,
+    chargebackId: null,
+    startedById: 'u-pat',
+    startedAt: new Date('2026-10-04T09:00:00Z'),
+    completedById: null,
+    completedAt: null,
+    ...overrides,
+  });
+
+  it('keeps an unfinished outcome with its assignee, so they resume where they were', () => {
+    const inProgress = outcome();
+    expect(
+      carriedOutcome(
+        { ...row, issues: [...row.issues] },
+        previous({
+          status: 'open',
+          resolution: null,
+          assignment,
+          outcome: inProgress,
+        }),
+      ),
+    ).toEqual(inProgress);
+  });
+
+  it('carries a finished outcome with the decision it resolved the row with', () => {
+    const done = outcome({
+      kind: 'other',
+      status: 'done',
+      step: null,
+      note: 'Client cancelled before issue',
+      leadId: null,
+      completedById: 'u-pat',
+      completedAt: new Date('2026-10-04T10:00:00Z'),
+    });
+    const before = previous({
+      resolution: 'other_recorded',
+      reviewedById: 'u-pat',
+      assignment,
+      outcome: done,
+    });
+    const same = { ...row, issues: [...row.issues] };
+
+    expect(carriedOutcome(same, before)).toEqual(done);
+    // An outcome resolution is not retired: the decision carries alongside.
+    expect(carriedReview(same, before)?.resolution).toBe('other_recorded');
+  });
+
+  it('starts a row whose classification changed with no outcome', () => {
+    expect(
+      carriedOutcome(
+        { ...row, match: 'matched', issues: [...row.issues] },
+        previous({
+          status: 'open',
+          resolution: null,
+          assignment,
+          outcome: outcome(),
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      carriedOutcome(
+        { ...row, issues: ['no_bind_id'] },
+        previous({
+          status: 'open',
+          resolution: null,
+          assignment,
+          outcome: outcome(),
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('is null when nobody recorded one', () => {
+    expect(
+      carriedOutcome({ ...row, issues: [...row.issues] }, previous()),
+    ).toBeNull();
+  });
+});
+
+describe('carriedFields — an outcome held open (PAC-173 review)', () => {
+  const everyone = { canTakeRows: () => true };
+  const heldRewrite: RowOutcome = {
+    kind: 'cancel_rewrite',
+    status: 'in_progress',
+    step: 'write_replacement',
+    note: null,
+    leadId: 'lead-1',
+    dealId: 'deal-1',
+    policyId: 'policy-1',
+    householdId: 'hh-1',
+    replacementPolicyId: null,
+    chargebackId: null,
+    startedById: 'u-producer',
+    startedAt: new Date('2026-10-03T12:00:00Z'),
+    completedById: null,
+    completedAt: null,
+  };
+  const assignment = {
+    userId: 'u-producer',
+    assignedById: 'u-owner',
+    assignedAt: new Date('2026-10-02T12:00:00Z'),
+    note: null,
+  };
+  const open = {
+    status: 'open' as const,
+    resolution: null,
+    reviewedById: null,
+    reviewedAt: null,
+  };
+  // Booking the Dash policy turned the row `matched`, and it asks nothing.
+  const nowMatched = {
+    rowKey: row.rowKey,
+    match: 'matched' as const,
+    issues: [],
+    needsReview: false,
+  };
+
+  it('carries to the row that now matches the sale it booked, with its assignee, and keeps it asking', () => {
+    const fields = carriedFields(
+      nowMatched,
+      previous({ ...open, assignment, outcome: heldRewrite }),
+      everyone,
+    );
+    expect(fields.outcome).toEqual(heldRewrite);
+    expect(fields.assignment).toEqual(assignment);
+    expect(fields.needsReview).toBe(true);
+    // The decision itself does not carry: the row says something else now.
+    expect(fields.review).toBeUndefined();
+  });
+
+  it('still carries the outcome when its assignee can no longer take rows', () => {
+    const fields = carriedFields(
+      nowMatched,
+      previous({ ...open, assignment, outcome: heldRewrite }),
+      { canTakeRows: () => false },
+    );
+    expect(fields.outcome).toEqual(heldRewrite);
+    expect(fields.assignment).toBeUndefined();
+  });
+
+  it('does not carry an unbooked outcome to a row that changed', () => {
+    const unbooked: RowOutcome = {
+      ...heldRewrite,
+      step: 'record_sale',
+      dealId: null,
+      policyId: null,
+    };
+    const fields = carriedFields(
+      nowMatched,
+      previous({ ...open, assignment, outcome: unbooked }),
+      everyone,
+    );
+    expect(fields).toEqual({});
   });
 });

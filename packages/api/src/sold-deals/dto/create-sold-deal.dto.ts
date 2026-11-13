@@ -383,6 +383,15 @@ export const createSoldDealSchema = z
       .min(1, 'Add at least one policy')
       .max(10, 'At most 10 policies per submission'),
     submissionToken: z.string().trim().min(8).max(200).optional(),
+    /**
+     * The Dash Reconciliation row this sale records (PAC-173 PR 4): the
+     * assignee's Sold or Cancel rewrite outcome. The sale books exactly as it
+     * would without it; the row is moved on afterwards, best-effort, and only
+     * if it is the caller's with that step under way.
+     */
+    reconciliationRowId: objectId
+      .transform((value) => value.toLowerCase())
+      .optional(),
   })
   .superRefine(refinePolicyBatch);
 

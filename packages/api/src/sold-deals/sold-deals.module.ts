@@ -5,6 +5,7 @@ import {
   ActivitySchema,
 } from '../activities/schemas/activity.schema';
 import { AuditGenerationModule } from '../audit-generation/audit-generation.module';
+import { CarrierReconciliationModule } from '../carrier-reconciliation/carrier-reconciliation.module';
 import { Contact, ContactSchema } from '../contacts/schemas/contact.schema';
 import { CrmRotationsModule } from '../crm-rotations/crm-rotations.module';
 import { CrmModule } from '../crm/crm.module';
@@ -80,6 +81,13 @@ import { Lead, LeadSchema } from '../leads/schemas/lead.schema';
      * without a cycle. See its own note.
      */
     PoliciesModule,
+    /*
+     * `ReconciliationOutcomesService.recordSale` — a sale entered for a Dash
+     * Reconciliation row moves the assignee's outcome on (PAC-173 PR 4).
+     * Post-commit and best-effort, like the hand-off above. Acyclic: that
+     * module imports only `PermissionsModule` and its own schemas.
+     */
+    CarrierReconciliationModule,
   ],
   controllers: [SoldDealsController],
   providers: [SoldDealsService],

@@ -360,6 +360,12 @@ export interface CreateSoldDealInput {
    * and, critically, does not generate a second set of audit items.
    */
   submissionToken?: string;
+  /**
+   * The Dash Reconciliation row this sale records (PAC-173): the assignee's
+   * Sold or Cancel rewrite outcome. The sale books either way; the row is
+   * completed after it, best-effort.
+   */
+  reconciliationRowId?: string;
 }
 
 /**

@@ -1,0 +1,64 @@
+meta {
+  name: Record Outcome (Other)
+  type: http
+  seq: 39
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconPremiumRowId}}/outcome
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "kind": "other",
+    "note": "  The app is right; Dash leaves out the policy fee  "
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("done at once, by the assignee", function () {
+    const outcome = res.getBody().outcome;
+    expect(outcome.kind).to.equal("other");
+    expect(outcome.status).to.equal("done");
+    expect(outcome.step).to.equal(null);
+    expect(outcome.note).to.equal("The app is right; Dash leaves out the policy fee");
+    expect(outcome.startedBy.id).to.equal(bru.getVar("currentUserId"));
+    expect(outcome.completedBy.id).to.equal(bru.getVar("currentUserId"));
+  });
+
+  test("and the row decided in the same write", function () {
+    const review = res.getBody().review;
+    expect(review.status).to.equal("resolved");
+    expect(review.resolution).to.equal("other_recorded");
+    expect(review.note).to.equal("The app is right; Dash leaves out the policy fee");
+    expect(review.reviewedBy.id).to.equal(bru.getVar("currentUserId"));
+  });
+}
+
+docs {
+  # PATCH …/assigned/:rowId/outcome `{ "kind": "other" }` — anything else, in a note
+
+  Other is what any row can take, and the only thing a row outside "Missing
+  from app" can. It **finishes the row at once**: the outcome is `done` and
+  the row is decided `other_recorded` with the note, by the assignee, in the
+  same write — so it leaves their list, and the owner's tabs read it as
+  decided. The note is required (1–2000 characters, trimmed).
+
+  Sending Other again on the finished row answers `200` with the row
+  unchanged (a double click). The owner reopening it (`Review Row`) clears
+  the outcome; `Review Row (Reopen Premium Differs)` does exactly that at the
+  start of the next run.
+
+  The endpoint, its rules and the outcome's shape are documented on
+  `Record Outcome (Sold)`.
+}

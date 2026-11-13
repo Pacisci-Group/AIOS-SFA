@@ -82,6 +82,15 @@ export interface CreateLeadPayload extends LeadIntakePayload {
     policyId: string;
     reason: PolicyReplacementReason;
   };
+  /**
+   * The Dash Reconciliation row this lead records a sale for (PAC-173): the
+   * caller's Sold or Cancel rewrite outcome, at its first step. The lead is
+   * always a fresh one of the caller's own — the address dedupe is skipped, as
+   * for a replacement — and the row is linked to it after it is created,
+   * best-effort, so resuming the outcome reuses this lead rather than making a
+   * second.
+   */
+  reconciliationRowId?: string;
 }
 
 /**
