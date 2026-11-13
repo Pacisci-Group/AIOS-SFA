@@ -242,6 +242,8 @@ export default function AssignedRowsPage() {
 
       <RowDetailSheet
         runId={selected?.runId ?? ""}
+        // A notification can open a row whose month the owner closed since.
+        runClosed={!!selected?.run.closedAt}
         row={selected}
         onClose={() => setValues({ row: "" })}
         // Nothing to keep here: the drawer reads the row from the queries a

@@ -98,6 +98,20 @@ export class ReconciliationRun {
   @Prop({ type: String, default: null })
   currentKey: string | null;
 
+  /**
+   * When the owner closed this month, and who (PAC-173 review). A closed run
+   * is still the period's current run — the owner reads and decides its rows
+   * as before — but it is not one of `currentRunIds`, so its rows are on no
+   * one's list and none can be handed to anyone. Without it every month ever
+   * uploaded stayed on people's lists for good. A re-upload of the month
+   * carries both fields to the run that replaces it; reopening clears them.
+   */
+  @Prop({ type: Date, default: null })
+  closedAt: Date | null;
+
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
+  closedById: Types.ObjectId | null;
+
   @Prop({ type: Date, default: null })
   startedAt: Date | null;
 
@@ -137,7 +151,11 @@ ReconciliationRunSchema.index({
   'window.to': 1,
   createdAt: -1,
 });
-/** The agency's current runs (`currentRunIds`): every assignee list asks. */
+/**
+ * The agency's current runs (`currentRunIds`): every assignee list asks. Its
+ * `closedAt: null` is checked on the few runs this prefix finds — one per
+ * month uploaded — so it needs no key of its own.
+ */
 ReconciliationRunSchema.index({ agencyId: 1, status: 1, supersededByRunId: 1 });
 /** One current run per report period. Partial: only the current one holds a key. */
 ReconciliationRunSchema.index(

@@ -26,6 +26,8 @@ import {
 import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
 import { currentUserObjectId } from '../common/context/request-context';
 import { TransactionRunner } from '../common/mongo/transaction.runner';
+import { notificationRequested } from '../inngest/events';
+import { InngestService } from '../inngest/inngest.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { RoleAssignmentsService } from '../permissions/role-assignments.service';
 import { CrmRotation } from '../crm-rotations/schemas/crm-rotation.schema';
@@ -104,6 +106,11 @@ interface Parties {
   /** For the ticket timeline note's `author`. */
   actorName: string;
   /**
+   * Who is running the transfer — the caller, never read back from the
+   * request context, so a moved Dash row always names who handed it over.
+   */
+  actorId: string;
+  /**
    * The successor's effective permissions if they can be handed Dash rows
    * (`RECONCILIATION_ASSIGNEE_PERMISSION`), else `null`. Resolved once, with
    * the parties, so a transaction retry does not resolve it again.
@@ -148,10 +155,12 @@ type Plan = WorkTransferTouched;
  *   the successor's to chase (product owner, 2026-10-05). Resolved items keep
  *   the name — `resolvedById` records who actually cleared them.
  * - `reconciliationRows.assignment` on Dash rows still waiting on a decision,
- *   on current runs (PAC-173). The hand-over stamps `assignedById` /
- *   `assignedAt`; a decided row keeps the name of whoever worked it. A row
- *   the successor could not be given through `assign()` — they cannot work
- *   leads — goes back to the owner unassigned instead (PAC-173 review).
+ *   on current runs (PAC-173) — not a closed month's, which is on nobody's
+ *   list. The hand-over stamps `assignedById` (whoever ran the transfer) and
+ *   `assignedAt`, and the successor gets one `reconciliation.rows_transferred`
+ *   push for the lot; a decided row keeps the name of whoever worked it. A
+ *   row the successor could not be given through `assign()` — they cannot
+ *   work leads — goes back to the owner unassigned instead (PAC-173 review).
  *
  * **Seeds** — not tasks themselves, but the fields the system reads when it
  * mints the *next* task. Moving the tickets without these undoes itself: the
@@ -214,6 +223,7 @@ export class WorkTransferService {
     private readonly transactions: TransactionRunner,
     private readonly roleAssignments: RoleAssignmentsService,
     private readonly permissions: PermissionsService,
+    private readonly inngest: InngestService,
   ) {}
 
   /**
@@ -301,25 +311,33 @@ export class WorkTransferService {
     // `withTransaction` may re-run this callback on a transient error, so the
     // plan is resolved inside it: a retry must see the state it is rewriting,
     // not a list captured before the first attempt.
-    const plan = await this.transactions.run(async (session) => {
-      const planned = await this.plan(agencyId, parties, session);
-      await this.apply(parties, planned, session);
-      await this.transferModel.create(
-        [
-          {
-            agencyId: new Types.ObjectId(agencyId),
-            fromUserId: from._id,
-            toUserId: to._id,
-            actorUserId: currentUserObjectId(),
-            touched: planned,
-          },
-        ],
-        { session },
-      );
-      return planned;
-    });
+    const { plan, transferId } = await this.transactions.run(
+      async (session) => {
+        const planned = await this.plan(agencyId, parties, session);
+        await this.apply(parties, planned, session);
+        const [record] = await this.transferModel.create(
+          [
+            {
+              agencyId: new Types.ObjectId(agencyId),
+              fromUserId: from._id,
+              toUserId: to._id,
+              actorUserId: currentUserObjectId(),
+              touched: planned,
+            },
+          ],
+          { session },
+        );
+        return { plan: planned, transferId: record._id };
+      },
+    );
 
     await this.recordLeadActivities(plan.leads, fromName, toName);
+    await this.notifyRowsTransferred(
+      agencyId,
+      parties,
+      plan.reconciliationRows.length,
+      transferId,
+    );
 
     const counts = this.countsOf(plan);
     this.logger.log(
@@ -391,6 +409,7 @@ export class WorkTransferService {
       fromName: displayName(from),
       toName: displayName(to),
       actorName: actor ? displayName(actor) : 'System',
+      actorId: access.userId,
       successorRowPermissions: rowHolder?.permissions ?? null,
     };
   }
@@ -635,7 +654,7 @@ export class WorkTransferService {
    * middleware, which `bulkWrite` skips.
    */
   private async apply(
-    { from, to, fromName, toName, actorName }: Parties,
+    { from, to, fromName, toName, actorName, actorId }: Parties,
     plan: Plan,
     session: ClientSession | null,
   ): Promise<void> {
@@ -773,8 +792,7 @@ export class WorkTransferService {
           {
             $set: {
               'assignment.userId': toId.toString(),
-              'assignment.assignedById':
-                currentUserObjectId()?.toString() ?? null,
+              'assignment.assignedById': actorId,
               'assignment.assignedAt': now,
             },
           },
@@ -792,6 +810,40 @@ export class WorkTransferService {
           opts,
         ),
     ]);
+  }
+
+  /**
+   * Tell the colleague they were handed Dash rows (PAC-173 review): what the
+   * owner's `assign()` sends per row, as **one** push for the transfer — a
+   * departing producer can hold dozens. Keyed on the transfer record, so a
+   * retried send is the same notification.
+   *
+   * Best-effort and post-commit, like {@link recordLeadActivities}: the rows
+   * have moved, and the event outbox replays a failed send. None when nothing
+   * moved, or when whoever ran the transfer took the rows themselves.
+   */
+  private async notifyRowsTransferred(
+    agencyId: string,
+    { to, fromName, actorName, actorId }: Parties,
+    count: number,
+    transferId: Types.ObjectId,
+  ): Promise<void> {
+    if (!count || to._id.toString() === actorId) return;
+    try {
+      await this.inngest.send(notificationRequested, {
+        type: 'reconciliation.rows_transferred',
+        recipientIds: [to._id.toString()],
+        agencyId,
+        actorId: Types.ObjectId.isValid(actorId) ? actorId : null,
+        entity: { kind: 'workTransfer', id: transferId.toString() },
+        data: { count, fromName, assignerName: actorName },
+        dedupeKey: `reconciliation.rows_transferred:${transferId.toString()}`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Could not request the Dash rows notification for transfer ${transferId.toString()}: ${String(err)}`,
+      );
+    }
   }
 
   /**

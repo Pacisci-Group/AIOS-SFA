@@ -1,0 +1,46 @@
+meta {
+  name: Assign Row (Closed Month)
+  type: http
+  seq: 38
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": "{{currentUserId}}"
+  }
+}
+
+tests {
+  test("returns 409 Conflict", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+
+  test("says the month is closed", function () {
+    expect(res.getBody().message).to.match(/closed/i);
+  });
+}
+
+docs {
+  # PATCH …/assignment in a closed month — refused
+
+  After `Close Run`, no row of the month can be handed to anyone: it would
+  sit on nobody's list. Reopen the month first. Taking a row back
+  (`{ "userId": null }`) still works on a closed month.
+
+  ## Errors
+  - `409` — "This month is closed. Reopen it to hand its rows to someone."
+}

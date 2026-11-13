@@ -14,10 +14,12 @@ type AnyModel = Model<any>;
  */
 
 /**
- * The runs whose rows are current: finished, and not replaced by a re-upload
- * of the same report. A superseded run's rows are history — their
- * assignments still name whoever had them then — so nothing that asks "what
- * is this person working on" reads them.
+ * The runs whose rows are being worked: finished, not replaced by a re-upload
+ * of the same report, and not closed by the owner. A superseded run's rows are
+ * history — their assignments still name whoever had them then — so nothing
+ * that asks "what is this person working on" reads them. Nor a closed month's
+ * (PAC-173 review): every month stays its period's current run, so without
+ * closing, each upload added a month to everyone's list for good.
  */
 export async function currentRunIds(
   runModel: AnyModel,
@@ -25,7 +27,10 @@ export async function currentRunIds(
   session: ClientSession | null = null,
 ): Promise<Types.ObjectId[]> {
   const runs = await runModel
-    .find({ agencyId, status: 'ready', supersededByRunId: null }, { _id: 1 })
+    .find(
+      { agencyId, status: 'ready', supersededByRunId: null, closedAt: null },
+      { _id: 1 },
+    )
     .session(session)
     .lean<{ _id: Types.ObjectId }[]>();
   return runs.map((run) => run._id);

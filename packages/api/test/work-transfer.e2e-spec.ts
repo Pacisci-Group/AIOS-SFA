@@ -27,12 +27,14 @@ import {
   toYmd,
   zonedDate,
 } from '../src/performance/performance.range';
+import { InngestService } from '../src/inngest/inngest.service';
 import { ShareLink } from '../src/share-links/schemas/share-link.schema';
 import { User } from '../src/users/schemas/user.schema';
 import { WorkTransfer } from '../src/users/schemas/work-transfer.schema';
 import { WorkTransferService } from '../src/users/work-transfer.service';
 import { authHeader, login } from './helpers/auth.helper';
 import {
+  CapturedInngestService,
   closeTestApp,
   createTestApp,
   dropTestDatabase,
@@ -553,6 +555,11 @@ describe('Work transfer (e2e)', () => {
           'a row that needs no decision',
           async () => seedRow(await seedRun(), { needsReview: false }),
         ],
+        // On nobody's list (PAC-173 review); reopening the month deals with it.
+        [
+          'a row in a month the owner closed',
+          async () => seedRow(await seedRun({ closedAt: new Date() })),
+        ],
       ])('leaves %s with the departing person', async (_label, seed) => {
         const id = await seed();
 
@@ -564,6 +571,52 @@ describe('Work transfer (e2e)', () => {
           userId: fromId,
           assignedById: firstAssignerId,
           assignedAt: handedOverAt,
+        });
+      });
+
+      /** PAC-173 review: the transfer used to move rows without a word. */
+      describe('telling the successor', () => {
+        // `createTestApp` swaps the real service for this capturing stub.
+        const captured = () =>
+          app.get<InngestService, CapturedInngestService>(InngestService);
+        const pushes = (type: string) =>
+          captured().sent.filter((event) => event.data.type === type);
+        beforeEach(() => {
+          captured().sent.length = 0;
+        });
+
+        it('sends one push for the lot, saying how many and from whom', async () => {
+          await seedRow(await seedRun());
+          await seedRow(await seedRun());
+
+          await transfer().expect(201);
+
+          const record = await transfers
+            .findOne({ fromUserId: oid(fromId) })
+            .lean();
+          const sent = pushes('reconciliation.rows_transferred');
+          expect(sent).toHaveLength(1);
+          expect(sent[0].data).toMatchObject({
+            recipientIds: [toId],
+            agencyId: ctx.agencyId,
+            actorId: ownerId,
+            entity: { kind: 'workTransfer', id: String(record!._id) },
+            dedupeKey: `reconciliation.rows_transferred:${String(record!._id)}`,
+          });
+          const data = sent[0].data.data as Record<string, unknown>;
+          expect(data.count).toBe(2);
+          expect(typeof data.fromName).toBe('string');
+          expect(typeof data.assignerName).toBe('string');
+          // Never one per row: a departing producer can hold dozens.
+          expect(pushes('reconciliation.row_assigned')).toHaveLength(0);
+        });
+
+        it('sends nothing when no Dash row moved', async () => {
+          await seedRow(await seedRun(), { review: decided() });
+
+          const res = await transfer().expect(201);
+          expect(res.body).toMatchObject({ reconciliationRows: 0 });
+          expect(pushes('reconciliation.rows_transferred')).toHaveLength(0);
         });
       });
 

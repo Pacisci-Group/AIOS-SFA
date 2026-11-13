@@ -109,7 +109,8 @@ export class ReconciliationAssignmentsService {
   /**
    * Assign a row to someone (`userId`), change the note on it, or take it
    * back (`null`). Only a row still waiting on a decision, on a run nobody
-   * re-uploaded, can be handed to anyone; taking one back always works.
+   * re-uploaded, in a month that is not closed, can be handed to anyone;
+   * taking one back always works.
    *
    * The new assignee is notified (in-app + push) after the write, best-effort
    * — the event outbox replays a failed send — and never for a note change,
@@ -145,6 +146,13 @@ export class ReconciliationAssignmentsService {
       if (run.status !== 'ready' || isStale(run)) {
         throw new ConflictException(
           'Only the rows of a finished run can be assigned.',
+        );
+      }
+      // A closed month's rows are on nobody's list, so a row handed over
+      // there would never reach its assignee. Taking one back still works.
+      if (run.closedAt) {
+        throw new ConflictException(
+          'This month is closed. Reopen it to hand its rows to someone.',
         );
       }
       if (!row.needsReview || row.review.status !== 'open') {
@@ -335,9 +343,11 @@ export class ReconciliationAssignmentsService {
             agencyId,
             _id: { $in: [...new Set(rows.map((row) => row.runId))] },
           },
-          { file: 1, fileMeta: 1, window: 1 },
+          { file: 1, fileMeta: 1, window: 1, closedAt: 1 },
         )
-        .lean<Pick<LeanRun, '_id' | 'file' | 'fileMeta' | 'window'>[]>(),
+        .lean<
+          Pick<LeanRun, '_id' | 'file' | 'fileMeta' | 'window' | 'closedAt'>[]
+        >(),
     ]);
     const runById = new Map(runs.map((run) => [String(run._id), run]));
     return views.flatMap((view) => {
@@ -352,6 +362,9 @@ export class ReconciliationAssignmentsService {
             filename: run.file.filename,
             startDate: run.window?.from ?? run.fileMeta.startDate,
             endDate: run.window?.to ?? run.fileMeta.endDate,
+            closedAt: run.closedAt
+              ? new Date(run.closedAt).toISOString()
+              : null,
           },
         },
       ];

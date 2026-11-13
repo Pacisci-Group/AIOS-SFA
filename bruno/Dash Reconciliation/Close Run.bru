@@ -1,0 +1,62 @@
+meta {
+  name: Close Run
+  type: http
+  seq: 37
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/close
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 201", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the run is closed, and says by whom", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("reconRunId"));
+    expect(body.closedAt).to.be.a("string");
+    expect(body.closedBy).to.be.an("object");
+    expect(body.closedBy.name).to.be.a("string");
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs/:id/close — close a month
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+
+  Takes the month's rows off every assignee's list ("Assigned to me", the
+  Producer Dashboard's Dash follow-ups), and off work transfer and release,
+  until it is reopened. While closed, none of its rows can be handed to
+  anyone (`PATCH …/assignment` answers 409; taking a row back still works).
+
+  Nothing is decided or deleted: the owner still reads, decides and re-checks
+  the rows here, and assignments are kept, so `Reopen Run` puts each open row
+  back with whoever had it. A re-upload of a closed month stays closed.
+
+  Without closing, every month ever uploaded stays its period's current run,
+  so its open rows stayed on people's lists for good (PAC-173 review).
+
+  Idempotent: closing a closed month answers the run unchanged.
+
+  ## Response `201`
+
+  The run (`ReconciliationRunDetail`) with `closedAt` (ISO instant) and
+  `closedBy` (`{ id, name }`). Both are `null` on an open run.
+
+  ## Errors
+  - `400` — `:id` is not an ObjectId
+  - `403` — no `carrier_reconciliation:write`
+  - `404` — no such run in the agency
+  - `409` — a re-upload replaced the run (close the month on the new one), or
+    the run did not finish
+}

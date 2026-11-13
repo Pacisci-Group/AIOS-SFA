@@ -61,6 +61,10 @@ docs {
   `assigned` counts the rows still waiting on a decision that the owner has
   handed to a Producer or CSR.
 
+  `closedAt` / `closedBy` are set while the owner has closed the month
+  (`Close Run`): its rows are then on nobody's list and cannot be handed to
+  anyone. Both `null` on an open run.
+
   ## Errors
   - `400` — `:id` is not an ObjectId
   - `404` — no such run in the agency

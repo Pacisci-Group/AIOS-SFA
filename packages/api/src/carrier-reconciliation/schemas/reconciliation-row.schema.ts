@@ -42,6 +42,35 @@ export interface StoredReview {
 }
 
 /**
+ * Who a row was handed to ({@link RowAssignment}), as a real sub-schema
+ * rather than `type: Object` (PAC-173 review): writes are cast and checked
+ * against these four fields, and anything else is dropped.
+ *
+ * The ids stay **strings**, like every id on these rows — the `assignment.userId`
+ * index and every query compare them as strings, and rows stored before this
+ * schema already have exactly this shape, so nothing needs migrating.
+ */
+@Schema({ _id: false })
+export class StoredAssignment implements RowAssignment {
+  /** Lower-case hex, as `openAssignmentsFilter` queries it. */
+  @Prop({ type: String, required: true, lowercase: true, trim: true })
+  userId: string;
+
+  /** Who handed it over — the owner, or whoever ran a work transfer. */
+  @Prop({ type: String, default: null, lowercase: true, trim: true })
+  assignedById: string | null;
+
+  @Prop({ type: Date, required: true })
+  assignedAt: Date;
+
+  @Prop({ type: String, default: null })
+  note: string | null;
+}
+
+export const StoredAssignmentSchema =
+  SchemaFactory.createForClass(StoredAssignment);
+
+/**
  * One line of a run: a Dash line, an app policy Dash does not show, or both.
  *
  * Two layers, matching the engine (`common/carrier-reconciliation/reconcile.ts`):
@@ -121,7 +150,7 @@ export class ReconciliationRow {
    * `review` whole — can never drop it. `userId` is a string, like every id in
    * these snapshots; queries must compare it as one.
    */
-  @Prop({ type: Object, default: null })
+  @Prop({ type: StoredAssignmentSchema, default: null })
   assignment: RowAssignment | null;
 
   /** Lower-cased policy numbers and names, for the search box. */
