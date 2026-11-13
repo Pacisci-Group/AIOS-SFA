@@ -16,8 +16,8 @@ import {
 const WINDOW = { from: '2026-09-01', to: '2026-09-30' };
 
 const codes = new ProducerCodeIndex([
-  { userId: 'u-pat', name: 'Pat', bindId: 'SOKAAAA1', subProducerCode: '034' },
-  { userId: 'u-sam', name: 'Sam', bindId: 'SOKSAM02', subProducerCode: '025' },
+  { userId: 'u-pat', name: 'Pat', bindId: 'SOKAAAA1' },
+  { userId: 'u-sam', name: 'Sam', bindId: 'SOKSAM02' },
 ]);
 
 function run(
@@ -105,7 +105,6 @@ describe('matchRows + deriveRow', () => {
       needsReview: true,
       producerKey: 'bind:SOK35W06',
       credit: {
-        code: null,
         name: 'BRIAN CARTER',
         userId: null,
         via: 'bind_id',
@@ -260,8 +259,17 @@ describe('matchRows + deriveRow', () => {
     expect(new Set(rows.map((row) => row.rowKey)).size).toBe(2);
   });
 
-  it('flags a producer-credit mismatch', () => {
-    const [row] = run([dashRow({ subProducerCode: '025' })], [appPolicy()]);
+  it('flags a policy bound by someone other than the app’s producer', () => {
+    const [row] = run(
+      [
+        dashRow({
+          bindId: 'SOKSAM02',
+          bindIdKey: 'SOKSAM02',
+          bindIdName: 'SAM',
+        }),
+      ],
+      [appPolicy()],
+    );
     expect(row.tabs.sort()).toEqual(['matched', 'producer_mismatch']);
     expect(row.issues).toContain('producer_mismatch');
     expect(row.producerKey).toBe('user:u-sam');
@@ -275,7 +283,14 @@ describe('matchRows + deriveRow', () => {
 
   it('checks the premium and the producer independently', () => {
     const [row] = run(
-      [dashRow({ subProducerCode: '025', writtenPremium: 990 })],
+      [
+        dashRow({
+          bindId: 'SOKSAM02',
+          bindIdKey: 'SOKSAM02',
+          bindIdName: 'SAM',
+          writtenPremium: 990,
+        }),
+      ],
       [appPolicy()],
     );
     expect(row.tabs.sort()).toEqual([
@@ -285,11 +300,37 @@ describe('matchRows + deriveRow', () => {
     ]);
   });
 
-  it('notes a sub-producer code on no user without reviewing the row', () => {
-    const [row] = run([dashRow({ subProducerCode: '002' })], [appPolicy()]);
-    expect(row.issues).toContain('unmapped_producer');
-    expect(row.producerKey).toBe('code:002');
-    expect(row.needsReview).toBe(false);
+  // Dash's sub-producer column is not read (owner, 28 Oct 2026): whoever
+  // bound the policy is who it belongs to, under their name in the app.
+  it('ignores the sub-producer column: the binder is who the line belongs to', () => {
+    const [onNobody, onSam] = run(
+      [
+        dashRow({ subProducerCode: '002', subProducerName: 'BRIAN CARTER' }),
+        dashRow({
+          policyNumber: '900000002',
+          policyKey: '900000002',
+          subProducerCode: '025',
+          subProducerName: 'SAM',
+        }),
+      ],
+      [
+        appPolicy(),
+        appPolicy({
+          policyId: 'p2',
+          policyNumber: '900000002',
+          policyKey: '900000002',
+        }),
+      ],
+    );
+    for (const row of [onNobody, onSam]) {
+      expect(row).toMatchObject({
+        tabs: ['matched'],
+        issues: [],
+        needsReview: false,
+        producerKey: 'user:u-pat',
+        credit: { name: 'Pat', userId: 'u-pat', via: 'bind_id' },
+      });
+    }
   });
 
   it('notes a mistyped or missing number on an app-only policy', () => {
@@ -471,7 +512,9 @@ describe('summarize', () => {
         dashRow({
           policyNumber: '900000003',
           policyKey: '900000003',
-          subProducerCode: '025',
+          bindId: 'SOKSAM02',
+          bindIdKey: 'SOKSAM02',
+          bindIdName: 'SAM',
           writtenPremium: 400,
         }),
         dashRow({
@@ -587,6 +630,26 @@ describe('summarize', () => {
     // 12.50 over and 0.01 under: 12.51 apart, not 12.49.
     expect(totals.premiumMismatchDelta).toBe(12.51);
     expect(totals.producerMismatch).toBe(0);
+  });
+
+  // Grouped by sub-producer code, this was two lines — "PAT PRODUCER (099)"
+  // for the Dash line and "Pat" for the app's own policy — whenever the code
+  // was not on Pat's user.
+  it('lists one line per person, whatever sub-producer code Dash prints', () => {
+    const rows = run(
+      [dashRow({ subProducerCode: '099', subProducerName: 'PAT PRODUCER' })],
+      [
+        appPolicy({
+          policyId: 'p9',
+          policyNumber: '900000009',
+          policyKey: '900000009',
+        }),
+      ],
+    );
+    const { byProducer } = summarize(rows);
+    expect(
+      byProducer.map((p) => [p.producerKey, p.dashSales, p.missing, p.appOnly]),
+    ).toEqual([['user:u-pat', 1, 1, 1]]);
   });
 
   it('gives a former employee a line of their own, apart from lines that name nobody', () => {

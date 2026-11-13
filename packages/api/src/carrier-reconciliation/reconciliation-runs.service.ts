@@ -12,6 +12,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import {
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_ROWS,
+  RECONCILIATION_ASSIGNEE_PERMISSION,
   RECONCILIATION_DUPLICATE_FILE,
   RECONCILIATION_ISSUE_LABELS,
   RECONCILIATION_NO_APPOINTMENT,
@@ -25,7 +26,6 @@ import {
   type AccessContext,
   type DataExportColumnDescriptor,
   type ReclassifyRunResponse,
-  type ReconciliationOptionsResponse,
   type ReconciliationPresignResponse,
   type ReconciliationRowListResponse,
   type ReconciliationRowView,
@@ -49,6 +49,7 @@ import {
 import { clientAgencyId } from '../common/access/client-scope';
 import {
   carriedFields,
+  type CarryContext,
   type PreviousRowReview,
 } from '../common/carrier-reconciliation/carry-forward';
 import { LIVE_ROW } from '../common/carrier-reconciliation/live-row';
@@ -77,10 +78,11 @@ import {
   RECONCILIATION_PURPOSE,
 } from '../common/carrier-reconciliation/reconciliation-file-types';
 import { createExportWriter } from '../common/data-export/writers/export-writer';
-import { displayName, displayNamesFor } from '../common/domain/user-names';
+import { displayNamesFor } from '../common/domain/user-names';
 import { isDuplicateKeyError } from '../common/mongo/duplicate-key';
 import { escapeRegex } from '../common/mongo/escape-regex';
 import { TransactionRunner } from '../common/mongo/transaction.runner';
+import { PermissionsService } from '../permissions/permissions.service';
 import { Deal, type DealDocument } from '../deals/schemas/deal.schema';
 import { Agency, type AgencyDocument } from '../platform/schemas/agency.schema';
 import { Policy, type PolicyDocument } from '../policies/schemas/policy.schema';
@@ -96,10 +98,10 @@ import type {
 } from './dto/carrier-reconciliation.dto';
 import {
   isStale,
-  rowUserIds,
   STALE_RUN_MINUTES,
   toProducerSummary,
-  toRowView,
+  resolveRowViews,
+  runUserIds,
   toRunView,
   type LeanRow,
   type LeanRun,
@@ -168,6 +170,7 @@ export class ReconciliationRunsService {
     private readonly userModel: Model<UserDocument>,
     private readonly storage: StorageService,
     private readonly transactions: TransactionRunner,
+    private readonly permissions: PermissionsService,
   ) {}
 
   private get models(): ReconciliationModels {
@@ -425,6 +428,7 @@ export class ReconciliationRunsService {
         // What carries from a run this one replaces is written by `swapIn`,
         // inside the transaction that retires the old rows.
         review: openReview(),
+        assignment: null,
         supersededAt: null,
         searchText: searchText(base),
       };
@@ -438,9 +442,10 @@ export class ReconciliationRunsService {
 
     // Matching data only, so carried decisions cannot change them.
     const summary = summarize(rows);
+    const context = await this.carryContext(agencyId);
     try {
       await this.transactions.run((session) =>
-        this.swapIn(run, rows, summary, session),
+        this.swapIn(run, rows, summary, context, session),
       );
     } catch (error) {
       // Two first uploads of one period: the other run took `currentKey`.
@@ -476,6 +481,7 @@ export class ReconciliationRunsService {
     run: ReconciliationRunDocument,
     rows: readonly CarriedRowSource[],
     summary: ReturnType<typeof summarize>,
+    context: CarryContext,
     session: ClientSession | null,
   ): Promise<void> {
     const agencyId = run.agencyId;
@@ -522,6 +528,7 @@ export class ReconciliationRunsService {
         const fields = carriedFields(
           { rowKey: row.rowKey, match: row.match, issues: row.issues },
           before,
+          context,
         );
         if (!Object.keys(fields).length) continue;
         operations.push({
@@ -550,6 +557,12 @@ export class ReconciliationRunsService {
           byProducer: summary.byProducer,
           supersedesRunId: previous?._id ?? null,
           currentKey: runPeriodKey(run.fileMeta.agentNumber, window),
+          // A closed month stays closed when its report is uploaded again:
+          // closing is the owner's call about the period, not about one file.
+          // Read with the supersede above, so a close racing this upload
+          // either conflicts with it or lands first and is carried.
+          closedAt: previous?.closedAt ?? null,
+          closedById: previous?.closedAt ? previous.closedById : null,
           finishedAt,
           durationMs:
             finishedAt.getTime() - (run.startedAt ?? finishedAt).getTime(),
@@ -563,6 +576,23 @@ export class ReconciliationRunsService {
     }
   }
 
+  /**
+   * Who a carried assignment may stay with: the people who can be given a
+   * row now. Read once, before the swap's transaction, so a retry does not
+   * read it again.
+   */
+  private async carryContext(agencyId: string): Promise<CarryContext> {
+    const pool = new Set(
+      (
+        await this.permissions.activeUsersHolding(
+          agencyId,
+          RECONCILIATION_ASSIGNEE_PERMISSION,
+        )
+      ).map((user) => String(user._id)),
+    );
+    return { canTakeRows: (userId) => pool.has(userId) };
+  }
+
   private async previousReviews(
     agencyId: string,
     runId: Types.ObjectId,
@@ -570,12 +600,23 @@ export class ReconciliationRunsService {
   ): Promise<Map<string, PreviousRowReview>> {
     const rows = await this.rowModel
       .find(
-        { agencyId, runId, 'review.status': { $ne: 'open' } },
-        { rowKey: 1, match: 1, issues: 1, review: 1 },
+        {
+          agencyId,
+          runId,
+          // A decision, or a person the row is with — either carries.
+          $or: [
+            { 'review.status': { $ne: 'open' } },
+            { 'assignment.userId': { $type: 'string' } },
+          ],
+        },
+        { rowKey: 1, match: 1, issues: 1, review: 1, assignment: 1 },
       )
       .session(session)
       .lean<
-        Pick<LeanRow, '_id' | 'rowKey' | 'match' | 'issues' | 'review'>[]
+        Pick<
+          LeanRow,
+          '_id' | 'rowKey' | 'match' | 'issues' | 'review' | 'assignment'
+        >[]
       >();
     return new Map(
       rows.map((row) => [
@@ -589,6 +630,7 @@ export class ReconciliationRunsService {
           note: row.review.note,
           reviewedById: row.review.reviewedById,
           reviewedAt: row.review.reviewedAt,
+          assignment: row.assignment ?? null,
         },
       ]),
     );
@@ -647,7 +689,7 @@ export class ReconciliationRunsService {
     );
     const names = await displayNamesFor(
       this.userModel,
-      runs.flatMap((run) => (run.createdBy ? [String(run.createdBy)] : [])),
+      runs.flatMap(runUserIds),
     );
     return {
       items: runs.map((run) =>
@@ -666,12 +708,19 @@ export class ReconciliationRunsService {
   ): Promise<ReconciliationRunDetail> {
     const agencyId = clientAgencyId(access);
     const run = await this.loadRun(agencyId, runId);
-    const [tabCounts, open] = await Promise.all([
+    const [tabCounts, open, assigned] = await Promise.all([
       this.tabCounts(agencyId, run._id),
       this.openCounts(agencyId, [run._id]),
+      this.rowModel.countDocuments({
+        agencyId,
+        runId: run._id,
+        needsReview: true,
+        'review.status': 'open',
+        'assignment.userId': { $type: 'string' },
+      }),
     ]);
     const names = await displayNamesFor(this.userModel, [
-      ...(run.createdBy ? [String(run.createdBy)] : []),
+      ...runUserIds(run),
       ...run.byProducer.flatMap((entry) =>
         entry.userId ? [entry.userId] : [],
       ),
@@ -682,6 +731,7 @@ export class ReconciliationRunsService {
         toProducerSummary(entry, names),
       ),
       tabCounts,
+      assigned,
       warnings: run.warnings ?? [],
     };
   }
@@ -700,6 +750,13 @@ export class ReconciliationRunsService {
     if (query.reviewStatus) {
       filter.needsReview = true;
       filter['review.status'] = query.reviewStatus;
+    }
+    if (query.assignee === 'unassigned') {
+      // Matches a row assigned to nobody and one stored before assignment.
+      filter['assignment.userId'] = { $exists: false };
+    } else if (query.assignee) {
+      filter['assignment.userId'] =
+        query.assignee === 'me' ? access.userId : query.assignee;
     }
     if (query.q) {
       filter.searchText = {
@@ -830,6 +887,101 @@ export class ReconciliationRunsService {
   }
 
   // -------------------------------------------------------------------------
+  // Closing a month
+  // -------------------------------------------------------------------------
+
+  /**
+   * Close a month (PAC-173 review): its rows leave every assignee's list —
+   * `currentRunIds` skips a closed run, which also keeps work transfer and
+   * release off them — and none can be handed to anyone until it is reopened.
+   * The owner still reads, decides and re-checks its rows, and assignments are
+   * kept, so reopening puts the rows back with whoever had them.
+   *
+   * Only the period's current run. Idempotent: a closed month stays as it was.
+   */
+  async close(
+    access: AccessContext,
+    runId: string,
+  ): Promise<ReconciliationRunDetail> {
+    const agencyId = clientAgencyId(access);
+    const run = await this.loadRun(agencyId, runId);
+    assertCurrentMonth(run);
+    if (!run.closedAt) {
+      const closed = await this.runModel.updateOne(
+        { _id: run._id, agencyId, ...CLOSABLE, closedAt: null },
+        {
+          $set: {
+            closedAt: new Date(),
+            closedById: Types.ObjectId.isValid(access.userId)
+              ? new Types.ObjectId(access.userId)
+              : null,
+          },
+        },
+      );
+      // Closed by someone else meanwhile is fine; replaced by a re-upload is
+      // the 409 a fresh read gives.
+      if (!closed.matchedCount) {
+        assertCurrentMonth(await this.loadRun(agencyId, runId));
+      }
+    }
+    return this.detail(access, runId);
+  }
+
+  /**
+   * Reopen a closed month: its open rows are back on their assignees' lists.
+   *
+   * Except where the assignee can no longer be given rows — they left, or
+   * lost the permission, while the month was closed. A work transfer or a
+   * release then never saw these rows (they were on no list), so the row
+   * starts with nobody on it, the rule a re-upload applies to a carried
+   * assignment (`carriedFields`). In the reopen's transaction, so neither
+   * lands without the other. Idempotent.
+   */
+  async reopen(
+    access: AccessContext,
+    runId: string,
+  ): Promise<ReconciliationRunDetail> {
+    const agencyId = clientAgencyId(access);
+    const run = await this.loadRun(agencyId, runId);
+    assertCurrentMonth(run);
+    if (run.closedAt) {
+      const context = await this.carryContext(agencyId);
+      const reopened = await this.transactions.run(async (session) => {
+        const opened = await this.runModel.updateOne(
+          { _id: run._id, agencyId, ...CLOSABLE, closedAt: { $ne: null } },
+          { $set: { closedAt: null, closedById: null } },
+          { session: session ?? undefined },
+        );
+        if (!opened.matchedCount) return false;
+        const open = {
+          agencyId,
+          runId: run._id,
+          needsReview: true,
+          'review.status': 'open' as const,
+          ...LIVE_ROW,
+        };
+        const assignees = await this.rowModel
+          .distinct('assignment.userId', {
+            ...open,
+            'assignment.userId': { $type: 'string' },
+          })
+          .session(session);
+        const gone = assignees.filter((id) => !context.canTakeRows(id));
+        if (gone.length) {
+          await this.rowModel.updateMany(
+            { ...open, 'assignment.userId': { $in: gone } },
+            { $set: { assignment: null } },
+            { session: session ?? undefined },
+          );
+        }
+        return true;
+      });
+      if (!reopened) assertCurrentMonth(await this.loadRun(agencyId, runId));
+    }
+    return this.detail(access, runId);
+  }
+
+  // -------------------------------------------------------------------------
   // Export
   // -------------------------------------------------------------------------
 
@@ -887,45 +1039,6 @@ export class ReconciliationRunsService {
   }
 
   // -------------------------------------------------------------------------
-  // Options
-  // -------------------------------------------------------------------------
-
-  /** Every person in the agency, active first, for the page's user pickers. */
-  async options(access: AccessContext): Promise<ReconciliationOptionsResponse> {
-    const users = await this.userModel
-      .find(
-        // `users.agencyId` is an ObjectId, unlike every TenantRecord.
-        {
-          agencyId: new Types.ObjectId(clientAgencyId(access)),
-          isPlatformAdmin: { $ne: true },
-        },
-        { firstName: 1, lastName: 1, email: 1, isActive: 1 },
-      )
-      .lean<
-        {
-          _id: Types.ObjectId;
-          firstName?: string;
-          lastName?: string;
-          email: string;
-          isActive?: boolean;
-        }[]
-      >();
-    return {
-      users: users
-        .map((user) => ({
-          id: String(user._id),
-          name: displayName(user),
-          isActive: user.isActive !== false,
-        }))
-        .sort(
-          (a, b) =>
-            Number(b.isActive) - Number(a.isActive) ||
-            a.name.localeCompare(b.name),
-        ),
-    };
-  }
-
-  // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
 
@@ -937,11 +1050,8 @@ export class ReconciliationRunsService {
     return run;
   }
 
-  private async toRowViews(rows: LeanRow[]): Promise<ReconciliationRowView[]> {
-    const names = await displayNamesFor(this.userModel, [
-      ...new Set(rows.flatMap(rowUserIds)),
-    ]);
-    return rows.map((row) => toRowView(row, names));
+  private toRowViews(rows: LeanRow[]): Promise<ReconciliationRowView[]> {
+    return resolveRowViews(this.userModel, rows);
   }
 
   private async openCounts(
@@ -1108,6 +1218,27 @@ function assertWorkable(run: LeanRun, what: 'decided' | 're-checked'): void {
   }
 }
 
+/** What a run must still be for its month to be closed or reopened. */
+const CLOSABLE = { status: 'ready', supersededByRunId: null } as const;
+
+/**
+ * Only the period's current run is closed or reopened: a replaced run's rows
+ * are history already — the month's state is on the run that replaced it —
+ * and a run that never finished was never on anyone's list.
+ */
+function assertCurrentMonth(run: LeanRun): void {
+  if (run.supersededByRunId) {
+    throw new ConflictException(
+      'A newer upload of this report replaced this run. Close or reopen the month on that one.',
+    );
+  }
+  if (run.status !== 'ready' || isStale(run)) {
+    throw new ConflictException(
+      'Only a finished run can be closed or reopened.',
+    );
+  }
+}
+
 function searchText(base: RowBase): string {
   return [
     base.dash?.policyNumber,
@@ -1123,7 +1254,6 @@ function searchText(base: RowBase): string {
     .toLowerCase();
 }
 
-/** `user:` ids are lower-case hex; a sub-producer code is upper-case. */
 /**
  * A producer filter as stored: the DTO accepts any case, so the prefix is
  * lower-cased before it is read; codes and Bind IDs are stored upper-case,
@@ -1332,6 +1462,12 @@ const EXPORT_COLUMNS: ExportColumn[] = [
     type: 'number',
     description: 'Item count in Dash.',
     pick: (r) => r.dash?.itemCount ?? null,
+  },
+  {
+    key: 'assigned_to',
+    type: 'string',
+    description: 'Who the row is assigned to.',
+    pick: (r) => r.assignment?.user.name ?? null,
   },
   {
     key: 'issues',

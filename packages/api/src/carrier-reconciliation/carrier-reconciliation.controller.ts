@@ -29,6 +29,7 @@ import {
 import { Access } from '../common/decorators/user.decorators';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
+  assignRowSchema,
   createRunSchema,
   exportQuerySchema,
   listRunsSchema,
@@ -36,6 +37,7 @@ import {
   reconciliationIdSchema,
   reviewRowSchema,
   rowsQuerySchema,
+  type AssignRowDto,
   type CreateRunDto,
   type ExportQueryDto,
   type ListRunsDto,
@@ -43,6 +45,7 @@ import {
   type ReviewRowDto,
   type RowsQueryDto,
 } from './dto/carrier-reconciliation.dto';
+import { ReconciliationAssignmentsService } from './reconciliation-assignments.service';
 import { ReconciliationRunsService } from './reconciliation-runs.service';
 
 const Id = () => new ZodValidationPipe(reconciliationIdSchema);
@@ -68,14 +71,17 @@ const Id = () => new ZodValidationPipe(reconciliationIdSchema);
 @RequireModule(ModuleKey.CarrierReconciliation)
 @RequirePermissions(modulePermission(ModuleKey.CarrierReconciliation, 'read'))
 export class CarrierReconciliationController {
-  constructor(private readonly runs: ReconciliationRunsService) {}
+  constructor(
+    private readonly runs: ReconciliationRunsService,
+    private readonly assignments: ReconciliationAssignmentsService,
+  ) {}
 
-  /** Agency users, for the page's user pickers. */
+  /** The assignee picker: the agency's active users who can work leads. */
   @Get('options')
   options(
     @Access() access: AccessContext,
   ): Promise<ReconciliationOptionsResponse> {
-    return this.runs.options(access);
+    return this.assignments.options(access);
   }
 
   // --- Runs ----------------------------------------------------------------
@@ -152,6 +158,36 @@ export class CarrierReconciliationController {
     return this.runs.reclassify(access, id);
   }
 
+  /**
+   * Close a month: its rows leave every assignee's list and cannot be handed
+   * to anyone; the owner still decides them here. 201 with the run (also when
+   * it was closed already), like `reclassify`; 409 for a run a re-upload
+   * replaced or one that did not finish.
+   */
+  @Post('runs/:id/close')
+  @RequireWrite(ModuleKey.CarrierReconciliation)
+  close(
+    @Access() access: AccessContext,
+    @Param('id', Id()) id: string,
+  ): Promise<ReconciliationRunDetail> {
+    return this.runs.close(access, id);
+  }
+
+  /**
+   * Reopen a closed month: its open rows are back on their assignees' lists,
+   * except a row whose assignee can no longer be given rows, which starts
+   * with nobody on it. 201 with the run (also when it was open); 409 as for
+   * closing.
+   */
+  @Post('runs/:id/reopen')
+  @RequireWrite(ModuleKey.CarrierReconciliation)
+  reopen(
+    @Access() access: AccessContext,
+    @Param('id', Id()) id: string,
+  ): Promise<ReconciliationRunDetail> {
+    return this.runs.reopen(access, id);
+  }
+
   @Patch('runs/:id/rows/:rowId/review')
   @RequireWrite(ModuleKey.CarrierReconciliation)
   review(
@@ -161,5 +197,24 @@ export class CarrierReconciliationController {
     @Body(new ZodValidationPipe(reviewRowSchema)) body: ReviewRowDto,
   ): Promise<ReconciliationRowView> {
     return this.runs.review(access, id, rowId, body);
+  }
+
+  /**
+   * Hand a row to someone who can work leads, change its note, or take it back
+   * (`userId: null`); the new assignee is notified. 400 for someone who is
+   * not an active Producer/CSR here; 409 for a row already decided, an
+   * unfinished run, a closed month (taking a row back still works there), a
+   * run a re-upload replaced (taking a row back there too), or a concurrent
+   * change.
+   */
+  @Patch('runs/:id/rows/:rowId/assignment')
+  @RequireWrite(ModuleKey.CarrierReconciliation)
+  assign(
+    @Access() access: AccessContext,
+    @Param('id', Id()) id: string,
+    @Param('rowId', Id()) rowId: string,
+    @Body(new ZodValidationPipe(assignRowSchema)) body: AssignRowDto,
+  ): Promise<ReconciliationRowView> {
+    return this.assignments.assign(access, id, rowId, body);
   }
 }

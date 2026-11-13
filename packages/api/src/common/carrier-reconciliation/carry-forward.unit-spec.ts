@@ -1,4 +1,8 @@
-import { carriedReview, type PreviousRowReview } from './carry-forward';
+import {
+  carriedAssignment,
+  carriedReview,
+  type PreviousRowReview,
+} from './carry-forward';
 
 const previous = (overrides: Partial<PreviousRowReview> = {}) =>
   new Map<string, PreviousRowReview>([
@@ -13,6 +17,7 @@ const previous = (overrides: Partial<PreviousRowReview> = {}) =>
         note: 'Checked with Pat',
         reviewedById: 'u-owner',
         reviewedAt: new Date('2026-10-02T12:00:00Z'),
+        assignment: null,
         ...overrides,
       },
     ],
@@ -61,6 +66,45 @@ describe('carriedReview', () => {
         { ...row, issues: [...row.issues] },
         previous({ status: 'open' }),
       ),
+    ).toBeNull();
+  });
+});
+
+describe('carriedAssignment', () => {
+  const assignment = {
+    userId: 'u-pat',
+    assignedById: 'u-owner',
+    assignedAt: new Date('2026-10-03T09:00:00Z'),
+    note: 'Enter the deal',
+  };
+
+  it('keeps the row with the same person when it still says the same thing', () => {
+    expect(
+      carriedAssignment(
+        { ...row, issues: [...row.issues] },
+        previous({ status: 'open', resolution: null, assignment }),
+      ),
+    ).toEqual(assignment);
+  });
+
+  it('starts a row whose classification changed with nobody on it', () => {
+    expect(
+      carriedAssignment(
+        { ...row, issues: ['no_bind_id'] },
+        previous({ status: 'open', resolution: null, assignment }),
+      ),
+    ).toBeNull();
+    expect(
+      carriedAssignment(
+        { ...row, match: 'matched', issues: [...row.issues] },
+        previous({ assignment }),
+      ),
+    ).toBeNull();
+  });
+
+  it('is null when the row was never assigned', () => {
+    expect(
+      carriedAssignment({ ...row, issues: [...row.issues] }, previous()),
     ).toBeNull();
   });
 });

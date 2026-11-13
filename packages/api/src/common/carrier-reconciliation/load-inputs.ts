@@ -95,7 +95,7 @@ export function agentNumberMatches(
 }
 
 /**
- * Every user of the agency holding an Allstate code — **deactivated users
+ * Every user of the agency holding an Allstate Bind ID — **deactivated users
  * included**: a leaver's Bind ID still names who bound their old sales, and
  * dropping it would credit those lines to Dash's printed name instead of the
  * user (or, on a line Dash leaves unnamed, read them as 1-800). Pending invites
@@ -110,18 +110,9 @@ export async function loadStaffCodes(
       {
         agencyId: new Types.ObjectId(agencyId),
         isPlatformAdmin: { $ne: true },
-        $or: [
-          { allstateBindId: { $type: 'string' } },
-          { allstateSubProducerCode: { $type: 'string' } },
-        ],
+        allstateBindId: { $type: 'string' },
       },
-      {
-        firstName: 1,
-        lastName: 1,
-        email: 1,
-        allstateBindId: 1,
-        allstateSubProducerCode: 1,
-      },
+      { firstName: 1, lastName: 1, email: 1, allstateBindId: 1 },
     )
     .lean<
       {
@@ -130,14 +121,12 @@ export async function loadStaffCodes(
         lastName?: string;
         email: string;
         allstateBindId?: string;
-        allstateSubProducerCode?: string;
       }[]
     >();
   return users.map((user) => ({
     userId: String(user._id),
     name: displayName(user),
     bindId: user.allstateBindId ?? null,
-    subProducerCode: user.allstateSubProducerCode ?? null,
   }));
 }
 

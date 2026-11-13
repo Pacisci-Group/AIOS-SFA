@@ -1,0 +1,43 @@
+meta {
+  name: Unassign Row
+  type: http
+  seq: 34
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/assignment
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "userId": null
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row is with nobody", function () {
+    expect(res.getBody().assignment).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH …/assignment `{ "userId": null }` — take a row back
+
+  The row returns to the owner, assigned to nobody, and leaves the former
+  assignee's list. Nobody is notified. With `Review Row (Reopen Missing)`
+  before the assignment requests, a re-run starts from the same state.
+}

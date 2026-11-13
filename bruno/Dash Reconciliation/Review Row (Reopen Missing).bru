@@ -1,0 +1,47 @@
+meta {
+  name: Review Row (Reopen Missing)
+  type: http
+  seq: 26
+}
+
+patch {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows/{{reconAssignRowId}}/review
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "status": "open"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row waits on a decision again", function () {
+    expect(res.getBody().review.status).to.equal("open");
+    expect(res.getBody().review.resolution).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH …/review `{ "status": "open" }` — set the fixture row up for assignment
+
+  Only a row still waiting on a decision can be assigned, and on a database
+  that already reconciled the fixture (`Create Run` → 409) the row keeps
+  whatever someone last did to it — decided on the page, say. Reopening it
+  first lets the assignment requests that follow run from the same state
+  every time. Reopening clears the resolution and the reviewer; it never
+  touches the assignment.
+}

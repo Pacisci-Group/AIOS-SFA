@@ -61,6 +61,7 @@ export interface ReleasedWork {
   renewalCyclesUnassigned: number;
   householdsUnassigned: number;
   leadsUnassigned: number;
+  reconciliationRowsUnassigned: number;
 }
 
 /**
@@ -79,6 +80,9 @@ export interface WorkTransferCounts {
   shareLinks: number;
   rotationsTakenOver: number;
   rotationsDeactivated: number;
+  reconciliationRows: number;
+  /** Of those, the rows the successor cannot work, sent back to the owner. */
+  reconciliationRowsUnassigned: number;
 }
 
 export interface WorkTransferResult extends WorkTransferCounts {

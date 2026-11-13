@@ -1,0 +1,53 @@
+meta {
+  name: List Run Rows (Missing From App)
+  type: http
+  seq: 25
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?tab=missing_from_app&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  tab: missing_from_app
+  pageSize: 25
+}
+
+script:post-response {
+  // The fixture's 900299990 — in Dash, not in the app, waiting on a decision:
+  // the row the assignment requests below hand to Auth/Login's producer.
+  const row = (res.getBody().items || []).find((item) => item.dash.policyNumber === "900299990");
+  if (row) bru.setVar("reconAssignRowId", row.id);
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the missing line is open and assignable", function () {
+    const row = res.getBody().items.find((item) => item.dash.policyNumber === "900299990");
+    expect(row).to.not.equal(undefined);
+    expect(row.needsReview).to.equal(true);
+    expect(row.review.status).to.equal("open");
+    expect(row.runId).to.equal(bru.getVar("reconRunId"));
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/rows?tab=missing_from_app
+
+  The run's "Missing from app" rows — a new policy in Dash, bound by the
+  agency, with no app policy of that number. Captures the fixture's
+  `900299990` as `reconAssignRowId` for the assignment requests.
+
+  Every row view carries `runId` and `assignment` (`null`, or
+  `{ user, assignedBy, assignedAt, note }`). See `List Run Rows (1-800 Review)`
+  for the query parameters, including `assignee`.
+}

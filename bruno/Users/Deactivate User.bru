@@ -58,6 +58,8 @@ docs {
       that client picks one by round-robin and new renewal cycles open
       unassigned;
     - open leads go back to the **unclaimed pool**, each with a timeline entry.
+  - Dash Reconciliation rows assigned to them that still wait on a decision go
+    back to the owner, assigned to nobody (PAC-173). Decided rows keep the name.
   - **Not released:** open deal audits (an unassigned audit falls back to its
     seller — the person leaving — so they stay assigned and visible to
     managers) and share links (already dead once the producer is inactive).
@@ -72,7 +74,7 @@ docs {
 
   **Response `200`** — `{ ticketsUnassigned, rotationsDeactivated,
   onboardingsUnassigned, renewalCyclesUnassigned, householdsUnassigned,
-  leadsUnassigned }`.
+  leadsUnassigned, reconciliationRowsUnassigned }`.
 
   ## Or handed to a named colleague (PAC-137)
   Optional JSON body `{ "successorId": "<userId>" }`. With it, the open work is

@@ -70,6 +70,44 @@ const RENDERERS: Record<NotificationType, NotificationRenderer> = {
         : '/dashboard/producer',
     };
   },
+  'reconciliation.row_assigned': (data) => {
+    const rowId =
+      typeof data.rowId === 'string' && /^[a-f0-9]{24}$/.test(data.rowId)
+        ? data.rowId
+        : null;
+    const details = [
+      text(data.policyNumber),
+      text(data.customerName),
+      text(data.tabLabel),
+    ].filter((part): part is string => part !== null);
+    return {
+      title: 'Dash policy assigned to you',
+      body: details.length
+        ? details.join(' · ')
+        : 'A line from the Dash report needs you.',
+      // The assignee's page opens the row named in `row`.
+      href: rowId
+        ? `/reconciliation/assigned?row=${rowId}`
+        : '/reconciliation/assigned',
+    };
+  },
+  'reconciliation.rows_transferred': (data) => {
+    const count =
+      typeof data.count === 'number' && Number.isInteger(data.count) && data.count > 0
+        ? data.count
+        : null;
+    const from = text(data.fromName);
+    const lines = count
+      ? `${count} Dash line${count === 1 ? '' : 's'}`
+      : 'Dash lines';
+    return {
+      title: 'Dash policies handed to you',
+      body: from
+        ? `${lines} from ${from}'s list ${count === 1 ? 'is' : 'are'} now yours.`
+        : `${lines} ${count === 1 ? 'is' : 'are'} now yours.`,
+      href: '/reconciliation/assigned',
+    };
+  },
 };
 
 /**

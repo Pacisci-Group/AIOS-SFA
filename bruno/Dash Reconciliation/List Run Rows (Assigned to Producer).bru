@@ -1,0 +1,45 @@
+meta {
+  name: List Run Rows (Assigned to Producer)
+  type: http
+  seq: 32
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?assignee={{currentUserId}}&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  assignee: {{currentUserId}}
+  pageSize: 25
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("only that person's rows, including the one just assigned", function () {
+    const items = res.getBody().items;
+    expect(items.map((item) => item.id)).to.include(bru.getVar("reconAssignRowId"));
+    for (const item of items) {
+      expect(item.assignment.user.id).to.equal(bru.getVar("currentUserId"));
+    }
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/rows?assignee=… — the owner's assignee filter
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  `assignee` is a user id, `me` (the caller) or `unassigned` (rows with
+  nobody on them, including rows stored before assignment existed). It
+  combines with `tab`, `producer`, `reviewStatus` and `q`.
+}

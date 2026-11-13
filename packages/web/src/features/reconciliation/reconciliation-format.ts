@@ -82,7 +82,14 @@ export function formatInstant(iso: string | null | undefined): string {
 
 /** `Jul 1 – Sep 30, 2026`. */
 export function formatPeriod(run: Pick<ReconciliationRunView, "fileMeta">): string {
-  const { startDate, endDate } = run.fileMeta;
+  return formatDayRange(run.fileMeta.startDate, run.fileMeta.endDate);
+}
+
+/** {@link formatPeriod} from the two dates alone — an assigned row carries no `fileMeta`. */
+export function formatDayRange(
+  startDate: string | null | undefined,
+  endDate: string | null | undefined,
+): string {
   if (!startDate || !endDate) return "Period unknown";
   const sameYear = startDate.slice(0, 4) === endDate.slice(0, 4);
   const from = Date.parse(`${startDate}T00:00:00Z`);
@@ -173,6 +180,11 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
     if (typeof body?.message === "string") return body.message;
   }
   return fallback;
+}
+
+/** The HTTP status a failed request came back with; `null` if it never got one. */
+export function apiErrorStatus(error: unknown): number | null {
+  return error instanceof ApiError ? error.status : null;
 }
 
 /** The structured refusal code an API error carries, if any. */

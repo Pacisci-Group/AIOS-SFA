@@ -1,13 +1,17 @@
 import type {
   ReconciliationAppSide,
+  ReconciliationAssignment,
   ReconciliationDashSide,
   ReconciliationProducerSummary,
   ReconciliationRowView,
   ReconciliationRunStatus,
   ReconciliationRunView,
 } from '@sfa/shared';
-import type { Types } from 'mongoose';
+import type { Model, Types } from 'mongoose';
+import type { RowAssignment } from '../common/carrier-reconciliation/carry-forward';
 import type { DashRow } from '../common/carrier-reconciliation/dash-file-reader';
+import { displayNamesFor } from '../common/domain/user-names';
+import type { UserDocument } from '../users/schemas/user.schema';
 import type {
   AppPolicyLite,
   ProducerSummaryRaw,
@@ -17,7 +21,8 @@ import type { ReconciliationRun } from './schemas/reconciliation-run.schema';
 
 /**
  * Stored documents → wire views. Pure: names arrive resolved, so every id a
- * view names is batched into one `displayNamesFor` by the caller.
+ * view names is batched into one `displayNamesFor` — {@link resolveRowViews}
+ * does that for a page of rows.
  */
 
 /**
@@ -49,6 +54,7 @@ export function toRunView(
   const stale = isStale(run);
   const status: ReconciliationRunStatus = stale ? 'failed' : run.status;
   const createdBy = run.createdBy ? String(run.createdBy) : null;
+  const closedBy = run.closedById ? String(run.closedById) : null;
   return {
     id: String(run._id),
     status,
@@ -79,6 +85,12 @@ export function toRunView(
     supersededByRunId: run.supersededByRunId
       ? String(run.supersededByRunId)
       : null,
+    // A run stored before closing existed has neither field.
+    closedAt: run.closedAt ? new Date(run.closedAt).toISOString() : null,
+    closedBy:
+      run.closedAt && closedBy
+        ? { id: closedBy, name: names.get(closedBy) ?? 'Former user' }
+        : null,
     createdAt: (run.createdAt ?? new Date()).toISOString(),
     createdBy: createdBy
       ? { id: createdBy, name: names.get(createdBy) ?? 'Former user' }
@@ -92,12 +104,14 @@ export function toProducerSummary(
 ): ReconciliationProducerSummary {
   let name: string;
   if (raw.userId) name = names.get(raw.userId) ?? raw.dashName ?? 'Former user';
-  else if (raw.code)
-    name = raw.dashName ? `${raw.dashName} (${raw.code})` : `Code ${raw.code}`;
   else if (raw.producerKey.startsWith('bind:')) {
     const bindId = raw.producerKey.slice(5);
     name = raw.dashName ? `${raw.dashName} (${bindId})` : `Bind ID ${bindId}`;
-  } else name = raw.dashName ?? 'No producer code';
+  } else if (raw.producerKey.startsWith('code:')) {
+    // A sub-producer line from a run classified before codes were set aside
+    // (28 Oct 2026); its Re-check regroups it by Bind ID.
+    name = raw.dashName ?? raw.producerKey.slice(5);
+  } else name = 'No Bind ID';
   return {
     producerKey: raw.producerKey,
     userId: raw.userId,
@@ -114,13 +128,35 @@ export function toProducerSummary(
   };
 }
 
+/** Every user id a run view names. */
+export function runUserIds(
+  run: Pick<LeanRun, 'createdBy' | 'closedById'>,
+): string[] {
+  return [run.createdBy, run.closedById].flatMap((id) =>
+    id ? [String(id)] : [],
+  );
+}
+
 /** Every user id a row view names. */
 export function rowUserIds(row: LeanRow): string[] {
   return [
     row.credit?.userId,
     row.app?.producerId,
     row.review?.reviewedById,
+    row.assignment?.userId,
+    row.assignment?.assignedById,
   ].filter((id): id is string => typeof id === 'string' && id.length === 24);
+}
+
+/** A page of rows as views, with every name they mention in one lookup. */
+export async function resolveRowViews(
+  userModel: Model<UserDocument>,
+  rows: readonly LeanRow[],
+): Promise<ReconciliationRowView[]> {
+  const names = await displayNamesFor(userModel, [
+    ...new Set(rows.flatMap(rowUserIds)),
+  ]);
+  return rows.map((row) => toRowView(row, names));
 }
 
 export function toRowView(
@@ -141,7 +177,6 @@ export function toRowView(
     dash: row.dash ? dashView(row.dash) : null,
     app: row.app ? appView(row.app, names) : null,
     credit: {
-      code: row.credit.code,
       name: row.credit.name,
       userId: row.credit.userId,
       userName: row.credit.userId
@@ -172,6 +207,25 @@ export function toRowView(
         : null,
       carriedForward: !!row.review.carriedForwardFromRowId,
     },
+    runId: String(row.runId),
+    // A row stored before assignment existed has no field at all.
+    assignment: row.assignment ? assignmentView(row.assignment, names) : null,
+  };
+}
+
+function assignmentView(
+  assignment: RowAssignment,
+  names: ReadonlyMap<string, string>,
+): ReconciliationAssignment {
+  const by = assignment.assignedById;
+  return {
+    user: {
+      id: assignment.userId,
+      name: names.get(assignment.userId) ?? 'Former user',
+    },
+    assignedBy: by ? { id: by, name: names.get(by) ?? 'Former user' } : null,
+    assignedAt: new Date(assignment.assignedAt).toISOString(),
+    note: assignment.note,
   };
 }
 

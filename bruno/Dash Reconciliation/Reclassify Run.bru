@@ -32,11 +32,12 @@ docs {
   - **Module:** `carrier_reconciliation`
   - **Permission:** `carrier_reconciliation:write`
 
-  Re-applies the Allstate codes currently on the agency's users (Bind ID,
-  sub-producer code — set on the Users page, the profile page or while
-  accepting an invite) to a stored run without re-reading the file —
-  matching never depends on codes, only who bound and who is credited does.
-  Reviews are kept. Use it after setting someone's code.
+  Re-applies the Bind IDs currently on the agency's users (set on the Users
+  page, the profile page or while accepting an invite) to a stored run
+  without re-reading the file — matching never depends on them, only who bound
+  each line (and so whose line it is) does. Reviews and assignments are kept.
+  Use it after setting someone's Bind ID; it also regroups a run classified
+  while sub-producer codes were still read.
 
   ## Response `201`
 

@@ -1,15 +1,34 @@
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { AlertCircle, FileCheck2, RefreshCw, Upload } from "lucide-react";
+import {
+  AlertCircle,
+  FileCheck2,
+  Loader2,
+  Lock,
+  LockOpen,
+  RefreshCw,
+  Upload,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  RECONCILIATION_ASSIGNEE_FILTER_PATTERN,
   RECONCILIATION_PRODUCER_KEY_PATTERN,
   RECONCILIATION_TABS,
 } from "@sfa/shared";
 import { AppShell } from "@/components/layout/AppShell";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -22,9 +41,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useUrlState } from "@/hooks/useUrlState";
 import {
+  closeReconciliationRun,
   getReconciliationRun,
   getReconciliationRuns,
   reclassifyRun,
+  reopenReconciliationRun,
   reconciliationKey,
   reconciliationRunKey,
   reconciliationRunsKey,
@@ -47,6 +68,7 @@ const URL_DEFAULTS = {
   run: "",
   tab: "",
   producer: "",
+  assignee: "",
   q: "",
   page: "",
 };
@@ -55,6 +77,7 @@ const URL_ALLOWED = {
   run: (value: string) => OBJECT_ID.test(value),
   tab: RECONCILIATION_TABS,
   producer: (value: string) => RECONCILIATION_PRODUCER_KEY_PATTERN.test(value),
+  assignee: (value: string) => RECONCILIATION_ASSIGNEE_FILTER_PATTERN.test(value),
   page: (value: string) => /^[1-9]\d{0,4}$/.test(value),
 } as const;
 
@@ -71,6 +94,10 @@ const URL_ALLOWED = {
  * Users page and the profile page — there is no code registry here. A Bind ID
  * on no user reads as 1-800; once that person's code is set, "Re-check"
  * re-applies the codes to the stored run without re-uploading the file.
+ *
+ * A row waiting on a decision can be handed to a Producer or CSR from its
+ * drawer; they work it from `/reconciliation/assigned` (`AssignedRowsPage`).
+ * Closing a month takes its rows off those lists until it is reopened.
  */
 export default function ReconciliationPage() {
   const { can } = usePermissions();
@@ -120,9 +147,37 @@ export default function ReconciliationPage() {
       toast.error(apiErrorMessage(error, "The run could not be re-checked.")),
   });
 
+  // Close (true) or reopen (false) the month. Reopening needs no confirming:
+  // it only puts rows back where they were.
+  const [confirmClose, setConfirmClose] = useState(false);
+  const monthState = useMutation({
+    mutationFn: (close: boolean) =>
+      close ? closeReconciliationRun(runId) : reopenReconciliationRun(runId),
+    onSuccess: (detail, close) => {
+      setConfirmClose(false);
+      queryClient.setQueryData(reconciliationRunKey(detail.id), detail);
+      void queryClient.invalidateQueries({ queryKey: reconciliationKey });
+      toast.success(
+        close
+          ? "Month closed. Its rows are off everyone's lists."
+          : "Month reopened. Its open rows are back on their assignees' lists.",
+      );
+    },
+    onError: (error, close) =>
+      toast.error(
+        apiErrorMessage(
+          error,
+          close ? "The month could not be closed." : "The month could not be reopened.",
+        ),
+      ),
+  });
+  const canCloseMonth =
+    canWrite && run.data?.status === "ready" && !run.data.supersededByRunId;
+
   const filter: RowsFilter = {
     tab: (values.tab || defaultTab(run.data?.tabCounts)) as ReconciliationTab,
     producer: values.producer,
+    assignee: values.assignee,
     q: values.q,
     page: Number(values.page || 1),
   };
@@ -130,6 +185,7 @@ export default function ReconciliationPage() {
     setValues({
       ...(patch.tab !== undefined ? { tab: patch.tab } : {}),
       ...(patch.producer !== undefined ? { producer: patch.producer } : {}),
+      ...(patch.assignee !== undefined ? { assignee: patch.assignee } : {}),
       ...(patch.q !== undefined ? { q: patch.q } : {}),
       ...(patch.page !== undefined ? { page: patch.page > 1 ? String(patch.page) : "" } : {}),
     });
@@ -188,7 +244,7 @@ export default function ReconciliationPage() {
                 <Select
                   value={runId}
                   onValueChange={(next) =>
-                    setValues({ run: next, tab: "", producer: "", q: "", page: "" })
+                    setValues({ run: next, tab: "", producer: "", assignee: "", q: "", page: "" })
                   }
                 >
                   <SelectTrigger className="w-full bg-card sm:w-96" aria-label="Report">
@@ -200,6 +256,7 @@ export default function ReconciliationPage() {
                         {formatPeriod(item)} · uploaded {formatInstant(item.createdAt)}
                         {item.status === "failed" ? " · failed" : ""}
                         {item.supersededByRunId ? " · replaced" : ""}
+                        {item.closedAt && !item.supersededByRunId ? " · closed" : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -235,6 +292,32 @@ export default function ReconciliationPage() {
                     Re-check with current codes
                   </Button>
                 )}
+                {canCloseMonth &&
+                  (run.data?.closedAt ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={monthState.isPending}
+                      onClick={() => monthState.mutate(false)}
+                    >
+                      {monthState.isPending ? (
+                        <Loader2 aria-hidden className="animate-spin" />
+                      ) : (
+                        <LockOpen aria-hidden />
+                      )}
+                      Reopen month
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={monthState.isPending}
+                      onClick={() => setConfirmClose(true)}
+                    >
+                      <Lock aria-hidden />
+                      Close month
+                    </Button>
+                  ))}
               </div>
 
               {run.isError ? (
@@ -252,6 +335,19 @@ export default function ReconciliationPage() {
                 </Alert>
               ) : (
                 <>
+                  {run.data.closedAt && !run.data.supersededByRunId && (
+                    <Alert>
+                      <Lock aria-hidden />
+                      <AlertTitle>This month is closed</AlertTitle>
+                      <AlertDescription>
+                        Closed {formatInstant(run.data.closedAt)}
+                        {run.data.closedBy ? ` by ${run.data.closedBy.name}` : ""}.
+                        Its rows are on nobody's list and cannot be handed to
+                        anyone. You can still decide them here; reopening the
+                        month puts each open row back with whoever had it.
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   {run.data.warnings.length > 0 && (
                     <Alert>
                       <AlertCircle aria-hidden />
@@ -291,17 +387,54 @@ export default function ReconciliationPage() {
         onOpenChange={setUploadOpen}
         onUploaded={(id) => {
           setUploadOpen(false);
-          setValues({ run: id, tab: "", producer: "", q: "", page: "" });
+          setValues({ run: id, tab: "", producer: "", assignee: "", q: "", page: "" });
         }}
       />
       {runId && (
         <RowDetailSheet
           runId={runId}
+          runClosed={!!run.data?.closedAt}
           row={openRow}
           onClose={() => setOpenRow(null)}
           onRowChanged={setOpenRow}
         />
       )}
+      <AlertDialog
+        open={confirmClose}
+        onOpenChange={(next) => !monthState.isPending && setConfirmClose(next)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Close {run.data ? formatPeriod(run.data) : "this month"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {run.data?.assigned
+                ? `${run.data.assigned} open row${run.data.assigned === 1 ? "" : "s"} assigned to people will leave their lists. `
+                : ""}
+              While the month is closed, none of its rows can be handed to
+              anyone. Nothing is decided or deleted: you can still decide its
+              rows here, and reopening puts each open row back with whoever had
+              it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={monthState.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={monthState.isPending}
+              onClick={(event) => {
+                // Stay open while the request runs, so a 409 is not hidden
+                // behind a dialog that already closed.
+                event.preventDefault();
+                monthState.mutate(true);
+              }}
+            >
+              {monthState.isPending && <Loader2 aria-hidden className="size-4 animate-spin" />}
+              Close month
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

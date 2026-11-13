@@ -1,0 +1,72 @@
+meta {
+  name: List Assigned Rows (as Producer)
+  type: http
+  seq: 30
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/assigned?page=1&pageSize=25
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  pageSize: 25
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the row the owner just assigned, with its upload", function () {
+    const row = res.getBody().items.find((item) => item.id === bru.getVar("reconAssignRowId"));
+    expect(row).to.not.equal(undefined);
+    expect(row.assignment.user.id).to.equal(bru.getVar("currentUserId"));
+    expect(row.run.id).to.equal(bru.getVar("reconRunId"));
+    expect(row.run.startDate).to.equal("2026-09-01");
+  });
+
+  test("only rows assigned to the caller", function () {
+    for (const item of res.getBody().items) {
+      expect(item.assignment.user.id).to.equal(bru.getVar("currentUserId"));
+    }
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/assigned — the rows assigned to me
+
+  - **Module:** `carrier_reconciliation` (enabled for the agency)
+  - **Permission:** `carrier_reconciliation:read` **or** `leads:read`.
+    Producer and CSR templates hold `leads:read` and no reconciliation
+    permission: they see the rows handed to **them** and nothing else of the
+    report.
+
+  The caller's rows still waiting on a decision, on the agency's current
+  runs (finished, not replaced by a re-upload), oldest hand-off first — what
+  `/reconciliation/assigned` and the Producer Dashboard's "Dash follow-ups"
+  panel list. A row leaves the list once it is decided.
+
+  ## Query
+  - `page`, `pageSize` (≤ 100, default 25)
+  - `userId` — someone else's rows; needs `carrier_reconciliation:read` (403
+    otherwise)
+
+  ## Response `200`
+
+  ```json
+  { "items": [{ …ReconciliationRowView…,
+      "assignment": { "user": { "id": "…", "name": "Pat Producer" },
+        "assignedBy": { "id": "…", "name": "Olive Owner" },
+        "assignedAt": "2026-10-28T15:04:05.000Z", "note": "Enter the deal" },
+      "run": { "id": "…", "filename": "dash-new-business-demo.xlsx",
+        "startDate": "2026-09-01", "endDate": "2026-10-31" } }],
+    "page": 1, "pageSize": 25, "total": 1, "totalPages": 1 }
+  ```
+
+  ## Errors
+  - `403` — the module is off for the agency; no permission; `userId` without
+    `carrier_reconciliation:read`
+}

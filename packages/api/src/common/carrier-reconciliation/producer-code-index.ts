@@ -2,43 +2,33 @@ import type { BindIdStatus } from '@sfa/shared';
 import type { DashRow } from './dash-file-reader';
 
 /**
- * One user's Allstate codes, as the engine reads them (`loadStaffCodes`).
- * Codes are already normalised — the user write paths store them that way.
+ * One user's Allstate Bind ID, as the engine reads it (`loadStaffCodes`).
+ * Already normalised — the user write paths store it that way.
  */
 export interface StaffCodes {
   userId: string;
   name: string;
   bindId: string | null;
-  subProducerCode: string | null;
 }
 
-/** The agency's users, looked up by either Allstate code. */
+/** The agency's users, looked up by Bind ID. */
 export class ProducerCodeIndex {
   private readonly byBindId = new Map<string, StaffCodes>();
-  private readonly bySubProducer = new Map<string, StaffCodes>();
 
   constructor(staff: readonly StaffCodes[]) {
     for (const entry of staff) {
       if (entry.bindId) this.byBindId.set(entry.bindId, entry);
-      if (entry.subProducerCode) {
-        this.bySubProducer.set(entry.subProducerCode, entry);
-      }
     }
   }
 
   bindId(key: string | null): StaffCodes | undefined {
     return key ? this.byBindId.get(key) : undefined;
   }
-
-  subProducer(key: string | null): StaffCodes | undefined {
-    return key ? this.bySubProducer.get(key) : undefined;
-  }
 }
 
 /**
- * Whose login bound the policy. The 1-800 test reads **only** this: a
- * producer binding a colleague's sale is routine, so the sub-producer column
- * says nothing about whether the agency sold it.
+ * Whose login bound the policy — the 1-800 test, and who the line belongs to
+ * ({@link creditFor}).
  *
  * A Bind ID on no user is a **former employee** when Dash prints a Bind ID
  * Name beside it — the owner's rule (David, 27 Oct 2026): only an unnamed
@@ -57,56 +47,39 @@ export function bindIdStatus(
 }
 
 export interface DashCredit {
-  /** The sub-producer code Dash credits, when it names one. */
-  code: string | null;
-  /** The name Dash prints for whoever is credited. */
+  /** The binder's name: the app user's, else the name Dash prints. */
   name: string | null;
-  /** The app user holding that code, when one does. */
+  /** The app user holding the Bind ID, when one does. */
   userId: string | null;
   /** `bind_id` with no `userId` is a former employee Dash names. */
-  via: 'sub_producer' | 'bind_id' | 'none';
+  via: 'bind_id' | 'none';
 }
 
 /**
- * Who Dash credits with the sale — the scrubber's rule: the sub-producer, or
- * when the line has none, whoever bound it.
+ * Who a Dash line belongs to: the user whose **Bind ID** bound it, by the
+ * name the app knows them by.
  *
- * A sub-producer code on no user does **not** fall back to the Bind ID: the
- * line names someone, and crediting the binder instead would hide that the
- * code is missing from that person's profile.
+ * Dash's sub-producer column is not read (owner, 28 Oct 2026). Grouping by it
+ * listed one person twice — "JESSICA YATES (034)" for the lines Dash credits
+ * by code and "Jessica Yates" for the app's own policies — whenever the code
+ * was not on their user, and on the Jul–Sep 2026 export it named the binder
+ * on 374 of 382 sales anyway.
  *
- * A Bind ID on no user that Dash names is still credited to that name — a
- * former employee ({@link bindIdStatus}) — with no `userId`.
+ * A Bind ID on no user that Dash names is credited to that name — a former
+ * employee ({@link bindIdStatus}) — with no `userId`.
  */
 export function creditFor(
-  row: Pick<
-    DashRow,
-    'subProducerCode' | 'subProducerName' | 'bindIdKey' | 'bindIdName'
-  >,
+  row: Pick<DashRow, 'bindIdKey' | 'bindIdName'>,
   codes: ProducerCodeIndex,
 ): DashCredit {
-  if (row.subProducerCode) {
-    const holder = codes.subProducer(row.subProducerCode);
-    return {
-      code: row.subProducerCode,
-      name: row.subProducerName ?? holder?.name ?? null,
-      userId: holder?.userId ?? null,
-      via: 'sub_producer',
-    };
-  }
   const binder = codes.bindId(row.bindIdKey);
   if (binder) {
-    return {
-      code: null,
-      name: row.bindIdName ?? binder.name,
-      userId: binder.userId,
-      via: 'bind_id',
-    };
+    return { name: binder.name, userId: binder.userId, via: 'bind_id' };
   }
   if (row.bindIdKey && row.bindIdName) {
-    return { code: null, name: row.bindIdName, userId: null, via: 'bind_id' };
+    return { name: row.bindIdName, userId: null, via: 'bind_id' };
   }
   // Credited to nobody — and named as nobody, so the summary's `none` line
   // never borrows a person's name from a stray Bind ID Name.
-  return { code: null, name: null, userId: null, via: 'none' };
+  return { name: null, userId: null, via: 'none' };
 }

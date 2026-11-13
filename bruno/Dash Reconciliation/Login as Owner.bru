@@ -25,6 +25,8 @@ script:post-response {
   if (res.getStatus() === 201 || res.getStatus() === 200) {
     bru.setVar("reconToken", res.getBody().accessToken);
     bru.setVar("reconAgencyId", res.getBody().user.agencyId);
+    // The owner can work leads, so is in the assignee pool (Get Options).
+    bru.setVar("reconOwnerId", res.getBody().user.id);
   }
 }
 

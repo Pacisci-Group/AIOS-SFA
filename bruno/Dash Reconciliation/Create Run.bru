@@ -77,8 +77,9 @@ docs {
   and classifies it against the Allstate codes on the agency's users: a Bind
   ID on no user that Dash prints **no Bind ID Name** for ⇒ 1-800; a Bind ID on
   no user that Dash *names* ⇒ a former employee (`bindIdStatus:
-  "former_staff"`), never 1-800; sub-producer code, else Bind ID ⇒ who Dash
-  credits.
+  "former_staff"`), never 1-800. Each line belongs to the user whose Bind ID
+  bound it, by their name in the app; Dash's sub-producer column is not read
+  (owner, 28 Oct 2026).
 
   A matched policy is then checked against the app's, which is the source of
   truth: a premium that differs **by any amount, even a cent**

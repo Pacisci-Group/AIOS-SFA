@@ -356,6 +356,94 @@ describe('Dash Reconciliation re-upload (e2e)', () => {
     });
   });
 
+  describe('carrying an assignment', () => {
+    it('keeps it with someone who can still take rows, and drops it for someone who cannot', async () => {
+      const users = app.get<Model<User>>(getModelToken(User.name));
+      const producer = await users.findOne({ email: ctx.producerEmail }).lean();
+      const producerId = String(producer!._id);
+      const period = { start: '12/01/2026', end: '12/31/2026' };
+      const lines = [
+        agencyLine('900800001', '12/03/2026'),
+        agencyLine('900800002', '12/04/2026'),
+      ];
+      const { run: first } = await upload(
+        dashFile(lines, 'Fri, 01 Jan 2027 09:00:00 GMT', period),
+      );
+      const byNumber = async (runId: string) =>
+        new Map(
+          (await rowsOf(runId)).map((row) => [row.dash?.policyNumber, row]),
+        );
+      const firstRows = await byNumber(first.id);
+      for (const [number, userId] of [
+        ['900800001', producerId],
+        ['900800002', ctx.csrUserId],
+      ] as const) {
+        await api()
+          .patch(
+            `${base}/runs/${first.id}/rows/${firstRows.get(number)!.id}/assignment`,
+          )
+          .set(authHeader(ownerToken))
+          .send({ userId })
+          .expect(200);
+      }
+
+      // The CSR loses `leads:write` before the report is uploaded again.
+      const roleAssignments = app.get(RoleAssignmentsService);
+      await roleAssignments.setUserOverrides(
+        ctx.agencyId,
+        ctx.csrUserId,
+        [],
+        ['leads:write'],
+      );
+      try {
+        const { run: second } = await upload(
+          dashFile(lines, 'Sat, 02 Jan 2027 09:00:00 GMT', period),
+        );
+        const secondRows = await byNumber(second.id);
+        const stored = async (number: string) =>
+          (await rows.findById(secondRows.get(number)!.id).lean())!.assignment;
+        expect((await stored('900800001'))?.userId).toBe(producerId);
+        expect(await stored('900800002')).toBeNull();
+      } finally {
+        await roleAssignments.setUserOverrides(
+          ctx.agencyId,
+          ctx.csrUserId,
+          [],
+          [],
+        );
+      }
+    });
+  });
+
+  /** PAC-173 review: closing is about the month, not one file of it. */
+  describe('a closed month', () => {
+    it('stays closed when its report is uploaded again', async () => {
+      const period = { start: '11/01/2026', end: '11/30/2026' };
+      const lines = [agencyLine('900700001', '11/05/2026')];
+      const monthState = (runId: string, verb: 'close' | 'reopen') =>
+        api().post(`${base}/runs/${runId}/${verb}`).set(authHeader(ownerToken));
+
+      const { run: first } = await upload(
+        dashFile(lines, 'Tue, 01 Dec 2026 09:00:00 GMT', period),
+      );
+      const closed = (await monthState(first.id, 'close').expect(201))
+        .body as ReconciliationRunDetail;
+
+      const { run: second } = await upload(
+        dashFile(lines, 'Wed, 02 Dec 2026 09:00:00 GMT', period),
+      );
+      expect(second.supersedesRunId).toBe(first.id);
+      expect(second.closedAt).toBe(closed.closedAt);
+      expect(second.closedBy?.id).toBe(closed.closedBy?.id);
+
+      // The month is reopened on the run that replaced it, not the old one.
+      await monthState(first.id, 'reopen').expect(409);
+      const reopened = (await monthState(second.id, 'reopen').expect(201))
+        .body as ReconciliationRunDetail;
+      expect(reopened.closedAt).toBeNull();
+    });
+  });
+
   describe('a replayed upload', () => {
     it("keeps the live run's file when the same request arrives twice", async () => {
       const bytes = dashFile(

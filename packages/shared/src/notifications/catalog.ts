@@ -71,6 +71,28 @@ export const NOTIFICATION_TYPES = {
     category: 'audits',
     defaultChannels: { email: true, push: true },
   },
+  /**
+   * The agency owner assigned a Dash Reconciliation row to a Producer or CSR
+   * (PAC-173). Recipients: the assignee — never the person who assigned it.
+   * `data`: `{ rowId, runId, policyNumber, customerName, tabLabel,
+   * assignerName }`. No email: nothing producer-facing is emailed from this
+   * feature (owner, 26 Oct 2026); in-app and push are the hand-off.
+   */
+  'reconciliation.row_assigned': {
+    category: 'service',
+    defaultChannels: { email: false, push: true },
+  },
+  /**
+   * A work transfer handed someone's open Dash Reconciliation rows to a
+   * colleague (PAC-173 review). One per transfer, not one per row: a departing
+   * producer can hold dozens. Recipients: the colleague — never the person who
+   * ran the transfer. `data`: `{ count, fromName, assignerName }`. No email,
+   * like `reconciliation.row_assigned`.
+   */
+  'reconciliation.rows_transferred': {
+    category: 'service',
+    defaultChannels: { email: false, push: true },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

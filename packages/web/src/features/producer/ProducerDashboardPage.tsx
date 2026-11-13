@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { Header } from "./components/Header";
 import { ScoreCards } from "./components/ScoreCards";
+import { DashFollowUpsPanel } from "./components/DashFollowUpsPanel";
 import { DealsAuditBoard } from "./components/DealsAuditBoard";
 import { HotLeadsPanel } from "./components/HotLeadsPanel";
 import { useDashboardRange } from "./useDashboardRange";
@@ -15,6 +16,11 @@ export default function ProducerDashboardPage() {
       <div className="flex-1">
         {/* Scorecards */}
         <ScoreCards range={range} />
+
+        {/* Dash Reconciliation rows assigned to this person (PAC-173). Its own
+            block, never a third child of the grid below, and it renders
+            nothing — padding included — when nothing is assigned. */}
+        <DashFollowUpsPanel />
 
         {/* Workspace 60/40 split, stacked below `xl`. `xl` rather than `lg`
             because the hand-off board needs ~500px before its four columns

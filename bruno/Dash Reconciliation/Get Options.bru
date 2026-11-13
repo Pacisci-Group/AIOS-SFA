@@ -19,26 +19,37 @@ tests {
     expect(res.getStatus()).to.equal(200);
   });
 
-  test("lists the agency's people", function () {
-    const users = res.getBody().users;
-    expect(users).to.be.an("array").that.is.not.empty;
-    expect(users[0]).to.have.keys(["id", "name", "isActive"]);
+  test("lists the people who can work leads", function () {
+    const assignees = res.getBody().assignees;
+    expect(assignees).to.be.an("array").that.is.not.empty;
+    expect(assignees[0]).to.have.keys(["id", "name", "email", "roles"]);
+    // By permission (`leads:write`), not role: Auth/Login's producer and the
+    // owner both qualify.
+    const ids = assignees.map((person) => person.id);
+    expect(ids).to.include(bru.getVar("currentUserId"));
+    expect(ids).to.include(bru.getVar("reconOwnerId"));
   });
 }
 
 docs {
-  # GET /carrier-reconciliation/options — the agency's people, for pickers
+  # GET /carrier-reconciliation/options — who a row can be assigned to
 
   - **Module:** `carrier_reconciliation`
   - **Permission:** `carrier_reconciliation:read`
   - **Data scope:** none — the page is agency-wide by design.
 
-  Every user of the caller's agency (platform admins excluded), active first,
-  for the page's user pickers.
+  The assignee picker: the agency's **active users who can work leads** —
+  effective permissions (role defaults, plus grants, less revokes, within the
+  enabled modules) that include `leads:write` — by first, then last name.
+  Decided by permission, never by role name, so a custom role that carries
+  it qualifies. `roles` are the person's role **names**, for display only.
+  Pending invites, deactivated users and platform admins are left out. The
+  same pool is what `Assign Row` accepts.
 
   ## Response `200`
 
   ```json
-  { "users": [{ "id": "6a95…", "name": "Pat Producer", "isActive": true }] }
+  { "assignees": [{ "id": "6a95…", "name": "Pat Producer",
+      "email": "producer@demoagency.local", "roles": ["Producer"] }] }
   ```
 }

@@ -23,6 +23,19 @@ const FIXTURES: Record<keyof typeof NOTIFICATION_TYPES, Record<string, unknown>>
       note: 'The declarations page is for the wrong vehicle.',
       failedItemCount: 1,
     },
+    'reconciliation.row_assigned': {
+      rowId: '6ae1bceaa8d09054f813c0f1',
+      runId: '6ae1bceaa8d09054f813c0ea',
+      policyNumber: '900200000',
+      customerName: 'LISA TAYLOR',
+      tabLabel: 'Premium differs',
+      assignerName: 'Olive Owner',
+    },
+    'reconciliation.rows_transferred': {
+      count: 3,
+      fromName: 'Pat Producer',
+      assignerName: 'Olive Owner',
+    },
   };
 
 describe('renderNotification', () => {
@@ -77,5 +90,48 @@ describe('renderNotification', () => {
     expect(rendered.body).toBe(
       'Pat Producer: The leaderboard still shows last month',
     );
+  });
+
+  it('names the Dash policy and opens it on the assignee page', () => {
+    const rendered = renderNotification(
+      'reconciliation.row_assigned',
+      FIXTURES['reconciliation.row_assigned'],
+    );
+    expect(rendered).toEqual({
+      title: 'Dash policy assigned to you',
+      body: '900200000 · LISA TAYLOR · Premium differs',
+      href: '/reconciliation/assigned?row=6ae1bceaa8d09054f813c0f1',
+    });
+  });
+
+  it('falls back to the assignee page when the row is missing or not an id', () => {
+    for (const data of [{}, { rowId: '../../admin' }]) {
+      const rendered = renderNotification('reconciliation.row_assigned', data);
+      expect(rendered.href).toBe('/reconciliation/assigned');
+      expect(rendered.body).toBe('A line from the Dash report needs you.');
+    }
+  });
+
+  it('says how many Dash lines a transfer handed over, and from whom', () => {
+    expect(
+      renderNotification(
+        'reconciliation.rows_transferred',
+        FIXTURES['reconciliation.rows_transferred'],
+      ),
+    ).toEqual({
+      title: 'Dash policies handed to you',
+      body: "3 Dash lines from Pat Producer's list are now yours.",
+      href: '/reconciliation/assigned',
+    });
+    expect(
+      renderNotification('reconciliation.rows_transferred', {
+        count: 1,
+        fromName: 'Pat Producer',
+      }).body,
+    ).toBe("1 Dash line from Pat Producer's list is now yours.");
+    expect(
+      renderNotification('reconciliation.rows_transferred', { count: 'many' })
+        .body,
+    ).toBe('Dash lines are now yours.');
   });
 });

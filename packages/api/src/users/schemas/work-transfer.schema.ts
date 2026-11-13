@@ -47,6 +47,17 @@ export class WorkTransferTouched {
 
   @Prop({ type: [ObjectIdType], default: [] })
   rotationsDeactivated: Types.ObjectId[];
+
+  /** Dash Reconciliation rows still waiting on a decision (PAC-173). */
+  @Prop({ type: [ObjectIdType], default: [] })
+  reconciliationRows: Types.ObjectId[];
+
+  /**
+   * Dash rows the successor cannot be given — they cannot work leads — sent
+   * back to the owner unassigned instead of moved (PAC-173 review).
+   */
+  @Prop({ type: [ObjectIdType], default: [] })
+  reconciliationRowsReleased: Types.ObjectId[];
 }
 
 const WorkTransferTouchedSchema =

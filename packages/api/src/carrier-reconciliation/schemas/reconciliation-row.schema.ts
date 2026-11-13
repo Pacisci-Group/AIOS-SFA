@@ -10,6 +10,7 @@ import type {
   RetiredReconciliationResolution,
 } from '@sfa/shared';
 import { HydratedDocument, Types } from 'mongoose';
+import type { RowAssignment } from '../../common/carrier-reconciliation/carry-forward';
 import type { DashRow } from '../../common/carrier-reconciliation/dash-file-reader';
 import type { DashCredit } from '../../common/carrier-reconciliation/producer-code-index';
 import type {
@@ -39,6 +40,35 @@ export interface StoredReview {
   /** The superseded run's row this decision was carried from. */
   carriedForwardFromRowId: string | null;
 }
+
+/**
+ * Who a row was handed to ({@link RowAssignment}), as a real sub-schema
+ * rather than `type: Object` (PAC-173 review): writes are cast and checked
+ * against these four fields, and anything else is dropped.
+ *
+ * The ids stay **strings**, like every id on these rows — the `assignment.userId`
+ * index and every query compare them as strings, and rows stored before this
+ * schema already have exactly this shape, so nothing needs migrating.
+ */
+@Schema({ _id: false })
+export class StoredAssignment implements RowAssignment {
+  /** Lower-case hex, as `openAssignmentsFilter` queries it. */
+  @Prop({ type: String, required: true, lowercase: true, trim: true })
+  userId: string;
+
+  /** Who handed it over — the owner, or whoever ran a work transfer. */
+  @Prop({ type: String, default: null, lowercase: true, trim: true })
+  assignedById: string | null;
+
+  @Prop({ type: Date, required: true })
+  assignedAt: Date;
+
+  @Prop({ type: String, default: null })
+  note: string | null;
+}
+
+export const StoredAssignmentSchema =
+  SchemaFactory.createForClass(StoredAssignment);
 
 /**
  * One line of a run: a Dash line, an app policy Dash does not show, or both.
@@ -98,7 +128,7 @@ export class ReconciliationRow {
   @Prop({ type: Object, required: true })
   credit: DashCredit;
 
-  /** `user:<id>`, `code:<sub-producer>`, `bind:<Bind ID>` or `none` — the producer filter. */
+  /** `user:<id>`, `bind:<Bind ID>` or `none` — the producer filter. */
   @Prop({ required: true })
   producerKey: string;
 
@@ -113,6 +143,15 @@ export class ReconciliationRow {
 
   @Prop({ type: Object, required: true })
   review: StoredReview;
+
+  /**
+   * Who the owner handed the row to (a Producer or CSR), or `null`. Its own
+   * field rather than part of `review`, so saving a decision — which replaces
+   * `review` whole — can never drop it. `userId` is a string, like every id in
+   * these snapshots; queries must compare it as one.
+   */
+  @Prop({ type: StoredAssignmentSchema, default: null })
+  assignment: RowAssignment | null;
 
   /** Lower-cased policy numbers and names, for the search box. */
   @Prop({ default: '' })
@@ -151,5 +190,15 @@ ReconciliationRowSchema.index({
   agencyId: 1,
   runId: 1,
   needsReview: 1,
+  'review.status': 1,
+});
+/**
+ * A person's assigned rows — their page, the dashboard panel, work transfer.
+ * Not partial: a `$type` filter is one an equality query on the user id does
+ * not prove, so the planner would never pick it.
+ */
+ReconciliationRowSchema.index({
+  agencyId: 1,
+  'assignment.userId': 1,
   'review.status': 1,
 });
