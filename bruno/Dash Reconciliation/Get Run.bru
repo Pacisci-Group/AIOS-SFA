@@ -70,6 +70,10 @@ docs {
   not yet booked (see `Record Outcome (Sold)`). A finished outcome decides
   its row, so it is in neither.
 
+  `closedAt` / `closedBy` are set while the owner has closed the month
+  (`Close Run`): its rows are then on nobody's list and cannot be handed to
+  anyone. Both `null` on an open run.
+
   ## Errors
   - `400` — `:id` is not an ObjectId
   - `404` — no such run in the agency

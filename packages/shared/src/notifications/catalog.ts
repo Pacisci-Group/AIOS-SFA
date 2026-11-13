@@ -82,6 +82,17 @@ export const NOTIFICATION_TYPES = {
     category: 'service',
     defaultChannels: { email: false, push: true },
   },
+  /**
+   * A work transfer handed someone's open Dash Reconciliation rows to a
+   * colleague (PAC-173 review). One per transfer, not one per row: a departing
+   * producer can hold dozens. Recipients: the colleague — never the person who
+   * ran the transfer. `data`: `{ count, fromName, assignerName }`. No email,
+   * like `reconciliation.row_assigned`.
+   */
+  'reconciliation.rows_transferred': {
+    category: 'service',
+    defaultChannels: { email: false, push: true },
+  },
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

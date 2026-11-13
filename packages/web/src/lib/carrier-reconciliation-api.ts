@@ -289,6 +289,23 @@ export function reclassifyRun(runId: string) {
   });
 }
 
+/**
+ * Close a month: its rows leave everyone's "Assigned to me" list and cannot
+ * be handed to anyone until it is reopened. Answers with the run.
+ */
+export function closeReconciliationRun(runId: string) {
+  return apiFetch<ReconciliationRunDetail>(`${BASE}/runs/${runId}/close`, {
+    method: "POST",
+  });
+}
+
+/** Reopen a closed month; its open rows are back on their assignees' lists. */
+export function reopenReconciliationRun(runId: string) {
+  return apiFetch<ReconciliationRunDetail>(`${BASE}/runs/${runId}/reopen`, {
+    method: "POST",
+  });
+}
+
 /** Fetches the export with the session's token and saves it. */
 export async function downloadReconciliationExport(
   runId: string,

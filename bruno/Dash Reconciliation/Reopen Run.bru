@@ -1,0 +1,57 @@
+meta {
+  name: Reopen Run
+  type: http
+  seq: 39
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/reopen
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+tests {
+  test("returns 201", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("the run is open again", function () {
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("reconRunId"));
+    expect(body.closedAt).to.equal(null);
+    expect(body.closedBy).to.equal(null);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/runs/:id/reopen — reopen a closed month
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:write`
+
+  The month's open rows are back on their assignees' lists, and its rows can
+  be handed to people again.
+
+  Except a row whose assignee can no longer be given rows — they left the
+  agency, or lost `leads:write`, while the month was closed. A work transfer
+  or release never saw that row (it was on no list), so it starts with nobody
+  on it, as a re-upload treats a carried assignment. A decided row keeps
+  whoever worked it.
+
+  Idempotent: reopening an open month answers the run unchanged. Runs last in
+  the folder, so a re-run starts from an open month.
+
+  ## Response `201`
+
+  The run (`ReconciliationRunDetail`), `closedAt` and `closedBy` both `null`.
+
+  ## Errors
+  - `400` — `:id` is not an ObjectId
+  - `403` — no `carrier_reconciliation:write`
+  - `404` — no such run in the agency
+  - `409` — a re-upload replaced the run, or the run did not finish
+}

@@ -72,14 +72,17 @@ docs {
     no active slot for that producer, switched off otherwise — a pool is never
     doubled, and `activeForProducer` is never turned on.
   - Dash Reconciliation rows assigned to them that still wait on a decision, on
-    current runs (`assignment.userId`; `assignedById` / `assignedAt` become the
-    transfer's). A decided row keeps the name of whoever worked it (PAC-173).
-    A row the successor could not be given — they cannot work leads
-    (`leads:write`), or it is a sale (missing from the app, or a sale under
-    way on it) and they cannot book one — goes back to the owner unassigned
-    instead, as a release leaves it: an unbooked outcome under way is
-    cleared, one that has booked a sale is kept. Counted in
-    `reconciliationRowsUnassigned` (also part of `reconciliationRows`).
+    current runs and not in a month the owner closed (`assignment.userId`;
+    `assignedById` becomes whoever ran the transfer, `assignedAt` its time).
+    The successor gets **one** `reconciliation.rows_transferred` push for the
+    lot (none when nothing moved, or when they ran it themselves). A decided
+    row keeps the name of whoever worked it (PAC-173). A row the successor
+    could not be given — they cannot work leads (`leads:write`), or it is a
+    sale (missing from the app, or a sale under way on it) and they cannot
+    book one — goes back to the owner unassigned instead, as a release leaves
+    it: an unbooked outcome under way is cleared, one that has booked a sale
+    is kept. Counted in `reconciliationRowsUnassigned` (also part of
+    `reconciliationRows`).
 
   ## What never moves
   Attribution — `deals/quoteRecaps.producerId`, **resolved** audit items, `createdBy*`,

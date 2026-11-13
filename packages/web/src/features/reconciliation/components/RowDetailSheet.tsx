@@ -102,11 +102,14 @@ const SUGGESTION_REASONS: Record<ReconciliationSuggestion["reasons"][number], st
  */
 export function RowDetailSheet({
   runId,
+  runClosed = false,
   row,
   onClose,
   onRowChanged,
 }: {
   runId: string;
+  /** The owner closed this month: nothing in it can be handed to anyone. */
+  runClosed?: boolean;
   row: ReconciliationRowView | null;
   onClose: () => void;
   onRowChanged: (row: ReconciliationRowView) => void;
@@ -121,6 +124,7 @@ export function RowDetailSheet({
           <RowDetail
             key={row.id}
             runId={runId}
+            runClosed={runClosed}
             row={row}
             onRowChanged={onRowChanged}
           />
@@ -132,10 +136,12 @@ export function RowDetailSheet({
 
 function RowDetail({
   runId,
+  runClosed,
   row,
   onRowChanged,
 }: {
   runId: string;
+  runClosed: boolean;
   row: ReconciliationRowView;
   onRowChanged: (row: ReconciliationRowView) => void;
 }) {
@@ -154,8 +160,10 @@ function RowDetail({
     can(`${ModuleKey.DealAudits}:write`) &&
     (canWrite ||
       (!!row.app?.producerId && row.app.producerId === user?.id));
-  // The API assigns only a row still waiting on a decision.
-  const canAssign = canWrite && row.needsReview && row.review.status === "open";
+  // The API assigns only a row still waiting on a decision, in a month that
+  // is not closed.
+  const assignable = canWrite && row.needsReview && row.review.status === "open";
+  const canAssign = assignable && !runClosed;
   const { dash, app } = row;
   const showAppLinks =
     canOpenRecords || (canEditSale && app?.dealId != null);
@@ -346,21 +354,30 @@ function RowDetail({
             cannot set anyone's code or re-check the run. */}
         {dash && canWrite && <UnknownCodesHint row={row} />}
 
-        {(canAssign || row.assignment) && (
+        {(assignable || row.assignment) && (
           <section className="space-y-3">
             <SectionLabel>Assignment</SectionLabel>
             {row.assignment ? (
               <AssignmentSummary assignment={row.assignment} />
-            ) : (
+            ) : canAssign ? (
               <p className="text-sm text-muted-foreground">
                 {row.tabs.includes("missing_from_app")
                   ? "Not assigned. Hand it to someone who can book the sale"
                   : "Not assigned. Hand it to someone who works leads"}{" "}
                 — they are notified and see it on their own page.
               </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">Not assigned.</p>
             )}
             {canAssign && (
               <AssignmentForm runId={runId} row={row} onSaved={onRowChanged} />
+            )}
+            {runClosed && row.needsReview && row.review.status === "open" && (
+              <p className="text-sm text-muted-foreground">
+                {canWrite
+                  ? "This month is closed, so the row is on nobody's list. Reopen the month to hand it to someone."
+                  : "The owner closed this month, so this row is off your list for now."}
+              </p>
             )}
           </section>
         )}

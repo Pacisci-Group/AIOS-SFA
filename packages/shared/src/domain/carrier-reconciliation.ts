@@ -600,6 +600,14 @@ export interface ReconciliationRunView {
   openReviews: number;
   supersedesRunId: string | null;
   supersededByRunId: string | null;
+  /**
+   * When the owner closed this month, or `null`. A closed run's rows leave
+   * every assignee's list and cannot be handed to anyone until it is reopened;
+   * the owner can still decide them here. A re-upload of a closed month stays
+   * closed.
+   */
+  closedAt: string | null;
+  closedBy: { id: string; name: string } | null;
   createdAt: string;
   createdBy: { id: string; name: string } | null;
 }
@@ -809,6 +817,8 @@ export interface ReconciliationAssignedRow extends ReconciliationRowView {
     filename: string;
     startDate: string | null;
     endDate: string | null;
+    /** Set when the owner closed the month: the row is off the list. */
+    closedAt: string | null;
   };
 }
 
