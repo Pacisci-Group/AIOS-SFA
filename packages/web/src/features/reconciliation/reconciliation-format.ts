@@ -21,6 +21,14 @@ const CURRENCY_CENTS = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const CURRENCY_DELTA = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  signDisplay: "exceptZero",
+});
+
 /** `$19,232` — whole dollars for totals. */
 export function formatMoney(value: number | null | undefined): string {
   return value == null ? NOT_AVAILABLE : CURRENCY.format(value);
@@ -29,6 +37,11 @@ export function formatMoney(value: number | null | undefined): string {
 /** `$1,886.15` — a single policy's premium, as Dash prints it. */
 export function formatPremium(value: number | null | undefined): string {
   return value == null ? NOT_AVAILABLE : CURRENCY_CENTS.format(value);
+}
+
+/** `+$12.40` / `-$0.01` — how far the app's premium is from Dash's, signed. */
+export function formatPremiumDelta(value: number | null | undefined): string {
+  return value == null ? NOT_AVAILABLE : CURRENCY_DELTA.format(value);
 }
 
 export function formatCount(value: number | null | undefined): string {
@@ -84,8 +97,10 @@ export function formatPeriod(run: Pick<ReconciliationRunView, "fileMeta">): stri
 
 /** Issues worth a pill in the table; the rest show in the drawer. */
 const HEADLINE_ISSUES: readonly ReconciliationIssue[] = [
+  "direct_recorded_as_sale",
   "not_staff_bind_id",
   "producer_mismatch",
+  "premium_mismatch",
   "number_format",
   "missing_policy_number",
   "duplicate_in_app",
@@ -105,6 +120,9 @@ export const ISSUE_SHORT_LABELS: Record<ReconciliationIssue, string> = {
   former_staff_bind_id: "Named, not on a user",
   no_bind_id: "No Bind ID",
   direct_channel: "1-800 / web",
+  direct_recorded_as_sale: "1-800 on a sale",
+  premium_mismatch: "Premium differs",
+  item_count_mismatch: "Items differ",
   producer_mismatch: "Credit differs",
   unmapped_producer: "Code not on staff",
   no_app_producer: "No app producer",

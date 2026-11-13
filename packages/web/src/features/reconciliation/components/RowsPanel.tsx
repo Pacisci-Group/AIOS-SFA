@@ -6,6 +6,7 @@ import {
   RECONCILIATION_REVIEW_STATUS_LABELS,
   RECONCILIATION_TAB_LABELS,
   RECONCILIATION_TABS,
+  reconciliationPremiumDelta,
   type DataExportFormat,
 } from "@sfa/shared";
 import { DataPanel } from "@/components/common/DataPanel";
@@ -43,8 +44,10 @@ import {
   type ReconciliationTab,
 } from "@/lib/carrier-reconciliation-api";
 import {
+  formatCount,
   formatDay,
   formatPremium,
+  formatPremiumDelta,
   headlineIssues,
   issueLabel,
   ISSUE_SHORT_LABELS,
@@ -60,6 +63,7 @@ const DECISION_TABS: ReadonlySet<ReconciliationTab> = new Set([
   "missing_from_app",
   "not_in_dash",
   "review_1800",
+  "premium_mismatch",
   "producer_mismatch",
 ]);
 
@@ -70,7 +74,9 @@ const TAB_HINTS: Record<ReconciliationTab, string> = {
   not_in_dash:
     "Policies sold in the app during this period that Dash does not list: usually a mistyped number, or a policy not issued yet.",
   review_1800:
-    "Bound by an Allstate login that is on nobody on staff and that Dash prints no name for — Allstate's call centre or an automated system: business Allstate sold and assigned to the agency to service. A login Dash names is a former employee's and is never here. If the Bind ID is one of the agency's people, set it on them on the Users page and Re-check the run.",
+    "Bound by an Allstate login that is on nobody on staff and that Dash prints no name for — Allstate's call centre or an automated system: business Allstate sold and assigned to the agency to service. A login Dash names is a former employee's and is never here. A 1-800 policy the app has on a sale is listed too: it should be serviced, not sold. If the Bind ID is one of the agency's people, set it on them on the Users page and Re-check the run.",
+  premium_mismatch:
+    "In both, but the app's premium is not Dash's written premium to the cent. Any difference is listed — often fees the app includes and Dash leaves out. The app is the source of truth: correct the sale if it is wrong, or record that Dash's figure is.",
   producer_mismatch:
     "In both, but Dash credits a different producer than the app's deal does.",
   matched: "In both, by policy number.",
@@ -140,6 +146,8 @@ export function RowsPanel({
   };
 
   const data = rows.data;
+  // The Premium tab shows how far apart the two figures are.
+  const showDelta = filter.tab === "premium_mismatch";
 
   return (
     <DataPanel
@@ -170,7 +178,14 @@ export function RowsPanel({
               })}
             </TabsList>
           </Tabs>
-          <p className="text-sm text-muted-foreground">{TAB_HINTS[filter.tab]}</p>
+          <p className="text-sm text-muted-foreground">
+            {TAB_HINTS[filter.tab]}
+            {filter.tab === "premium_mismatch" && run.totals?.premiumMismatch
+              ? ` ${formatCount(run.totals.premiumMismatch)} ${
+                  run.totals.premiumMismatch === 1 ? "policy is" : "policies are"
+                } ${formatPremium(run.totals.premiumMismatchDelta)} apart in all.`
+              : null}
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             <TableSearchInput
               value={search}
@@ -242,6 +257,9 @@ export function RowsPanel({
             <TableHead>Bind ID</TableHead>
             <TableHead>Date</TableHead>
             <TableHead className="text-right">Premium</TableHead>
+            {showDelta && (
+              <TableHead className="text-right">App − Dash</TableHead>
+            )}
             <TableHead>Flags</TableHead>
             <TableHead className="pr-5">Review</TableHead>
           </TableRow>
@@ -275,6 +293,13 @@ export function RowsPanel({
               <TableCell className="text-right tabular-nums">
                 {formatPremium(row.dash?.writtenPremium ?? row.app?.premium)}
               </TableCell>
+              {showDelta && (
+                <TableCell className="text-right tabular-nums">
+                  {formatPremiumDelta(
+                    reconciliationPremiumDelta(row.dash?.writtenPremium, row.app?.premium),
+                  )}
+                </TableCell>
+              )}
               <TableCell>
                 <div className="flex flex-wrap gap-1">
                   {headlineIssues(row)

@@ -65,7 +65,15 @@ export function toRunView(
       endDate: run.window?.to ?? run.fileMeta.endDate,
       rowCount: run.fileMeta.rowCount,
     },
-    totals: run.totals,
+    // A run classified before premiums were compared stored neither figure;
+    // it has no rows in that tab either, until it is re-checked.
+    totals: run.totals
+      ? {
+          ...run.totals,
+          premiumMismatch: run.totals.premiumMismatch ?? 0,
+          premiumMismatchDelta: run.totals.premiumMismatchDelta ?? 0,
+        }
+      : null,
     openReviews,
     supersedesRunId: run.supersedesRunId ? String(run.supersedesRunId) : null,
     supersededByRunId: run.supersededByRunId

@@ -407,11 +407,17 @@ function ReviewForm({
       ),
     ),
   ].filter((value) => RECONCILIATION_RESOLUTIONS.includes(value));
+  // A stored resolution the row no longer offers — a retired one such as
+  // `confirmed_1800`, or one from a tab the row has left — starts blank, so
+  // saving asks for a current one instead of sending what the API refuses.
+  const current = row.review.resolution;
+  const initialResolution =
+    current && (resolutions as readonly string[]).includes(current) ? current : "";
 
   const form = useAppForm({
     defaultValues: {
       status: row.review.status === "open" ? "resolved" : row.review.status,
-      resolution: row.review.resolution ?? "",
+      resolution: initialResolution,
       note: row.review.note ?? "",
     } as z.infer<typeof reviewSchema>,
     validators: { onSubmit: reviewSchema },

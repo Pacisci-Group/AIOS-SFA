@@ -1,0 +1,64 @@
+meta {
+  name: List Run Rows (Premium Differs)
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/carrier-reconciliation/runs/{{reconRunId}}/rows?tab=premium_mismatch&pageSize=25
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{reconToken}}
+}
+
+params:query {
+  tab: premium_mismatch
+  pageSize: 25
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("a matched policy a single cent apart is listed", function () {
+    const row = res.getBody().items.find((item) => item.dash.policyNumber === "900200000");
+    expect(row).to.not.equal(undefined);
+    expect(row.match).to.equal("matched");
+    expect(row.tabs).to.include.members(["matched", "premium_mismatch"]);
+    expect(row.issues).to.include("premium_mismatch");
+    expect(row.needsReview).to.equal(true);
+    // Compared in whole cents: Dash $1,928.01, the app $1,928.00.
+    expect(Math.round(row.app.premium * 100) - Math.round(row.dash.writtenPremium * 100)).to.equal(-1);
+  });
+
+  test("only premium differences", function () {
+    for (const item of res.getBody().items) {
+      expect(item.issues).to.include("premium_mismatch");
+    }
+  });
+}
+
+docs {
+  # GET /carrier-reconciliation/runs/:id/rows?tab=premium_mismatch — premiums that differ
+
+  - **Module:** `carrier_reconciliation`
+  - **Permission:** `carrier_reconciliation:read`
+
+  Matched policies whose premium in the app is not Dash's written premium **to
+  the cent**: both are rounded to whole cents and any difference flags, so
+  `1234.5` and `1234.50` agree while `1234.5` and `1234.51` do not (David,
+  27 Oct 2026). The app is the source of truth; most differences are fees the
+  app includes and Dash leaves out. A row whose Dash premium is blank is not
+  compared.
+
+  Each row asks for a decision: `premium_corrected` (the sale was wrong and is
+  fixed), `carrier_figure_wrong` (Dash is wrong, the app is right) or `other`.
+  The page shows the difference as app minus Dash; the run's
+  `totals.premiumMismatchDelta` sums the absolute differences.
+
+  Query, paging and the row shape are as in `List Run Rows (1-800 Review)`.
+}

@@ -21,8 +21,8 @@ headers {
 body:json {
   {
     "status": "resolved",
-    "resolution": "confirmed_1800",
-    "note": "Assigned by Allstate; reviewed by Bruno"
+    "resolution": "service_set_up",
+    "note": "Allstate 1-800 policy; set up for service by Bruno"
   }
 }
 
@@ -34,7 +34,7 @@ tests {
   test("records the decision and who made it", function () {
     const review = res.getBody().review;
     expect(review.status).to.equal("resolved");
-    expect(review.resolution).to.equal("confirmed_1800");
+    expect(review.resolution).to.equal("service_set_up");
     expect(review.reviewedBy.name).to.be.a("string");
     expect(review.reviewedAt).to.be.a("string");
   });
@@ -49,8 +49,18 @@ docs {
   ## Body
   - `status` — `open` | `resolved` | `dismissed`
   - `resolution` — required with `resolved`: `entered_in_app`,
-    `number_corrected`, `credit_corrected`, `confirmed_1800`, `timing`,
-    `not_ours`, `duplicate`, `other`
+    `number_corrected`, `credit_corrected`, `premium_corrected`,
+    `carrier_figure_wrong`, `service_set_up`, `timing`, `not_ours`,
+    `duplicate`, `other`. The page offers the ones that fit the row's tabs:
+    - Missing from app — `entered_in_app`, `number_corrected`, `not_ours`, `other`
+    - Not in Dash — `number_corrected`, `timing`, `not_ours`, `duplicate`, `other`
+    - 1-800 review — `service_set_up`, `not_ours`, `other`
+    - Premium differs — `premium_corrected`, `carrier_figure_wrong`, `other`
+    - Producer mismatch — `credit_corrected`, `other`
+
+    `confirmed_1800` is retired (a 1-800 policy is now set up for service):
+    a review can no longer set it, a row decided with it still reads back with
+    its label, and a re-upload reopens that row instead of carrying it.
   - `note` — optional, ≤ 2000 characters; omitted keeps the current note
 
   Reopening (`open`) clears the resolution and the reviewer. A decision on a

@@ -1,5 +1,6 @@
 import {
   normalizeCarrier,
+  reconciliationPremiumDelta,
   type BindIdStatus,
   type ReconciliationIgnoredReason,
   type ReconciliationIssue,
@@ -27,8 +28,9 @@ import {
  *    the app's policies, so its result never changes for a stored run.
  * 2. {@link deriveRow} classifies a matched row against the Allstate codes on
  *    the agency's **users** — who bound it, who Dash credits, which tabs it
- *    belongs in. Setting someone's Bind ID re-runs only this stage over the
- *    stored rows (`reclassify`), without re-reading the file.
+ *    belongs in — and checks a matched policy against the app's (premium,
+ *    producer, items). Setting someone's Bind ID re-runs only this stage over
+ *    the stored rows (`reclassify`), without re-reading the file.
  */
 
 /** An app policy, flattened with its deal — what a Dash line is matched to. */
@@ -468,6 +470,7 @@ const REVIEW_TABS: ReadonlySet<ReconciliationTab> = new Set([
   'missing_from_app',
   'not_in_dash',
   'review_1800',
+  'premium_mismatch',
   'producer_mismatch',
 ]);
 
@@ -506,12 +509,34 @@ export function deriveRow(base: RowBase, codes: ProducerCodeIndex): RowDerived {
   // who started on allstate.com and was bound by the agency is the agency's.
   const isDirect = !!dash && status === 'not_staff' && (base.isSale || direct);
 
+  // A matched policy is checked against the app's, which is the source of
+  // truth: any difference is for a person to look at.
   if (base.match === 'matched') {
     tabs.add('matched');
     if (!app?.producerId) issues.add('no_app_producer');
     else if (credit.userId && credit.userId !== app.producerId) {
       issues.add('producer_mismatch');
       tabs.add('producer_mismatch');
+    }
+    // Even a cent (David, 27 Oct 2026). Most are fees the app includes and
+    // Dash's written premium does not.
+    const delta = reconciliationPremiumDelta(
+      dash?.writtenPremium,
+      app?.premium,
+    );
+    if (delta !== null && delta !== 0) {
+      issues.add('premium_mismatch');
+      tabs.add('premium_mismatch');
+    }
+    if (dash?.itemCount != null && app && dash.itemCount !== app.items) {
+      issues.add('item_count_mismatch');
+    }
+    // A 1-800 policy is serviced, never sold, so one the app has on a deal
+    // was recorded as somebody's sale. The row is in 1-800 review already
+    // (its Bind ID makes it direct); this says why. A login Dash names is a
+    // former employee's — the agency's own sale — and never counts.
+    if (app?.dealId && status === 'not_staff') {
+      issues.add('direct_recorded_as_sale');
     }
   }
   if (base.match === 'dash_only' && !isDirect) tabs.add('missing_from_app');
@@ -581,12 +606,14 @@ export function summarize(rows: readonly SummaryRow[]): {
     missing: 0,
     appOnly: 0,
     review1800: 0,
+    premiumMismatch: 0,
     producerMismatch: 0,
     dashPremium: 0,
     matchedPremium: 0,
     missingPremium: 0,
     appOnlyPremium: 0,
     review1800Premium: 0,
+    premiumMismatchDelta: 0,
     captureRate: null,
   };
   const producers = new Map<string, ProducerSummaryRaw>();
@@ -645,6 +672,15 @@ export function summarize(rows: readonly SummaryRow[]): {
       totals.review1800 += 1;
       if (row.isSale) totals.review1800Premium += premium;
     }
+    if (tabs.has('premium_mismatch')) {
+      totals.premiumMismatch += 1;
+      totals.premiumMismatchDelta += Math.abs(
+        reconciliationPremiumDelta(
+          row.dash?.writtenPremium,
+          row.app?.premium,
+        ) ?? 0,
+      );
+    }
     if (tabs.has('producer_mismatch')) totals.producerMismatch += 1;
 
     // The per-producer table is the agency's own business: 1-800 lines are
@@ -673,6 +709,7 @@ export function summarize(rows: readonly SummaryRow[]): {
     'missingPremium',
     'appOnlyPremium',
     'review1800Premium',
+    'premiumMismatchDelta',
   ] as const) {
     totals[key] = cents(totals[key]);
   }
