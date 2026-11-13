@@ -12,6 +12,7 @@
  */
 export * from './envelope';
 export * from './data-export.events';
+export * from './db-backup.events';
 export * from './email.events';
 export * from './mailer.events';
 export * from './notification.events';

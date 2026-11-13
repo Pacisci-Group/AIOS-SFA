@@ -54,7 +54,8 @@ module "sfa" {
   pool_cooldown_minutes      = var.pool_cooldown_minutes
   pool_proxy_protocol        = var.pool_proxy_protocol
   inngest_droplet_size       = var.inngest_droplet_size
-  enable_backups             = var.enable_backups
+  enable_db_backups          = var.enable_db_backups
+  db_backup_spaces_region    = var.db_backup_spaces_region
   prevent_destroy            = var.prevent_destroy
   project_id                 = var.project_id
   tags                       = var.tags

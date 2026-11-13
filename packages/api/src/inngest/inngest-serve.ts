@@ -27,6 +27,21 @@ export const INNGEST_SERVE_PATH = '/api/inngest';
  *    unset signing key in production leaves the endpoint unauthenticated — which
  *    is why the key is in the deploy preflight, and why the droplet firewall
  *    only admits the Inngest host.
+ *
+ * 3. **Deployed, it streams.** The deploy writes `INNGEST_STREAMING=true`
+ *    (PAC-172), which the SDK reads itself: every step response is answered
+ *    201 at once and kept open with a whitespace heartbeat every three seconds
+ *    until the step's result is written. That is for the weekly database
+ *    snapshot, whose one step runs for minutes, behind the internal load
+ *    balancer that fronts the pool's workers — an idle connection there would
+ *    be cut, and Inngest would retry a step that was still running.
+ *
+ *    It is an environment variable rather than `streaming: true` here on
+ *    purpose: the option changes how *every* function's response is delivered,
+ *    and the SDK lets the code value override the environment. Left to the
+ *    environment, it can be switched off (the `INNGEST_STREAMING` GitHub
+ *    variable) without a code change if the self-hosted server ever disagrees
+ *    with it. Unset — local dev, the test suites — the SDK does not stream.
  */
 export function mountInngest(app: INestApplication): void {
   const logger = new Logger('InngestServe');

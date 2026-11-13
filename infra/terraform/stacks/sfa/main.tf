@@ -306,7 +306,6 @@ module "mongo" {
   # its siblings are fine.
   allowed_tags         = local.app_tags
   allowed_ip_addresses = var.mongo_allowed_ip_addresses
-  enable_backups       = var.enable_backups
 }
 
 # Redis (DigitalOcean Managed Valkey) — the permission cache and the
@@ -347,6 +346,18 @@ module "spaces" {
   region               = var.spaces_region
   cors_allowed_origins = local.spaces_cors_origins
   create_access_key    = var.create_spaces_access_key
+}
+
+# Weekly MongoDB snapshots (PAC-172). The worker dumps the database and writes
+# the archive here with its own bucket-scoped key; see modules/db_backup_bucket
+# for why this is not the uploads bucket. DigitalOcean's own daily backups exist
+# regardless, but they are destroyed with the cluster - this copy is not.
+module "db_backup_bucket" {
+  count  = var.enable_db_backups ? 1 : 0
+  source = "../../modules/db_backup_bucket"
+
+  name   = "${local.name_prefix}-db-backups"
+  region = var.db_backup_spaces_region != "" ? var.db_backup_spaces_region : var.spaces_region
 }
 
 # ─── Horizontal autoscaling ───────────────────────────────────────────────────
@@ -554,5 +565,6 @@ resource "digitalocean_project_resources" "sfa" {
     local.pool ? [module.public_lb[0].urn, module.worker_lb[0].urn] : [],
     var.enable_inngest ? [module.inngest_droplet[0].urn] : [],
     var.enable_spaces ? [module.spaces[0].urn] : [],
+    var.enable_db_backups ? [module.db_backup_bucket[0].urn] : [],
   )
 }

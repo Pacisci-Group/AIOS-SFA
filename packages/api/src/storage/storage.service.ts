@@ -21,6 +21,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createS3Client, readS3Settings } from './s3-client.factory';
 
 export interface PresignedUpload {
   /** Object key stored on the record. */
@@ -192,18 +193,12 @@ export class StorageService implements OnModuleInit {
   private readonly configured: boolean;
 
   constructor(private readonly config: ConfigService) {
-    const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
-    this.configured = Boolean(endpoint);
+    // Endpoint, region, keys and addressing style — shared with the snapshot
+    // bucket's client (PAC-172) so the two cannot drift. MinIO requires
+    // path-style addressing; most cloud providers use virtual-host.
+    const settings = readS3Settings(this.config, 'STORAGE');
+    this.configured = Boolean(settings.endpoint);
     const publicEndpoint = this.config.get<string>('STORAGE_PUBLIC_URL');
-    const region = this.config.get<string>('STORAGE_REGION', 'us-east-1');
-    const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID', '');
-    const secretAccessKey = this.config.get<string>(
-      'STORAGE_SECRET_ACCESS_KEY',
-      '',
-    );
-    // MinIO requires path-style addressing; most cloud providers use virtual-host.
-    const forcePathStyle =
-      this.config.get<string>('STORAGE_FORCE_PATH_STYLE', 'true') === 'true';
 
     this.bucket = this.config.get<string>('STORAGE_BUCKET', 'sfa-uploads');
     this.uploadExpiry = Number(
@@ -213,18 +208,16 @@ export class StorageService implements OnModuleInit {
       this.config.get<string>('STORAGE_DOWNLOAD_URL_TTL_SECONDS', '300'),
     );
 
-    const credentials =
-      accessKeyId && secretAccessKey
-        ? { credentials: { accessKeyId, secretAccessKey } }
-        : {};
-
     // Omitting credentials hands the SDK to its default provider chain (env
     // AWS_*, ~/.aws, instance role). That is legitimate for a role-based
     // deployment, but MinIO and DigitalOcean Spaces both need explicit keys —
     // and when the chain comes up empty the failure surfaces at *presign* time
     // as an opaque "Could not load credentials from any providers", far from
     // the actual cause. Say so at boot instead.
-    if (endpoint && !(accessKeyId && secretAccessKey)) {
+    if (
+      settings.endpoint &&
+      !(settings.accessKeyId && settings.secretAccessKey)
+    ) {
       this.logger.warn(
         'STORAGE_ENDPOINT is set but STORAGE_ACCESS_KEY_ID / ' +
           'STORAGE_SECRET_ACCESS_KEY are not — falling back to the AWS default ' +
@@ -232,23 +225,13 @@ export class StorageService implements OnModuleInit {
       );
     }
 
-    this.client = new S3Client({
-      region,
-      forcePathStyle,
-      ...(endpoint ? { endpoint } : {}),
-      ...credentials,
-    });
+    this.client = createS3Client(settings);
 
     // Sign against the public endpoint when provided so URLs are reachable by
     // the browser; otherwise reuse the same client.
     this.signingClient =
-      publicEndpoint && publicEndpoint !== endpoint
-        ? new S3Client({
-            region,
-            forcePathStyle,
-            endpoint: publicEndpoint,
-            ...credentials,
-          })
+      publicEndpoint && publicEndpoint !== settings.endpoint
+        ? createS3Client(settings, publicEndpoint)
         : this.client;
   }
 

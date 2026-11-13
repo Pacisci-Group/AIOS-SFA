@@ -92,9 +92,16 @@ variable "create_spaces_access_key" {
   default = true
 }
 
-variable "enable_backups" {
-  type    = bool
-  default = false
+variable "enable_db_backups" {
+  description = "Provision the weekly MongoDB snapshot bucket and the worker's key for it (PAC-172)"
+  type        = bool
+  default     = false
+}
+
+variable "db_backup_spaces_region" {
+  description = "Region for the snapshot bucket; empty uses spaces_region"
+  type        = string
+  default     = ""
 }
 
 variable "prevent_destroy" {

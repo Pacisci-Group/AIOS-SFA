@@ -423,7 +423,9 @@ re-issuing every certificate the platform holds.
    console, and send one real email to prove the worker is reachable on 4001.
 
 > **Scaling the app tier does not scale what is behind it.** Production Mongo is
-> still `node_count = 1` with no backups, Redis is a single-node Valkey that
+> still `node_count = 1` (backed up — DigitalOcean's daily backups plus a weekly
+> off-cluster snapshot, see "Database backups" — but with no standby to fail
+> over to), Redis is a single-node Valkey that
 > the permission cache and the notification bus both lean on (PAC-154), Inngest
 > is one droplet with SQLite, and the rate limits are per-node once the pool
 > grows past one. None of that blocks the
@@ -548,6 +550,31 @@ that terraform bakes into `user_data` and which never passes through GitHub — 
 a compromised droplet cannot rewrite the config every other droplet is about to
 fetch.
 
+### Database backups: the snapshot bucket (PAC-172)
+
+Required **only in Environments where the variable `DB_BACKUP_ENABLED` is
+`true`** — and that variable additionally requires `INNGEST_ENABLED=true`,
+because the snapshot is an Inngest function; the preflight refuses the
+combination otherwise. See "Database backups" below for what runs.
+
+| Secret | From |
+|---|---|
+| `DB_BACKUP_STORAGE_ENDPOINT` / `_REGION` / `_BUCKET` / `_ACCESS_KEY_ID` | `terraform output db_backup_github_secrets` |
+| `DB_BACKUP_STORAGE_SECRET_ACCESS_KEY` | `terraform output -raw db_backup_secret_access_key` |
+| `DB_BACKUP_ALERT_EMAIL` | Who gets the report after every run, success or failure |
+
+| Variable | Default | |
+|---|---|---|
+| `DB_BACKUP_ENABLED` | `false` | `true` (any case) takes snapshots; empty or `false` is off; anything else fails the preflight |
+| `DB_BACKUP_KEEP` | `4` | Weeks of weekly archives kept, one per week (1–52) |
+| `DB_BACKUP_DUMP_TIMEOUT_MINUTES` | `45` | mongodump is killed after this (5–105: with the upload's 15-minute margin, Inngest's 2-hour step limit) |
+| `DB_BACKUP_DUMP_PARALLEL` | `2` | Collections dumped at once (1–8) |
+| `INNGEST_STREAMING` | `true` | Keeps long step requests alive; the off switch, for every function at once |
+
+That key is the **backup bucket's**, not the uploads key, and the worker has no
+fallback from one to the other: a snapshot is every tenant's data in one file and
+must never land where presigned upload URLs are handed out.
+
 ### Repo-level secrets (Terraform in CI — only for plan-on-PR)
 
 These are account-wide, so keep them at repo level (Settings -> Secrets -> Actions):
@@ -599,6 +626,220 @@ docker compose -f /opt/sfa/docker-compose.prod.yml logs api | grep -i transactio
 # want: "MongoDB transactions available (replica set / mongos)."
 # not:  "MongoDB is NOT a replica set — ..."
 ```
+
+## Database backups
+
+Two layers, for two different failures (PAC-172).
+
+| | DigitalOcean's own backups | Weekly snapshot |
+|---|---|---|
+| What | Daily backup + oplog, kept 7 days | `mongodump --archive --gzip` of the `sfa` database |
+| When | Daily, at a time DigitalOcean picks | Sundays 13:00 Pakistan time = 08:00 UTC = 03:00 Chicago (02:00 in winter) |
+| Where | Inside the cluster's account | `sfa-<env>-db-backups` bucket (`enable_db_backups`) |
+| Restores to | Any second in the last 7 days | The moment that Sunday's dump ran |
+| Survives destroying the cluster | **No** — destroying the cluster destroys them | Yes |
+| Restore creates | A new cluster (fork) | Whatever you `mongorestore` into |
+
+So: for "someone deleted data this morning", fork from DigitalOcean (path A
+below) — it is exact to the second. For "the cluster is gone", "it happened two
+weeks ago" or "DigitalOcean is the problem", restore an archive (path B).
+
+### What the weekly snapshot does
+
+`DbBackupSnapshotFn` (`packages/api/src/worker/functions/db-backup-snapshot.fn.ts`)
+runs in the worker, once per environment however many pool members there are.
+It dumps the database named in `MONGODB_URI`, uploads the archive in one PUT,
+then keeps one archive per week for the newest `DB_BACKUP_KEEP` weeks (default
+4: this week and the three before) and deletes the rest. Weeks run Sunday 00:00
+to Sunday 00:00 Pakistan time, so the 13:00 cron sits well inside its week.
+Older archives are only deleted after the new one is stored, so a failed run
+never costs an existing archive. A week that runs more than once — a dashboard
+**Rerun** of a weekly run, which starts again from the cron's own event, on any
+day before the next Sunday — keeps only its newest archive, instead of pushing
+out the oldest week.
+
+Bucket layout:
+
+| Prefix | Written by | Kept |
+|---|---|---|
+| `weekly/<YYYYMMDD>T<HHmmss>Z.archive.gz` | the Sunday cron | one per week for the newest `DB_BACKUP_KEEP` weeks; the worker deletes the rest |
+| `manual/<ts>-<label>.archive.gz` | an operator (below) | 90 days, by the bucket's lifecycle rule |
+| `pre-deploy/<ts>-<sha>.archive.gz` | reserved for a deploy step (not built yet) | 90 days, by the bucket's lifecycle rule |
+
+Every run mails `DB_BACKUP_ALERT_EMAIL` — the archive's key and size and what
+rotation kept and deleted, or the error. **The Sunday "OK" mail is the
+heartbeat**: a run that never happened (worker down, function not synced)
+sends nothing, so no mail by Sunday afternoon Pakistan time means look at the
+worker and the Inngest dashboard.
+
+Things to know:
+
+- **Not point-in-time consistent.** A single-database dump cannot use
+  `--oplog`, so writes that land while it runs may be in one collection and not
+  another. At 03:00 on a Sunday that is a small window, and DigitalOcean's fork
+  (path A) is the tool when an exact instant matters.
+- **Not encrypted client-side** — a decision, not an oversight (PAC-172). The
+  bucket is private and has no CORS, and its key is scoped to it, the same
+  posture as the uploads bucket that already holds client documents. Encrypting
+  would add a key that, lost, loses every backup.
+- **The key can delete the archives, and is not the worker's alone.** Like
+  `MONGODB_URI`, it is in the shared runtime env — the api, worker and edge
+  containers, and the deploy-config object — so a compromised container could
+  delete every archive, and with versioning off a deletion is final. Scoping it
+  to the worker needs its own env file through the pool's converge; until then
+  this copy protects against losing the cluster, not against a compromise of
+  the app.
+- Size and dump time are in every report mail. Watch them grow:
+  `DB_BACKUP_DUMP_TIMEOUT_MINUTES` must stay comfortably above the dump time,
+  and one upload is a single PUT, which tops out at 5 GiB (the job refuses
+  past 4.5 GiB, naming multipart upload as the fix).
+
+### Turning it on
+
+1. Terraform: `enable_db_backups = true` (already set in every preset). Edit the
+   live `environments/<env>/terraform.tfvars` too — the old `enable_backups`
+   line there is now an undeclared variable — then `make init ENV=<env>` (a new
+   module), `make plan ENV=<env>`, `make apply ENV=<env>` with the `SPACES_*`
+   pair exported. The plan should add a bucket and a key and change nothing
+   else.
+2. GitHub Environment: the secrets in "Database backups: the snapshot bucket"
+   above, and the variable `DB_BACKUP_ENABLED=true`.
+3. Deploy. The function is registered whether or not backups are on, so the
+   worker's "Serving N Inngest function(s)" count grows by one only on the
+   first deploy that carries PAC-172. Check that the Inngest dashboard lists
+   **Snapshot MongoDB to object storage** with its next run on a Sunday at
+   08:00 UTC.
+4. Take one by hand (below) rather than waiting for Sunday, and check the mail
+   — that, not the dashboard, proves the switch.
+
+### Taking a snapshot by hand
+
+Before anything risky done by hand — a `run-upgrade.sh`, a merge script, a
+bulk fix in `mongosh` — take a labelled snapshot. It goes under `manual/`, is
+never rotated out, and expires after 90 days.
+
+```bash
+# Tunnel to the Inngest droplet (terraform output -raw inngest_droplet_ip)
+ssh -L 8288:localhost:8288 deploy@<inngest-ip>
+
+# In a second shell: send the event. The event key lives in the droplet's .env;
+# read it into a variable rather than pasting it anywhere.
+KEY=$(ssh deploy@<inngest-ip> 'sed -n "s/^INNGEST_EVENT_KEY=//p" /opt/sfa-inngest/.env')
+curl -sS -X POST "http://localhost:8288/e/$KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name":"db-backup/snapshot.requested.v1","data":{"reason":"manual","label":"before-pac-180"}}'
+```
+
+Then watch http://localhost:8288 → Functions → **Snapshot MongoDB to object
+storage**, and wait for the "Manual DB snapshot OK" mail before starting the
+risky work. The dashboard's **Invoke** button does the same thing given
+`{"reason":"manual","label":"…"}` as data. Invoked with **no** data it is
+rejected before it runs, and the alert address gets a "request REJECTED" mail.
+**Rerun** on a weekly run takes a fresh weekly snapshot, which replaces that
+week's archive (see above) — the right recovery after a failed Sunday, any day
+that week; before risky work, a manual snapshot is the better tool.
+
+### Listing and downloading archives
+
+With the backup key from `terraform output db_backup_github_secrets` /
+`-raw db_backup_secret_access_key` (or from the DigitalOcean console):
+
+```bash
+export AWS_ACCESS_KEY_ID=<DB_BACKUP_STORAGE_ACCESS_KEY_ID>
+export AWS_SECRET_ACCESS_KEY=<DB_BACKUP_STORAGE_SECRET_ACCESS_KEY>
+EP=https://nyc3.digitaloceanspaces.com          # DB_BACKUP_STORAGE_ENDPOINT
+
+aws s3 ls s3://sfa-production-db-backups/ --recursive --endpoint-url "$EP"
+aws s3 cp s3://sfa-production-db-backups/weekly/20261025T080012Z.archive.gz . --endpoint-url "$EP"
+```
+
+An archive is a full copy of every tenant's data. Download it only to an
+encrypted disk, and delete it when the restore is done.
+
+### Restore, path A: DigitalOcean fork (last 7 days, cluster still exists)
+
+```bash
+doctl databases list                                    # the cluster's id
+doctl databases fork sfa-production-mongo-restored \
+  --restore-from-cluster-id <id> \
+  --restore-from-timestamp "2026-10-25 07:55:00 +0000 UTC"
+doctl databases firewalls append <new-id> --rule tag:sfa-production-pool
+```
+
+1. Pick the timestamp just **before** the damage — the fork is exact to it.
+2. When the fork is online, check it with `mongosh` (add your IP for the
+   duration with `doctl databases firewalls append <new-id> --rule ip_addr:<ip>`
+   and remove it afterwards).
+3. Point the app at it: set the `MONGODB_URI` secret to the fork, in the shape
+   `terraform output -raw mongodb_uri` produces but with the fork's host (a fork
+   carries the cluster's users — confirm in the console), and deploy.
+4. **Do not `terraform import` the fork.** The stack hard-codes the cluster's
+   name, which DigitalOcean cannot change in place, so a later apply would plan
+   to *replace* — destroy — the cluster production now runs on. Leave Terraform
+   describing the old cluster, read every `make plan` on this environment
+   closely until you have moved back onto a Terraform-managed cluster (path B
+   into a cluster `make apply` created, in a maintenance window), and do not
+   destroy the old cluster before then: its backups go with it.
+
+### Restore, path B: an archive (cluster gone, or older than 7 days)
+
+1. **Get a target.** If the cluster is gone, `make apply ENV=<env>` recreates it
+   empty with its firewall. To restore beside a live database, use a fork or a
+   new cluster — never `--drop` over the database the app is writing to.
+2. **Download** the archive (above).
+3. **Restore**, from a machine the target's firewall admits (your IP in
+   `mongo_allowed_ip_addresses` for the duration, or a pool member, whose image
+   ships `mongorestore`), as `doadmin`. Two things about the connection string
+   matter more than they look:
+
+   - **No database in its path.** `doctl databases connection <id>` prints the
+     admin URI as `…/admin?…`, and a database in the URI acts as `--db`:
+     mongorestore then skips every `sfa.*` collection in the archive and reports
+     "0 document(s) restored successfully" — a silent no-op (verified). Use
+     `…/?…`, and pass `--nsInclude 'sfa.*'` too, which keeps the command right
+     even if the path slips back in.
+   - **No password in it.** A password in `--uri` sits in the process table and
+     your shell history for the whole restore. Leave it out and mongorestore
+     asks for it ("Enter password for mongo user:"). doctl masks the password
+     unless given `--show`; the console shows it too.
+
+   ```bash
+   mongorestore --uri "mongodb+srv://doadmin@<host>/?tls=true&authSource=admin" \
+     --archive=20261025T080012Z.archive.gz --gzip --nsInclude 'sfa.*' --drop
+   # Into a different database name instead (to check beside a live one):
+   #   --nsInclude 'sfa.*' --nsFrom 'sfa.*' --nsTo 'sfa_restored.*'
+   ```
+
+4. **Check** before cutting over: mongorestore's last line reports a non-zero
+   "N document(s) restored successfully, 0 document(s) failed";
+   `db.getSiblingDB('sfa').getCollectionNames()` lists the collections you
+   expect; with the source still reachable, per-collection `countDocuments()`
+   match it; `db.migrations_changelog.find().sort({appliedAt:-1}).limit(1)` is
+   there (the API applies any migration newer than the archive at boot, as on
+   any deploy); and you can log in.
+5. **Cut over**: `MONGODB_URI` secret → the target, deploy. Anything written to
+   the old database after the archive was taken is not in it.
+
+TLS certificates live in Mongo and come back with the restore; they decrypt as
+long as `CERT_ENCRYPTION_KEY` is unchanged.
+
+### Rehearsal
+
+Once after the first production snapshot, then quarterly — a backup nobody has
+restored is a hope, not a backup:
+
+1. Download the latest weekly archive (above).
+2. Start Mongo with its replica-set init — `docker compose up -d mongo
+   mongo-init`, and wait for `mongo-init` to exit; on a fresh volume, Mongo
+   alone is an uninitiated replica set that refuses every write. Then time the
+   restore into a scratch database, with the same `--nsInclude` as path B:
+   `time mongorestore --uri "mongodb://localhost:27017/?directConnection=true" --archive=<file> --gzip --nsInclude 'sfa.*' --nsFrom 'sfa.*' --nsTo 'sfa_restore.*'`
+3. Check the "N document(s) restored" line is non-zero, then compare
+   `db.getSiblingDB('sfa_restore').getCollectionNames()` and per-collection
+   `countDocuments()` with production.
+4. Record the date, archive key, size and restore time in
+   `docs/plans/pac-172-db-backups-implementation-plan.md` → "Rehearsals", drop
+   `sfa_restore`, and delete the download.
 
 ## Schema migrations
 

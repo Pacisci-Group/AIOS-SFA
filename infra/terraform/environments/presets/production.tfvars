@@ -160,10 +160,18 @@ pool_proxy_protocol = true
 # DO API.
 enable_spaces = true
 
-# ⚠ Documentation only — the managed_mongo module does not implement this;
-#   DigitalOcean ties MongoDB backup retention to the cluster tier. Confirm
-#   retention in the DO console before this holds real client data.
-enable_backups = false
+# Weekly MongoDB snapshots (PAC-172): a private sfa-production-db-backups bucket
+# and the worker's key for it. DigitalOcean's own daily backups (seven days of
+# point-in-time recovery) exist regardless, but are destroyed with the cluster -
+# this copy is not. Provisioning alone takes no snapshot: the worker runs only
+# where DB_BACKUP_ENABLED is true in the GitHub Environment.
+enable_db_backups = true
+
+# Same region as the cluster unless set. A different one puts the copy out of
+# reach of a regional outage, for a slower cross-region upload of each weekly
+# archive. Changing it after the first apply REPLACES the bucket - and with it
+# every archive already stored.
+# db_backup_spaces_region = "sfo3"
 
 # Browser origins allowed to run presigned uploads. Pinned rather than derived:
 # the derived value tracks `enable_tls`, so flipping that flag would silently
