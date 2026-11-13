@@ -1,8 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, History, Loader2 } from "lucide-react";
+import { ArrowDown, Ban, History, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { PolicyReplacementChainEntry } from "@sfa/shared";
-import { POLICY_REPLACEMENT_REASON_LABELS } from "@sfa/shared";
+import {
+  CHARGEBACK_REASON_LABELS,
+  POLICY_REPLACEMENT_REASON_LABELS,
+} from "@sfa/shared";
 import { DetailCard } from "@/components/common/DetailCard";
 import { Badge } from "@/components/ui/badge";
 import { getPolicyHistory } from "@/lib/policies-api";
@@ -25,10 +28,12 @@ function shortDate(iso: string | null) {
 /**
  * The replacement chain a policy belongs to, oldest first.
  *
- * **Renders nothing for a policy that has never been replaced.** A chain of one
- * is every ordinary policy in the book, and a "History" card saying "this policy
- * replaced nothing" on all of them is noise that teaches people to skip the
- * card — which is exactly when it starts mattering.
+ * **Renders nothing for a policy that has never been replaced** — unless it was
+ * cancelled with a chargeback (PAC-173 PR 6), which is history worth showing
+ * on its own. A chain of one is every ordinary policy in the book, and a
+ * "History" card saying "this policy replaced nothing" on all of them is noise
+ * that teaches people to skip the card — which is exactly when it starts
+ * mattering.
  *
  * Shown from any link in the chain and always shows the whole thing, because
  * that is what the endpoint returns: someone opening the original policy from
@@ -59,7 +64,11 @@ export function PolicyHistoryCard({ policyId }: { policyId: string }) {
   }
 
   const entries = query.data?.entries ?? [];
-  if (entries.length < 2) return null;
+  const last = entries.at(-1);
+  // Cancelled outright with a chargeback: the last link, with no successor.
+  const cancelledWithChargeback =
+    last?.chargebackReason === "cancellation" && last.chargebackAmount !== null;
+  if (entries.length < 2 && !cancelledWithChargeback) return null;
 
   return (
     <DetailCard title="Policy history" icon={History}>
@@ -67,6 +76,21 @@ export function PolicyHistoryCard({ policyId }: { policyId: string }) {
         {entries.map((entry, index) => (
           <li key={entry.policyId}>
             <ChainRow entry={entry} />
+            {index === entries.length - 1 && cancelledWithChargeback && (
+              <div className="flex items-center gap-2 py-1 pl-3 text-xs text-muted-foreground">
+                <Ban aria-hidden className="size-3.5 shrink-0" />
+                <span>
+                  {CHARGEBACK_REASON_LABELS.cancellation}
+                  {" · "}
+                  <span className="text-destructive">
+                    {money(entry.chargebackAmount ?? 0)} charged back
+                  </span>
+                  {entry.withinClawbackWindow
+                    ? " (within a month — credit reversed)"
+                    : " (credit kept)"}
+                </span>
+              </div>
+            )}
             {index < entries.length - 1 && (
               <div className="flex items-center gap-2 py-1 pl-3 text-xs text-muted-foreground">
                 <ArrowDown aria-hidden className="size-3.5 shrink-0" />
@@ -74,7 +98,10 @@ export function PolicyHistoryCard({ policyId }: { policyId: string }) {
                   {entry.reason
                     ? POLICY_REPLACEMENT_REASON_LABELS[entry.reason]
                     : "Replaced"}
-                  {entry.chargebackAmount !== null &&
+                  {/* Only a rewrite charges back as it replaces; an older
+                      cancellation chargeback is not this arrow's. */}
+                  {entry.chargebackReason === "cancel_rewrite" &&
+                    entry.chargebackAmount !== null &&
                     entry.chargebackAmount > 0 && (
                       <>
                         {" · "}

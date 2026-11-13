@@ -1,0 +1,43 @@
+meta {
+  name: Cancel Row Policy (Already Done)
+  type: http
+  seq: 76
+}
+
+post {
+  url: {{baseUrl}}/carrier-reconciliation/assigned/{{reconAssignRowId}}/cancel-policy
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "reason": "sold",
+    "cancelledOn": "2026-10-21"
+  }
+}
+
+tests {
+  test("returns 201 — the answer, unchanged", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("still the first cancellation and its chargeback", function () {
+    const body = res.getBody();
+    expect(body.row.outcome.status).to.equal("done");
+    expect(body.policy.cancellation.cancelledOn).to.equal("2026-10-20");
+    expect(body.policy.cancellation.chargebackId).to.equal(body.row.outcome.chargebackId);
+  });
+}
+
+docs {
+  # POST /carrier-reconciliation/assigned/:rowId/cancel-policy — again
+
+  A double click: the row is already finished as a chargeback, so the answer
+  is the row and the policy as they are — nothing is cancelled or charged back
+  twice. See `Cancel Row Policy`.
+}

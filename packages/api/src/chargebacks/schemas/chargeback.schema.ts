@@ -99,11 +99,13 @@ export class Chargeback extends TenantRecord {
   withinClawbackWindow: boolean;
 
   /**
-   * When the cancellation was recorded — the date the window was judged on.
+   * The date the window was judged on: the replacement's sold date for a
+   * rewrite; **the carrier's cancellation date** for a `cancellation`, which
+   * the person enters (PAC-173 PR 6).
    *
-   * Separate from `createdAt` deliberately: they are the same instant today, but
-   * a backdated cancellation is a real thing a service team needs, and the day
-   * the window was measured against must stay legible when it arrives.
+   * Separate from `createdAt` deliberately: a backdated cancellation is a real
+   * thing a service team needs, and the day the window was measured against
+   * must stay legible when it arrives.
    */
   @Prop({ type: Date, required: true, index: true })
   occurredAt: Date;
@@ -111,6 +113,19 @@ export class Chargeback extends TenantRecord {
   /** The sold date the window was measured from, frozen for an auditor. */
   @Prop({ type: Date, default: null })
   soldDate: Date | null;
+
+  /**
+   * When the cancellation this row charged for was taken back — the policy
+   * reinstated, or cancelled again with another date (PAC-173 review). The
+   * row stays, as the ledger's record of what was charged and undone; its
+   * deal adjustment is reversed in the same transaction, and every reader of
+   * live chargebacks leaves a voided row out. `null` while it stands.
+   */
+  @Prop({ type: Date, default: null })
+  voidedAt: Date | null;
+
+  @Prop({ type: ObjectIdType, ref: 'User', default: null })
+  voidedBy: Types.ObjectId | null;
 }
 
 export const ChargebackSchema = SchemaFactory.createForClass(Chargeback);
@@ -134,6 +149,14 @@ ChargebackSchema.index({ agencyId: 1, producerId: 1, occurredAt: -1 });
  *
  * Partial rather than plain-unique: `reason` will gain values, and a future
  * carrier-statement row for the same policy is a different fact, not a duplicate.
+ *
+ * `cancellation` (PAC-173 PR 6) is deliberately outside it. One cancellation
+ * cannot write two rows — `PoliciesService.applyCancellation` writes the row
+ * and the cancelled policy in one transaction, so a second cancel conflicts on
+ * the policy and then reads it cancelled — but a policy reinstated and
+ * cancelled again is a second event, with a row of its own. Only one of a
+ * policy's cancellation rows is ever live: reinstating voids it, and a new
+ * cancellation voids any left before writing its own (`voidedAt`).
  */
 ChargebackSchema.index(
   { agencyId: 1, policyId: 1, reason: 1 },

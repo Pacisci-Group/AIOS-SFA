@@ -28,13 +28,24 @@
  * general commission model before then; it will be the wrong shape.
  */
 
-/** Why money was charged back. One per flow that can create a row. */
-export const CHARGEBACK_REASONS = ['cancel_rewrite'] as const;
+/**
+ * Why money was charged back. One per flow that can create a row:
+ *
+ * - `cancel_rewrite` — the policy was cancelled and rewritten (PAC-126). Dated
+ *   on the replacement's sold date, and it names the replacement.
+ * - `cancellation` — the policy was cancelled outright with **Record a
+ *   chargeback** ticked (PAC-173 PR 6): the household page's Cancel button, or
+ *   a Dash row's Chargeback outcome. Dated on **the carrier's cancellation
+ *   date**, which the person enters because it decides the one-month window
+ *   (David, 27 Oct 2026). No replacement.
+ */
+export const CHARGEBACK_REASONS = ['cancel_rewrite', 'cancellation'] as const;
 
 export type ChargebackReason = (typeof CHARGEBACK_REASONS)[number];
 
 export const CHARGEBACK_REASON_LABELS: Record<ChargebackReason, string> = {
   cancel_rewrite: 'Cancel Rewrite',
+  cancellation: 'Cancelled policy',
 };
 
 /**
@@ -78,7 +89,10 @@ export interface ChargebackView {
    */
   soldAdjustment: number;
   withinClawbackWindow: boolean;
-  /** When the cancellation was recorded — the date the window was judged on. */
+  /**
+   * The date the window was judged on: the replacement's sold date for a
+   * rewrite, the carrier's cancellation date for a `cancellation`.
+   */
   occurredAt: string;
   /** The sold date the window was measured from, for an auditor. */
   soldDate: string | null;

@@ -1,4 +1,5 @@
 import { addUtcMonths, startOfUtcDay, toDate } from './calendar';
+import type { ChargebackReason } from './chargeback';
 import type { PolicyStatus } from './policy-status';
 
 /**
@@ -182,6 +183,12 @@ export interface PolicyReplacementChainEntry {
   chargebackAmount: number | null;
   /** Whether that chargeback also reversed the producer's credit. */
   withinClawbackWindow: boolean | null;
+  /**
+   * Why it was charged back: `cancel_rewrite` on a policy that was replaced,
+   * `cancellation` on one cancelled outright with a chargeback (PAC-173 PR 6) —
+   * which can be the last entry, the one with no successor.
+   */
+  chargebackReason: ChargebackReason | null;
   /** The deal this policy was booked on, for a link through to the sale. */
   dealId: string | null;
   /** True for the policy the chain was requested from. */

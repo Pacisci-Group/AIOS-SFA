@@ -1,0 +1,46 @@
+meta {
+  name: Reinstate After Chargeback
+  type: http
+  seq: 19
+}
+
+patch {
+  url: {{baseUrl}}/households/{{policyCancelHouseholdId}}/policies/{{policyCancelPolicyId}}
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~X-Branch-Id: {{branchId}}
+}
+
+body:json {
+  {
+    "status": "Active"
+  }
+}
+
+tests {
+  test("returns 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("the policy is back on the books, its cancellation cleared", function () {
+    const body = res.getBody();
+    expect(body.policyStatus).to.equal("Active");
+    expect(body.active).to.equal(true);
+    expect(body.cancellation).to.equal(null);
+  });
+}
+
+docs {
+  # PATCH /households/:id/policies/:policyId — put the policy back
+
+  Leaves the household as the folder found it, as `Reinstate Cancelled
+  Policy` does. The cancellation's chargeback no longer stands, so it is
+  **voided** (PAC-173 review): the ledger row stays, stamped `voidedAt`, and
+  the sold-credit reversal it made on the deal is undone in the same
+  transaction. A later cancellation with a chargeback is then the only live
+  one — re-cancelling never charges twice. A status set back to `Pending`
+  voids it the same way. See `Update Household Policy` for the endpoint.
+}

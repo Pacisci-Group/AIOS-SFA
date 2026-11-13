@@ -89,6 +89,7 @@ docs {
         "reason": "cancel_rewrite",
         "chargebackAmount": 940,
         "withinClawbackWindow": true,
+        "chargebackReason": "cancel_rewrite",
         "dealId": "...",
         "isRequested": true
       },
@@ -102,6 +103,12 @@ docs {
   the one still in force. `chargebackAmount` / `withinClawbackWindow` are `null`
   where no chargeback was raised, which is every Company Transfer (a transfer
   moves a client within their own book; nothing is clawed back).
+
+  `chargebackReason` says why it was charged back: `cancel_rewrite`, or
+  `cancellation` for a policy cancelled outright with **Record a chargeback**
+  (PAC-173 PR 6) — which can be the **last** entry, the one with no successor,
+  so a chain of one may carry a chargeback. A policy charged back more than
+  once (reinstated, then cancelled again) shows its latest.
 
   The chain is walked, not aggregated, and is capped at 50 links with a cycle
   guard — the link fields are written as a pair inside one transaction and cannot

@@ -35,7 +35,8 @@ tests {
   });
 
   test("with nothing recorded on it", function () {
-    // The last run left it Sold — done (`Create Sold Deal (Dash Row)`).
+    // The last run left it Chargeback — done (`Cancel Row Policy`), still
+    // assigned to the producer (`Assign Row (For Chargeback)`).
     expect(res.getBody().outcome).to.equal(null);
   });
 }
@@ -45,8 +46,9 @@ docs {
 
   Only a row still waiting on a decision can be assigned, and on a database
   that already reconciled the fixture (`Create Run` → 409) the row keeps
-  whatever someone last did to it — decided on the page, say, or recorded
-  **Sold — done** by the previous run of this folder. Reopening it first lets
+  whatever someone last did to it — decided on the page, say, or finished as
+  a **Chargeback** (`chargeback_recorded`) by the previous run of this folder,
+  still assigned to the producer. Reopening it first lets
   the assignment and outcome requests that follow run from the same state
   every time: it is this folder's per-run reset.
 
@@ -54,5 +56,7 @@ docs {
   outcome**, finished or not (PAC-173 PR 4) — the decision an outcome wrote
   is the one being taken back. It never touches the assignment, and a deal
   the outcome booked stays booked: every run of this folder books the Dash
-  line once more, as a new lead and deal on the same household.
+  line twice more — once by the Sold chain, once by the Chargeback chain
+  (PAC-173 PR 6), which leaves its copy cancelled with a chargeback — as new
+  leads and deals on the same household.
 }

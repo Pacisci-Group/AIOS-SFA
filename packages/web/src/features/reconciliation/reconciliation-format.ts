@@ -175,13 +175,14 @@ export function outcomeLabel(outcome: ReconciliationOutcome): string {
 
 /**
  * An outcome as its assignee reads it, on their own lists: what is left for
- * them to do — `Sold — in progress`, `Write the replacement`, `Open the
- * welcome call`.
+ * them to do — `Sold — in progress`, `Write the replacement`, `Cancel the
+ * policy`, `Open the welcome call`.
  */
 export function outcomeNextStep(outcome: ReconciliationOutcome): string {
   const kind = RECONCILIATION_OUTCOME_KIND_LABELS[outcome.kind];
   if (outcome.status === "done") return `${kind} — done`;
   if (outcome.step === "write_replacement") return "Write the replacement";
+  if (outcome.step === "cancel_policy") return "Cancel the policy";
   if (outcome.step === "start_onboarding") return "Open the welcome call";
   return `${kind} — in progress`;
 }
@@ -199,6 +200,7 @@ export const OUTCOME_FILTER_LABELS: Record<ReconciliationOutcomeFilter, string> 
   done: "Done",
   sold: RECONCILIATION_OUTCOME_KIND_LABELS.sold,
   cancel_rewrite: RECONCILIATION_OUTCOME_KIND_LABELS.cancel_rewrite,
+  chargeback: RECONCILIATION_OUTCOME_KIND_LABELS.chargeback,
   service_intake: RECONCILIATION_OUTCOME_KIND_LABELS.service_intake,
   other: RECONCILIATION_OUTCOME_KIND_LABELS.other,
 };

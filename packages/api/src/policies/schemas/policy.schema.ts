@@ -66,6 +66,19 @@ export class PolicyCancellation {
   cancelledAt: Date;
 
   /**
+   * The **carrier's** cancellation date — UTC midnight of the calendar day the
+   * person entered (`parseFormDate`). Set only when a chargeback was recorded
+   * with the cancellation (PAC-173 PR 6): it is the day that chargeback's
+   * one-month window was judged on, and the only time it is asked for.
+   */
+  @Prop({ type: Date })
+  cancelledOn?: Date;
+
+  /** The chargeback ledger row the cancellation raised, when it raised one. */
+  @Prop({ type: ObjectIdType, ref: 'Chargeback' })
+  chargebackId?: Types.ObjectId;
+
+  /**
    * Who recorded it. Its own field rather than `updatedBy`, which the next
    * unrelated edit to the policy overwrites.
    */

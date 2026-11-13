@@ -45,7 +45,9 @@ docs {
 
   The row returns to the owner, assigned to nobody, and leaves the former
   assignee's list. Nobody is notified. With `Review Row (Reopen Missing)`
-  before the assignment requests, a re-run starts from the same state.
+  before the assignment requests, a re-run starts from the same state —
+  except that the previous run's `Assign Row (For Chargeback)` leaves the row
+  with the producer, so on a re-run `Assign Row` only changes its note.
 
   Taking a row back works whatever its state. An outcome still **under way**
   is cleared with the assignment (PAC-173 PR 4) — the next person starts

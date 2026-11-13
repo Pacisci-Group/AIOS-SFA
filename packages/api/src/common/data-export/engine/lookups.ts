@@ -570,7 +570,12 @@ export class ExportLookups {
     if (!ids.length) return new Set();
     const rows = await this.models.chargeback
       .find(
-        { agencyId: this.agencyId, policyId: { $in: oids(ids) } },
+        // A voided chargeback was taken back (PAC-173 review).
+        {
+          agencyId: this.agencyId,
+          policyId: { $in: oids(ids) },
+          voidedAt: null,
+        },
         { policyId: 1 },
       )
       .lean<{ policyId: Types.ObjectId }[]>();

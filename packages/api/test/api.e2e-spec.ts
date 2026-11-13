@@ -3919,13 +3919,38 @@ describe('SFA API (e2e)', () => {
    * What the block pins: the reason vocabulary (and that `other` must say what
    * it means), the bookkeeping a cancellation owes (`active`, the household's
    * stored count, the edit log), and the same gate and household-in-the-path
-   * authorisation as the edit above.
+   * authorisation as the edit above — and, since PAC-173 PR 6, the optional
+   * chargeback: the carrier's date, the one-month window, the ledger row.
    */
   describe('Household policy cancel', () => {
     let policyModel: Model<Policy>;
     let householdModel: Model<Household>;
     let activityModel: Model<Activity>;
+    let dealModel: Model<Deal>;
+    let chargebackModel: Model<Chargeback>;
+    let producerObjectId: Types.ObjectId;
     const cleanup: Array<() => Promise<unknown>> = [];
+
+    /** A sale on the producer, sold on `soldDay` (agency calendar). */
+    const makeDeal = async (soldDay: string): Promise<Types.ObjectId> => {
+      const [created] = await dealModel.create([
+        {
+          agencyId: seed.agencyId,
+          branchId: seed.branchId,
+          producerId: producerObjectId,
+          soldDate: onDay(soldDay),
+          premium: 500,
+          itemCount: 1,
+        },
+      ]);
+      cleanup.push(() => dealModel.deleteOne({ _id: created._id }));
+      return created._id;
+    };
+    const ledgerFor = (policyId: string) =>
+      chargebackModel.find({ policyId: new Types.ObjectId(policyId) }).lean();
+    /** Days from today, as the date input submits it. */
+    const daysFromToday = (days: number) =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 
     /** A fresh household, so the stored count is this block's alone. */
     const makeHousehold = async (): Promise<string> => {
@@ -3965,14 +3990,33 @@ describe('SFA API (e2e)', () => {
       request(app.getHttpServer())
         .post(`/api/v1/households/${householdId}/policies/${policyId}/cancel`)
         .set(authHeader(token));
+    /** A status edit, as the policy's edit dialog sends it. */
+    const setStatus = (householdId: string, policyId: string, status: string) =>
+      request(app.getHttpServer())
+        .patch(`/api/v1/households/${householdId}/policies/${policyId}`)
+        .set(authHeader(ownerToken))
+        .send({ status })
+        .expect(200);
 
-    beforeAll(() => {
+    beforeAll(async () => {
       policyModel = app.get<Model<Policy>>(getModelToken(Policy.name));
       householdModel = app.get<Model<Household>>(getModelToken(Household.name));
       activityModel = app.get<Model<Activity>>(getModelToken(Activity.name));
+      dealModel = app.get<Model<Deal>>(getModelToken(Deal.name));
+      chargebackModel = app.get<Model<Chargeback>>(
+        getModelToken(Chargeback.name),
+      );
+      const producer = await app
+        .get<Model<User>>(getModelToken(User.name))
+        .findOne({ email: seed.producerEmail })
+        .lean();
+      producerObjectId = producer!._id;
     });
 
     afterAll(async () => {
+      await chargebackModel.deleteMany({
+        policyNumber: { $regex: /^CXL-/ },
+      });
       for (const undo of cleanup.reverse()) await undo();
     });
 
@@ -4108,6 +4152,436 @@ describe('SFA API (e2e)', () => {
       await cancel(ownerToken, seed.secondHouseholdId, policyId)
         .send({ reason: 'sold' })
         .expect(404);
+    });
+
+    it('records no chargeback and asks no date without the box', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId });
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: null })
+        .expect(201);
+
+      expect((res.body as PolicySummary).cancellation).toMatchObject({
+        cancelledOn: null,
+        chargebackId: null,
+      });
+      expect(await ledgerFor(policyId)).toEqual([]);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+    });
+
+    it('charges the premium back inside the month, reversing the credit — dated on the carrier’s day', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 940 });
+
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+
+      const [row] = await ledgerFor(policyId);
+      expect(row).toMatchObject({
+        reason: 'cancellation',
+        source: 'app',
+        amount: 940,
+        soldAdjustment: -940,
+        withinClawbackWindow: true,
+        replacementPolicyId: null,
+      });
+      expect(String(row.dealId)).toBe(String(dealId));
+      // Charged to the producer credited on the deal, not whoever records it.
+      expect(String(row.producerId)).toBe(String(producerObjectId));
+      // A business date: the agency's midnight (Chicago, CDT), never UTC's.
+      expect(row.occurredAt.toISOString()).toBe('2026-09-20T05:00:00.000Z');
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-940);
+      expect((res.body as PolicySummary).cancellation).toMatchObject({
+        reason: 'sold',
+        cancelledOn: '2026-09-20',
+        chargebackId: String(row._id),
+      });
+
+      const log = await activityModel
+        .findOne({ policyId: new Types.ObjectId(policyId) })
+        .lean();
+      expect(log?.summary).toBe('Policy cancelled, chargeback recorded');
+      expect(
+        (log?.changes ?? []).map((change: { field: string }) => change.field),
+      ).toEqual(expect.arrayContaining(['cancellationDate']));
+
+      // The policy's history names why it was charged back.
+      const history = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${policyId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      expect(
+        (history.body as { entries: Record<string, unknown>[] }).entries[0],
+      ).toMatchObject({
+        chargebackAmount: 940,
+        withinClawbackWindow: true,
+        chargebackReason: 'cancellation',
+      });
+    });
+
+    it('charges the premium back after the month and leaves the credit alone', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 940 });
+
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-10-15' } })
+        .expect(201);
+
+      expect(await ledgerFor(policyId)).toEqual([
+        expect.objectContaining({
+          amount: 940,
+          soldAdjustment: 0,
+          withinClawbackWindow: false,
+        }) as unknown,
+      ]);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+    });
+
+    it('charges back a policy with no deal, with no window and no deal to reduce', async () => {
+      const householdId = await makeHousehold();
+      const policyId = await makePolicy(householdId, { premium: 300 });
+
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+
+      expect(await ledgerFor(policyId)).toEqual([
+        expect.objectContaining({
+          amount: 300,
+          soldAdjustment: 0,
+          withinClawbackWindow: false,
+          dealId: null,
+          producerId: null,
+        }) as unknown,
+      ]);
+    });
+
+    it.each([
+      ['in the future', () => daysFromToday(3), /cannot be in the future/],
+      ['before the sale', () => '2026-09-01', /cannot be before the sale/],
+      ['not a date', () => '20/09/2026', /Validation failed/],
+    ])(
+      '400s a carrier date %s and cancels nothing',
+      async (_label, cancelledOn, message) => {
+        const householdId = await makeHousehold();
+        const dealId = await makeDeal('2026-09-02');
+        const policyId = await makePolicy(householdId, { dealId });
+
+        const res = await cancel(ownerToken, householdId, policyId)
+          .send({ reason: 'sold', chargeback: { cancelledOn: cancelledOn() } })
+          .expect(400);
+
+        expect((res.body as { message: string }).message).toMatch(message);
+        expect((await policyModel.findById(policyId).lean())?.active).toBe(
+          true,
+        );
+        expect(await ledgerFor(policyId)).toEqual([]);
+      },
+    );
+
+    it('a policy reinstated and cancelled again is charged back once, on the corrected date', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 100 });
+      // First with a mistyped carrier date, after the month...
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-10-15' } })
+        .expect(201);
+      // ...reinstated — the only way to correct it — which voids that one...
+      await setStatus(householdId, policyId, 'Active');
+      const [voided] = await ledgerFor(policyId);
+      expect(voided.voidedAt).toBeInstanceOf(Date);
+
+      // ...then again with the right, EARLIER date, inside it.
+      const res = await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-25' } })
+        .expect(201);
+      const current = (res.body as PolicySummary).cancellation?.chargebackId;
+
+      const ledger = await ledgerFor(policyId);
+      expect(ledger).toHaveLength(2);
+      expect(ledger.filter((row) => !row.voidedAt)).toHaveLength(1);
+      // Only the second fell inside the month: one $inc, by its row.
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-100);
+
+      // The history reports the live row — the policy's current cancellation —
+      // and totals only what still stands.
+      const history = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${policyId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const chain = history.body as {
+        entries: Record<string, unknown>[];
+        totalChargeback: number;
+      };
+      const reported = await chargebackModel.findById(current).lean();
+      expect(reported?.withinClawbackWindow).toBe(true);
+      expect(chain.entries[0]).toMatchObject({
+        chargebackAmount: 100,
+        chargebackReason: 'cancellation',
+        withinClawbackWindow: true,
+      });
+      expect(chain.totalChargeback).toBe(100);
+    });
+
+    it('reverses the sold credit when a charged-back policy is reinstated, so a re-cancel never doubles it', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 1200 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-1200);
+
+      await setStatus(householdId, policyId, 'Active');
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-22' } })
+        .expect(201);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-1200);
+    });
+
+    it('voids a charged-back policy set back to Pending, so cancelling it again charges once', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 300 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      await setStatus(householdId, policyId, 'Pending');
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-21' } })
+        .expect(201);
+      expect(
+        (await ledgerFor(policyId)).filter((row) => !row.voidedAt),
+      ).toHaveLength(1);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-300);
+    });
+
+    it('fails a reinstatement whose void fails, leaving the policy cancelled and its chargeback standing', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 700 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      const [charged] = await ledgerFor(policyId);
+
+      // White-box, like the intake rollback test: fail the void's LAST write,
+      // the deal's reversal, so the policy's reinstatement and the row's
+      // voidedAt have both been written inside the transaction by then.
+      const spy = jest
+        .spyOn(dealModel, 'updateOne')
+        .mockImplementationOnce(() => {
+          throw new Error('forced failure');
+        });
+      try {
+        await request(app.getHttpServer())
+          .patch(`/api/v1/households/${householdId}/policies/${policyId}`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'Active' })
+          .expect(500);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith(
+          expect.anything(),
+          { $inc: { chargebackAdjustment: 700 } },
+          expect.anything(),
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Nothing half-landed: still cancelled, the chargeback still stands.
+      const policy = await policyModel.findById(policyId).lean();
+      expect(policy).toMatchObject({
+        policyStatus: 'Cancelled',
+        active: false,
+      });
+      expect(String(policy?.cancellation?.chargebackId)).toBe(
+        String(charged._id),
+      );
+      const [row] = await ledgerFor(policyId);
+      expect(row.voidedAt).toBeNull();
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-700);
+
+      // The retry lands it all together.
+      await setStatus(householdId, policyId, 'Active');
+      expect(await policyModel.findById(policyId).lean()).toMatchObject({
+        policyStatus: 'Active',
+        active: true,
+      });
+      const [voided] = await ledgerFor(policyId);
+      expect(voided.voidedAt).toBeInstanceOf(Date);
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+    });
+
+    it('409s a reinstatement whose policy was cancelled again under it, leaving the new chargeback standing', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 400 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      const [first] = await ledgerFor(policyId);
+
+      // White-box: hold this reinstatement between its read of the policy
+      // (cancelled, `first`) and its transaction, and in that gap let another
+      // reinstatement and a new cancel-with-chargeback both commit.
+      // The once-implementation is spent by the time it runs, so every
+      // `run` inside it — the two requests', and its own — is the real one.
+      const runner = app.get(TransactionRunner);
+      let second: string | null | undefined;
+      const spy = jest
+        .spyOn(runner, 'run')
+        .mockImplementationOnce(async (fn) => {
+          await setStatus(householdId, policyId, 'Active');
+          const res = await cancel(ownerToken, householdId, policyId)
+            .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-22' } })
+            .expect(201);
+          second = (res.body as PolicySummary).cancellation?.chargebackId;
+          return runner.run(fn);
+        });
+      try {
+        await request(app.getHttpServer())
+          .patch(`/api/v1/households/${householdId}/policies/${policyId}`)
+          .set(authHeader(ownerToken))
+          .send({ status: 'Active' })
+          .expect(409);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(second).toEqual(expect.any(String));
+
+      // The second cancellation stands, with its chargeback live.
+      const policy = await policyModel.findById(policyId).lean();
+      expect(policy).toMatchObject({
+        policyStatus: 'Cancelled',
+        active: false,
+      });
+      expect(String(policy?.cancellation?.chargebackId)).toBe(second);
+      const ledger = await ledgerFor(policyId);
+      const byId = (id: unknown) =>
+        ledger.find((row) => String(row._id) === String(id));
+      expect(byId(first._id)?.voidedAt).toBeInstanceOf(Date);
+      expect(byId(second)?.voidedAt).toBeNull();
+      // Charged once: the first reversed in the gap, the second applied.
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(-400);
+    });
+
+    it('voids only the chargeback the reinstated cancellation raised, never another live row on the policy', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 250 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(201);
+      const [raised] = await ledgerFor(policyId);
+
+      // A live row the reinstating request never read. Without transactions
+      // (TransactionRunner's fallback), a cancel-with-chargeback landing
+      // between the reinstatement's save and its void leaves exactly this.
+      const [other] = await chargebackModel.create([
+        {
+          ...raised,
+          _id: new Types.ObjectId(),
+          dealId: null,
+          soldAdjustment: 0,
+          voidedAt: null,
+        },
+      ]);
+
+      await setStatus(householdId, policyId, 'Active');
+      expect(
+        (await chargebackModel.findById(raised._id).lean())?.voidedAt,
+      ).toBeInstanceOf(Date);
+      expect(
+        (await chargebackModel.findById(other._id).lean())?.voidedAt,
+      ).toBeNull();
+      expect(
+        (await dealModel.findById(dealId).lean())?.chargebackAdjustment,
+      ).toBe(0);
+    });
+
+    it('lets a CSR cancel, but not charge premium back to a producer', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId });
+      await cancel(csrToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-20' } })
+        .expect(403);
+      expect(await ledgerFor(policyId)).toHaveLength(0);
+      await cancel(csrToken, householdId, policyId)
+        .send({ reason: 'sold' })
+        .expect(201);
+    });
+
+    it('never puts an old cancellation chargeback on a later transfer', async () => {
+      const householdId = await makeHousehold();
+      const dealId = await makeDeal('2026-09-02');
+      const policyId = await makePolicy(householdId, { dealId, premium: 100 });
+      await cancel(ownerToken, householdId, policyId)
+        .send({ reason: 'sold', chargeback: { cancelledOn: '2026-09-10' } })
+        .expect(201);
+      // Reinstated, then moved by Company Transfer — written as the transfer
+      // flow leaves the pair.
+      const successorId = await makePolicy(householdId, {
+        transferredFromPolicyId: new Types.ObjectId(policyId),
+      });
+      await policyModel.updateOne(
+        { _id: new Types.ObjectId(policyId) },
+        {
+          $set: {
+            policyStatus: 'Company Transfer',
+            active: false,
+            transferredToPolicyId: new Types.ObjectId(successorId),
+          },
+          $unset: { cancellation: 1 },
+        },
+      );
+
+      const history = await request(app.getHttpServer())
+        .get(`/api/v1/policies/${successorId}/history`)
+        .set(authHeader(ownerToken))
+        .expect(200);
+      const chain = history.body as {
+        entries: Record<string, unknown>[];
+        totalChargeback: number;
+      };
+      expect(chain.entries).toHaveLength(2);
+      expect(chain.entries[0]).toMatchObject({
+        reason: 'company_transfer',
+        chargebackAmount: null,
+        chargebackReason: null,
+      });
+      // Still money: the chain total counts it.
+      expect(chain.totalChargeback).toBe(100);
     });
   });
 
@@ -14989,21 +15463,19 @@ describe('SFA API (e2e)', () => {
           const policyId = (await getDeal(producerToken, created.id))
             .policies[0].id;
           const setAudit = (set: Record<string, unknown>) =>
-            app
-              .get<Model<DealAudit>>(getModelToken(DealAudit.name))
-              .updateOne(
-                { agencyId: seed.agencyId, dealId: dealRef(created.id) },
-                {
-                  $set: set,
-                  $setOnInsert: {
-                    branchId: seed.branchId,
-                    title: 'Locked audit',
-                    auditDate: new Date(),
-                    isTestRecord: false,
-                  },
+            app.get<Model<DealAudit>>(getModelToken(DealAudit.name)).updateOne(
+              { agencyId: seed.agencyId, dealId: dealRef(created.id) },
+              {
+                $set: set,
+                $setOnInsert: {
+                  branchId: seed.branchId,
+                  title: 'Locked audit',
+                  auditDate: new Date(),
+                  isTestRecord: false,
                 },
-                { upsert: true },
-              );
+              },
+              { upsert: true },
+            );
           const patchPolicy = (expected: number) =>
             request(app.getHttpServer())
               .patch(`/api/v1/policies/${policyId}`)
@@ -15030,9 +15502,9 @@ describe('SFA API (e2e)', () => {
             { auditStatus: 'Pending', submittedById: sale!.producerId },
           ]) {
             await setAudit(locked);
-            expect(
-              (await getDeal(producerToken, created.id)).auditLocked,
-            ).toBe(true);
+            expect((await getDeal(producerToken, created.id)).auditLocked).toBe(
+              true,
+            );
             expect((await leadDeal())?.auditLocked).toBe(true);
 
             const refused = await patchSoldDate(

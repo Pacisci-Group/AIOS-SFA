@@ -238,8 +238,11 @@ export function toDisplayPolicy(policy: PolicySummary): DisplayPolicy {
     term: `${policyTermMonths(policy.policyType)} months`,
     carrier: policy.carrier ?? NOT_AVAILABLE,
     deductible: undefined,
+    // A cancellation recorded with a chargeback says so (PAC-173 PR 6).
     cancellation: policy.cancellation
-      ? `${policyCancellationSummary(policy.cancellation)} · ${formatDate(policy.cancellation.cancelledAt)}`
+      ? `${policyCancellationSummary(policy.cancellation)} · ${formatDate(policy.cancellation.cancelledAt)}${
+          policy.cancellation.chargebackId ? " · chargeback recorded" : ""
+        }`
       : undefined,
     ...style,
   };

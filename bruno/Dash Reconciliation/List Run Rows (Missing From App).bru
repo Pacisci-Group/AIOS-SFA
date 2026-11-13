@@ -32,7 +32,7 @@ tests {
   });
 
   // Not its review status: an earlier run of this folder leaves the line
-  // decided (Sold recorded), and Review Row (Reopen Missing), next, is the reset.
+  // decided (Chargeback recorded), and Review Row (Reopen Missing), next, is the reset.
   test("the missing line is found and needs a decision", function () {
     const row = res.getBody().items.find((item) => item.dash.policyNumber === "900299990");
     expect(row).to.not.equal(undefined);
